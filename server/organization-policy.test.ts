@@ -68,6 +68,21 @@ test('todo update route keeps system administrator access organization-scoped', 
   assert.match(routeSource, /canManageTodo && typeof request\.body\.title/u)
 })
 
+test('managed organization administrators can manage attached-project todos without broadening system administrator access', () => {
+  const updateStart = appSource.indexOf("app.patch('/api/todos/:todoId'")
+  const deleteStart = appSource.indexOf("app.delete('/api/todos/:todoId'")
+  const deleteEnd = appSource.indexOf("app.post('/api/todos/:todoId/notes'", deleteStart)
+  const updateSource = appSource.slice(updateStart, deleteStart)
+  const deleteSource = appSource.slice(deleteStart, deleteEnd)
+
+  assert.match(updateSource, /managedOrganizationReadScopeSql\('p\.organization_id', '\$2'\)/u)
+  assert.match(updateSource, /const organizationAdminTodoAccess = Boolean\(existingTodo\.rows\[0\]\.organization_admin_todo_access\)/u)
+  assert.match(updateSource, /organizationAdminTodoAccess \|\| access\.role === 'owner'/u)
+  assert.match(deleteSource, /managedOrganizationReadScopeSql\('p\.organization_id', '\$2'\)/u)
+  assert.match(deleteSource, /if \(!access && !organizationAdminTodoAccess\)/u)
+  assert.match(deleteSource, /if \(!organizationAdminTodoAccess && access\?\.role !== 'owner'/u)
+})
+
 test('organization administrators are account roles independent of membership access role', () => {
   assert.equal(canManageOrganization('owner', ['organization_admin']), true)
   assert.equal(canManageOrganization('admin', ['organization_admin']), true)

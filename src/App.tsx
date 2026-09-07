@@ -6765,6 +6765,7 @@ function ProjectDetail({
               ) : (
                 <TodoList
                   canManageOrganizationTodos={project.canManageOrganizationTodos}
+                  canUpdateOrganizationTodoFields={project.canUpdateOrganizationTodoFields}
                   departedUserIds={departedUserIds}
                   key={`project-todos-${project.id}-${project.accessRole}-${currentUser?.id ?? 'anonymous'}`}
                   currentUserId={currentUser?.id}
@@ -6772,10 +6773,10 @@ function ProjectDetail({
                   initialTodoId={initialTodoId}
                   memberships={memberships}
                   onCreateTodoNote={canWriteProject ? onCreateTodoNote : undefined}
-                  onDeleteTodo={canWriteProject ? onDeleteTodo : undefined}
+                  onDeleteTodo={canWriteProject || project.canManageOrganizationTodos ? onDeleteTodo : undefined}
                   onDetailModeChange={setIsProjectTodoDetailOpen}
                   onDetailBack={notificationDetailActive ? onReturnToNotifications : undefined}
-                  onUpdateTodo={canWriteProject || project.canManageOrganizationTodos ? onUpdateTodo : undefined}
+                  onUpdateTodo={canWriteProject || project.canManageOrganizationTodos || project.canUpdateOrganizationTodoFields ? onUpdateTodo : undefined}
                   onUpdateTodoNote={canWriteProject ? onUpdateTodoNote : undefined}
                   project={project}
                   projects={projects}
@@ -11866,6 +11867,7 @@ function TodoEditorDialog({
 
 function TodoList({
   canManageOrganizationTodos = false,
+  canUpdateOrganizationTodoFields = false,
   compact = false,
   currentUserId,
   departedUserIds,
@@ -11883,6 +11885,7 @@ function TodoList({
   todos,
 }: {
   canManageOrganizationTodos?: boolean
+  canUpdateOrganizationTodoFields?: boolean
   compact?: boolean
   currentUserId?: number
   departedUserIds: readonly number[]
@@ -12004,6 +12007,8 @@ function TodoList({
   )
   const filteredTodos = useMemo(() => {
     const query = todoSearchQuery.trim().toLowerCase()
+    const hasExplicitDoneFilter = todoFilterConditions.some((condition) => condition.field === 'done')
+    const useDefaultDoneFilter = !todoFilterPersistenceEnabled && !hasExplicitDoneFilter
     return sortedTodos.filter((todo) => {
       const matchesSearch = !query || [
         todo.title,
@@ -12023,11 +12028,12 @@ function TodoList({
         .toLowerCase()
         .includes(query)
       return (
+        (!useDefaultDoneFilter || !todo.done) &&
         matchesSearch &&
         matchesTodoFilterConditions(todo, todoFilterConditions, todoFilterJoin)
       )
     })
-  }, [sortedTodos, todoFilterConditions, todoFilterJoin, todoSearchQuery])
+  }, [sortedTodos, todoFilterConditions, todoFilterJoin, todoFilterPersistenceEnabled, todoSearchQuery])
   const totalPages = Math.max(1, Math.ceil(filteredTodos.length / itemsPerPage))
   const safePage = Math.min(page, totalPages - 1)
   const visibleTodos = compact
@@ -12071,13 +12077,15 @@ function TodoList({
   const editingCanManageTodo = Boolean(
     editingTodo &&
       editingProject &&
-      !editingProject.readOnly &&
-      currentUserId != null &&
-      editingTodo.createdByUserId === currentUserId,
+      (canManageOrganizationTodos || (
+        !editingProject.readOnly &&
+        currentUserId != null &&
+        editingTodo.createdByUserId === currentUserId
+      )),
   )
   const editingCanManageTodoFields = Boolean(
     editingTodo && editingProject && (
-      canManageOrganizationTodos || editingCanManageTodo
+      canManageOrganizationTodos || canUpdateOrganizationTodoFields || editingCanManageTodo
     ),
   )
   const editingCanRespondToTodo = editingTodo ? canRespondToTodo(editingTodo) : false
@@ -12089,9 +12097,9 @@ function TodoList({
 
   function canManageTodo(todo: Todo) {
     const project = projectById.get(todo.projectId)
-    return !project?.readOnly && (
+    return canManageOrganizationTodos || (!project?.readOnly && (
       project?.accessRole === 'owner' || todo.createdByUserId === currentUserId
-    )
+    ))
   }
 
   function canRespondToTodo(todo: Todo) {

@@ -495,6 +495,7 @@ export type Project = {
   ownerUserId: number
   organizationId?: number | null
   canManageOrganizationTodos?: boolean
+  canUpdateOrganizationTodoFields?: boolean
   readOnly?: boolean
   status: ProjectStatus
   feishuChatEnabled?: boolean

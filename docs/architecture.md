@@ -116,11 +116,13 @@ It allows the account to assume the developer or tester persona. When that
 account is also an active organization owner or administrator, read routes may expose all
 projects, test spaces, Bugs, comments, and related records attached to that organization.
 That dual authorization also permits project-governance mutations for lifecycle status,
-health, and milestones. Other project mutations continue to use direct project access;
-test-space and Bug mutations continue to require membership, creator ownership, or Bug
-assignment checks. Todo public-link creation and revocation are one explicit exception:
-managed organization administrators may share todos in projects attached to their organization
-without receiving general todo mutation access.
+health, and milestones. It may also edit and delete todos in projects attached to that
+organization; todo completion and acceptance transitions retain their reviewer rules.
+Other project mutations continue to use direct project access; test-space and Bug mutations
+continue to require membership, creator ownership, or Bug assignment checks. Todo public-link
+creation and revocation are another explicit exception: managed organization administrators may
+share todos in projects attached to their organization without receiving general project mutation
+access.
 
 System administrators identified by `VEGES_ADMIN_USERNAMES` may read organization-attached
 projects and todos and may update only a todo's due date, priority, module, assignee, watchers,

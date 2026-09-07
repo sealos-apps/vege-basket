@@ -4183,6 +4183,7 @@ async function getWorkspace(userId: number) {
       access_role: ProjectAccessRole
       organization_admin_read_only: boolean
       can_manage_organization_todos: boolean
+      can_update_organization_todo_fields: boolean
       name: string
       description_encrypted: string | null
       status: ProjectStatus
@@ -4201,7 +4202,8 @@ async function getWorkspace(userId: number) {
              u.display_name as owner_display_name,
              case when p.user_id = $1 then 'owner' else 'member' end as access_role,
              (p.user_id <> $1 and pm.id is null) as organization_admin_read_only,
-             (p.organization_id is not null and ${systemAdminOrganizationScopeSql('p')}) as can_manage_organization_todos,
+             (p.organization_id is not null and ${managedOrganizationReadScopeSql('p.organization_id')}) as can_manage_organization_todos,
+             (p.organization_id is not null and ${systemAdminOrganizationScopeSql('p')}) as can_update_organization_todo_fields,
              p.name,
              p.description_encrypted,
              p.status,
@@ -4678,6 +4680,7 @@ async function getWorkspace(userId: number) {
       organizationId: project.organization_id ? Number(project.organization_id) : null,
       readOnly: project.organization_admin_read_only,
       canManageOrganizationTodos: project.can_manage_organization_todos,
+      canUpdateOrganizationTodoFields: project.can_update_organization_todo_fields,
       name: decryptText(project.name),
       description: project.description_encrypted ? decryptText(project.description_encrypted) : '',
       ownerName: displayNameFromUser({
@@ -10669,6 +10672,7 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
     confirmation_status: TodoConfirmationStatus
     project_id: string
     organization_id: string | null
+    organization_admin_todo_access: boolean
     owner_user_id: string
     title: string
     due_date: Date
@@ -10676,13 +10680,14 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
   }>(
     `
     select t.project_id, p.organization_id, p.user_id as owner_user_id,
+           ${managedOrganizationReadScopeSql('p.organization_id', '$2')} as organization_admin_todo_access,
            t.created_by_user_id, t.assignee_user_id, t.assigned_by_user_id,
            watcher_user_id, reviewer_user_id, done, confirmation_status, title, due_date, priority
     from todos t
     join projects p on p.id = t.project_id
     where t.id = $1
     `,
-    [todoId],
+    [todoId, userId],
   )
   if (existingTodo.rows.length === 0) {
     response.status(404).json({ error: 'Todo not found' })
@@ -10690,8 +10695,9 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
   }
   const projectId = Number(existingTodo.rows[0].project_id)
   const systemAdminTodoAccess = systemAdmin && existingTodo.rows[0].organization_id != null
+  const organizationAdminTodoAccess = Boolean(existingTodo.rows[0].organization_admin_todo_access)
   const directAccess = await getProjectAccess(projectId, userId)
-  const access = directAccess ?? (systemAdminTodoAccess
+  const access = directAccess ?? (organizationAdminTodoAccess || systemAdminTodoAccess
     ? {
       id: projectId,
       ownerUserId: Number(existingTodo.rows[0].owner_user_id),
@@ -10721,7 +10727,7 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
   const reviewerUserId = existingTodo.rows[0].reviewer_user_id
     ? Number(existingTodo.rows[0].reviewer_user_id)
     : null
-  const canManageTodo = access.role === 'owner' || createdByUserId === userId
+  const canManageTodo = organizationAdminTodoAccess || access.role === 'owner' || createdByUserId === userId
   const canManageTodoFields = canManageTodo || systemAdminTodoAccess
   const isSystemAdminTodoFieldUpdate = systemAdminTodoAccess && isOrganizationTodoFieldUpdate(request.body)
   const canReviewTodo = canUserReviewTodo({
@@ -11185,9 +11191,20 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
 app.delete('/api/todos/:todoId', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
-  const existingTodo = await query<{ project_id: string; created_by_user_id: string | null }>(
-    'select project_id, created_by_user_id from todos where id = $1',
-    [Number(request.params.todoId)],
+  const existingTodo = await query<{
+    project_id: string
+    created_by_user_id: string | null
+    owner_user_id: string
+    organization_admin_todo_access: boolean
+  }>(
+    `
+    select t.project_id, t.created_by_user_id, p.user_id as owner_user_id,
+           ${managedOrganizationReadScopeSql('p.organization_id', '$2')} as organization_admin_todo_access
+    from todos t
+    join projects p on p.id = t.project_id
+    where t.id = $1
+    `,
+    [Number(request.params.todoId), userId],
   )
   const todo = existingTodo.rows[0]
   if (!todo) {
@@ -11195,12 +11212,15 @@ app.delete('/api/todos/:todoId', asyncHandler(async (request, response) => {
     return
   }
   const access = await getProjectAccess(Number(todo.project_id), userId)
-  if (!access) {
+  const organizationAdminTodoAccess = Boolean(todo.organization_admin_todo_access)
+  if (!access && !organizationAdminTodoAccess) {
     response.status(404).json({ error: 'Todo not found' })
     return
   }
-  const createdByUserId = todo.created_by_user_id ? Number(todo.created_by_user_id) : access.ownerUserId
-  if (access.role !== 'owner' && createdByUserId !== userId) {
+  const createdByUserId = todo.created_by_user_id
+    ? Number(todo.created_by_user_id)
+    : access?.ownerUserId ?? Number(todo.owner_user_id)
+  if (!organizationAdminTodoAccess && access?.role !== 'owner' && createdByUserId !== userId) {
     response.status(403).json({ error: 'Only the owner or creator can delete this todo' })
     return
   }
