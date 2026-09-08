@@ -166,9 +166,24 @@ test('verification submissions snapshot zero or many validated package artifacts
   assert.match(testWorkbenchSource, /insert into test_bug_verification_submissions/u)
   assert.match(testWorkbenchSource, /update test_bugs[\s\S]*set status = 'pending_verification'/u)
   assert.match(testWorkbenchSource, /请通过提交验证流程选择安装包后再提交/u)
-  assert.match(testWorkbenchClientSource, /跳过并提交/u)
+  assert.match(testWorkbenchClientSource, /提交验证（不关联安装包）/u)
   assert.match(testWorkbenchClientSource, /submitAssignedBugVerification\(organizationId, bug\.id, packages\)/u)
   assert.match(testWorkbenchClientSource, /BugVerificationSubmissions/u)
+})
+
+test('verification package picker supports filtered paginated catalogs and incremental version loading', () => {
+  assert.match(testWorkbenchClientSource, /aria-label="安装包渠道"/u)
+  assert.match(testWorkbenchClientSource, /\['release', '正式包'\]/u)
+  assert.match(testWorkbenchClientSource, /\['ci', '测试包'\]/u)
+  assert.match(testWorkbenchClientSource, /test-verification-channel-\$\{value\}/u)
+  assert.match(testWorkbenchClientSource, /aria-label="安装包类别"/u)
+  assert.match(testWorkbenchClientSource, /aria-label="搜索安装包"/u)
+  assert.match(testWorkbenchClientSource, /const rulePageSize = 8/u)
+  assert.match(testWorkbenchClientSource, /aria-label="安装包分页"/u)
+  assert.match(testWorkbenchClientSource, /fetchPackageMarketReleaseVersions/u)
+  assert.match(testWorkbenchClientSource, /fetchPackageMarketCiVersions/u)
+  assert.match(testWorkbenchClientSource, /加载更多版本/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /跳过并提交/u)
 })
 
 test('reopening a rejected or closed Bug is a dedicated button next to share that returns it to pending confirmation', () => {

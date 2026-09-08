@@ -83,6 +83,8 @@ import {
 } from './bug-filter'
 import {
   fetchPackageMarketDetail,
+  fetchPackageMarketCiVersions,
+  fetchPackageMarketReleaseVersions,
   fetchPackageMarketRules,
   uploadWorkbenchAttachment,
 } from '@/api'
@@ -165,7 +167,7 @@ import type {
   TestWorkbenchProjectOption,
 } from '@/test-workbench-types'
 import type { OrganizationContext } from '../../shared/organization-context'
-import type { PackageMarketLink, PackageMarketRule, Priority } from '@/types'
+import type { PackageMarketRule, PackageMarketVersion, Priority } from '@/types'
 import './test-workbench.css'
 
 type WorkbenchTab = 'cases' | 'plans' | 'bugs' | 'weekly_report' | 'notifications'
@@ -4720,14 +4722,21 @@ function BugVerificationDialog({
   organizationId: OrganizationContext
 }) {
   const [rules, setRules] = useState<PackageMarketRule[]>([])
+  const [visibleRuleIds, setVisibleRuleIds] = useState<Record<'release' | 'ci', string[]>>({ release: [], ci: [] })
   const [ruleId, setRuleId] = useState('')
   const [channel, setChannel] = useState<'release' | 'ci'>('release')
   const [arch, setArch] = useState('amd64')
-  const [links, setLinks] = useState<PackageMarketLink[]>([])
+  const [category, setCategory] = useState('all')
+  const [query, setQuery] = useState('')
+  const [rulePage, setRulePage] = useState(0)
+  const [versions, setVersions] = useState<PackageMarketVersion[]>([])
+  const [visibleVersionCount, setVisibleVersionCount] = useState(10)
   const [selected, setSelected] = useState<VerificationPackageSelection[]>([])
   const [loading, setLoading] = useState(false)
-  const [loadingLinks, setLoadingLinks] = useState(false)
+  const [loadingVersions, setLoadingVersions] = useState(false)
+  const [loadingVersionKey, setLoadingVersionKey] = useState('')
   const [error, setError] = useState('')
+  const versionSelectionRequestRef = useRef(0)
 
   useEffect(() => {
     if (!open || organizationId == null) return
@@ -4737,63 +4746,169 @@ function BugVerificationDialog({
     fetchPackageMarketRules({ organizationId })
       .then((result) => {
         if (!active) return
-        const visible = result.rules.filter((rule) => result.visibleRuleIds[channel]?.includes(rule.id))
-        setRules(visible)
-        setRuleId((current) => current && visible.some((rule) => rule.id === current) ? current : visible[0]?.id ?? '')
+        setVisibleRuleIds(result.visibleRuleIds)
+        setRules(result.rules)
+        setRuleId((current) => current && result.rules.some((rule) => rule.id === current) ? current : result.rules[0]?.id ?? '')
       })
       .catch((loadError) => {
         if (active) setError(loadError instanceof Error ? loadError.message : '安装包市场加载失败')
       })
       .finally(() => {
         if (active) setLoading(false)
-      })
+    })
     return () => { active = false }
-  }, [channel, open, organizationId])
+  }, [open, organizationId])
 
   useEffect(() => {
     if (open) {
       setSelected([])
-      setLinks([])
+      setCategory('all')
+      setQuery('')
+      setRulePage(0)
+      setVersions([])
+      setVisibleVersionCount(10)
       setError('')
     }
   }, [bug?.id, open])
 
+  const visibleRules = useMemo(() => {
+    const search = query.trim().toLowerCase()
+    return rules
+      .filter((rule) => rule.id && rule.name)
+      .filter((rule) => visibleRuleIds[channel]?.includes(rule.id))
+      .filter((rule) => category === 'all' || (rule.pageKind?.code || rule.category) === category)
+      .filter((rule) => !search || rule.name.toLowerCase().includes(search) || rule.id.toLowerCase().includes(search))
+  }, [category, channel, query, rules, visibleRuleIds])
+  const rulePageSize = 8
+  const rulePageCount = Math.max(1, Math.ceil(visibleRules.length / rulePageSize))
+  const pageRules = useMemo(
+    () => visibleRules.slice(rulePage * rulePageSize, (rulePage + 1) * rulePageSize),
+    [rulePage, visibleRules],
+  )
   const selectedRule = rules.find((rule) => rule.id === ruleId)
-  async function loadLinks() {
+  const categories = useMemo(() => {
+    const result = new Map<string, string>([
+      ['all', '全部'],
+      ['apps', '应用'],
+      ['middleware', '中间件'],
+      ['dependency', '依赖'],
+    ])
+    rules.forEach((rule) => {
+      const key = rule.pageKind?.code || rule.category
+      if (key && !result.has(key)) result.set(key, rule.pageKind?.labelZh || rule.category || key)
+    })
+    return Array.from(result.entries())
+  }, [rules])
+
+  useEffect(() => {
+    setRulePage((current) => Math.min(current, rulePageCount - 1))
+  }, [rulePageCount])
+
+  useEffect(() => {
+    if (pageRules.length === 0) {
+      if (ruleId) setRuleId('')
+      return
+    }
+    if (!pageRules.some((rule) => rule.id === ruleId)) setRuleId(pageRules[0].id)
+  }, [pageRules, ruleId])
+
+  useEffect(() => {
+    versionSelectionRequestRef.current += 1
+    setLoadingVersionKey('')
+  }, [arch, bug?.id, channel, open, selectedRule?.id])
+
+  useEffect(() => {
+    const selectedRuleId = selectedRule?.id
+    if (!selectedRuleId || organizationId == null || !open) {
+      setVersions([])
+      return
+    }
+    let active = true
+    setLoadingVersions(true)
+    setVersions([])
+    setVisibleVersionCount(10)
+    setError('')
+    const request = channel === 'release'
+      ? fetchPackageMarketReleaseVersions({ arch, context: { organizationId }, includeAll: true, packageId: selectedRuleId })
+      : fetchPackageMarketCiVersions({ arch, context: { organizationId }, includeAll: true, packageId: selectedRuleId })
+    request
+      .then((result) => {
+        if (active) setVersions(result.versions)
+      })
+      .catch((loadError) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : '版本列表加载失败')
+      })
+      .finally(() => {
+        if (active) setLoadingVersions(false)
+      })
+    return () => { active = false }
+  }, [arch, channel, open, organizationId, selectedRule?.id])
+
+  function versionValue(version: PackageMarketVersion) {
+    return channel === 'ci' ? (version.hash || version.version || version.label) : (version.version || version.label)
+  }
+
+  function selectedVersionItems(version: PackageMarketVersion) {
+    if (!selectedRule) return []
+    const value = versionValue(version)
+    const values = new Set([value, version.label, version.version, version.hash].filter(Boolean))
+    return selected.filter((item) => item.sourcePackageId === selectedRule.id
+      && item.channel === channel
+      && item.arch === arch
+      && values.has(item.version))
+  }
+
+  async function toggleVersion(version: PackageMarketVersion) {
     if (!selectedRule || organizationId == null) return
-    setLoadingLinks(true)
+    const value = versionValue(version)
+    const existing = selectedVersionItems(version)
+    if (existing.length > 0) {
+      setSelected((current) => current.filter((item) => !existing.some((entry) => entry.objectKey === item.objectKey)))
+      return
+    }
+    const loadingKey = `${selectedRule.id}:${channel}:${arch}:${value}`
+    const requestId = ++versionSelectionRequestRef.current
+    setLoadingVersionKey(loadingKey)
     setError('')
     try {
       const detail = await fetchPackageMarketDetail({
         arch,
         channel,
+        ciVersion: channel === 'ci' ? value : undefined,
         context: { organizationId },
         includeAll: true,
         packageId: selectedRule.id,
+        releaseVersion: channel === 'release' ? value : undefined,
       })
-      setLinks(detail.links)
+      if (requestId !== versionSelectionRequestRef.current) return
+      if (detail.links.length === 0) {
+        setError('该版本暂未找到可交付的安装包')
+        return
+      }
+      setSelected((current) => {
+        const next = [...current]
+        detail.links.forEach((link) => {
+          if (next.some((item) => item.objectKey === link.objectKey)) return
+          next.push({
+            arch,
+            channel,
+            objectKey: link.objectKey,
+            objectLastModified: link.lastModified,
+            packageName: link.name,
+            sizeBytes: link.size,
+            sourcePackageId: selectedRule.id,
+            sourcePackageName: selectedRule.name,
+            version: link.version || value,
+          })
+        })
+        return next
+      })
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '安装包列表加载失败')
+      if (requestId !== versionSelectionRequestRef.current) return
+      setError(loadError instanceof Error ? loadError.message : '安装包链接加载失败')
     } finally {
-      setLoadingLinks(false)
+      if (requestId === versionSelectionRequestRef.current) setLoadingVersionKey('')
     }
-  }
-
-  function toggleLink(link: PackageMarketLink) {
-    if (!selectedRule) return
-    setSelected((current) => current.some((item) => item.objectKey === link.objectKey)
-      ? current.filter((item) => item.objectKey !== link.objectKey)
-      : [...current, {
-        arch,
-        channel,
-        objectKey: link.objectKey,
-        objectLastModified: link.lastModified,
-        packageName: link.name,
-        sizeBytes: link.size,
-        sourcePackageId: selectedRule.id,
-        sourcePackageName: selectedRule.name,
-        version: link.version,
-      }])
   }
 
   function removeSelected(objectKey: string) {
@@ -4811,17 +4926,6 @@ function BugVerificationDialog({
       minute: '2-digit',
       hour12: false,
     }).format(date)
-  }
-
-  function formatVerificationSize(size?: number) {
-    if (size == null) return '大小未知'
-    if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
-    return `${Math.round(size / 1024 / 1024 * 10) / 10} MB`
-  }
-
-  function shortObjectKey(objectKey: string) {
-    const segment = objectKey.split('/').pop() || objectKey
-    return segment.length > 18 ? `${segment.slice(0, 8)}…${segment.slice(-8)}` : segment
   }
 
   async function submit(packages = selected) {
@@ -4845,7 +4949,7 @@ function BugVerificationDialog({
               <strong>选择验证包</strong>
               <span>可跨安装包和架构累积选择</span>
             </div>
-            <div className="test-verification-controls">
+            <div className="test-verification-toolbar">
               <div className="test-verification-field">
                 <span>渠道</span>
                 <div className="test-verification-segmented" role="tablist" aria-label="安装包渠道">
@@ -4855,65 +4959,131 @@ function BugVerificationDialog({
                   ] as const).map(([value, label]) => (
                     <button
                       aria-selected={channel === value}
-                      className={channel === value ? 'is-active' : undefined}
+                      className={`${channel === value ? 'is-active ' : ''}test-verification-channel-${value}`}
                       key={value}
                       role="tab"
                       type="button"
-                      onClick={() => { setChannel(value); setLinks([]) }}
+                      onClick={() => {
+                        setChannel(value)
+                        setRulePage(0)
+                        setRuleId('')
+                      }}
                     >
+                      <span className="test-verification-channel-dot" aria-hidden />
                       {label}
                     </button>
                   ))}
                 </div>
               </div>
-              <Label>安装包
-                <Select value={ruleId} onValueChange={(value) => { setRuleId(value); setLinks([]) }}>
-                  <SelectTrigger><SelectValue placeholder="选择安装包" /></SelectTrigger>
-                  <SelectContent>{rules.map((rule) => <SelectItem key={rule.id} value={rule.id}>{rule.name}</SelectItem>)}</SelectContent>
-                </Select>
-              </Label>
-              <Label>架构
-                <Select value={arch} onValueChange={(value) => { setArch(value); setLinks([]) }}>
+              <Label className="test-verification-arch">架构
+                <Select value={arch} onValueChange={setArch}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="amd64">amd64</SelectItem><SelectItem value="arm64">arm64</SelectItem></SelectContent>
                 </Select>
               </Label>
-              <Button className="test-verification-load" type="button" variant="outline" disabled={loading || loadingLinks || !ruleId} onClick={() => void loadLinks()}>
-                <ArrowCounterClockwise size={15} weight="bold" />
-                {loadingLinks ? '加载中...' : '加载版本'}
-              </Button>
             </div>
             {error ? <p className="test-form-error">{error}</p> : null}
-            <div className="test-verification-version-panel">
-              <div className="test-verification-version-heading">
-                <strong>可交付版本</strong>
-                <span>{links.length ? `${links.length} 个版本` : '选择安装包后加载版本'}</span>
-              </div>
-              {loading ? <p className="test-verification-empty-state">正在加载安装包目录...</p> : null}
-              {!loading && links.length === 0 ? <p className="test-verification-empty-state">选择安装包并加载版本后，可勾选要交给测试人员的安装包。</p> : null}
-              {links.length > 0 ? <div className="test-verification-links">
-                {links.map((link) => {
-                  const checked = selected.some((item) => item.objectKey === link.objectKey)
-                  return (
-                    <label className={checked ? 'test-verification-link is-selected' : 'test-verification-link'} key={link.objectKey}>
-                      <Checkbox checked={checked} onCheckedChange={() => toggleLink(link)} />
-                      <span className="test-verification-link-main">
-                        <span className="test-verification-link-title">
-                          <strong>{link.name}</strong>
-                          {checked ? <em>已选</em> : null}
+            <div className="test-verification-browser">
+              <section className="test-verification-package-panel">
+                <div className="test-verification-panel-heading">
+                  <div>
+                    <strong>安装包目录</strong>
+                    <span>{visibleRules.length} 个可用包</span>
+                  </div>
+                  <span className="test-verification-page-count">{rulePage + 1} / {rulePageCount}</span>
+                </div>
+                <div className="test-verification-category-list" role="tablist" aria-label="安装包类别">
+                  {categories.map(([value, label]) => (
+                    <button
+                      aria-selected={category === value}
+                      className={category === value ? 'is-active' : undefined}
+                      key={value}
+                      role="tab"
+                      type="button"
+                      onClick={() => { setCategory(value); setRulePage(0) }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <label className="test-verification-search">
+                  <MagnifyingGlass size={15} aria-hidden />
+                  <Input
+                    type="search"
+                    aria-label="搜索安装包"
+                    value={query}
+                    onChange={(event) => { setQuery(event.target.value); setRulePage(0) }}
+                    placeholder="搜索名称或 ID"
+                  />
+                </label>
+                <div className="test-verification-rule-list">
+                  {loading ? <p className="test-verification-empty-state">正在加载安装包目录...</p> : null}
+                  {!loading && pageRules.length === 0 ? <p className="test-verification-empty-state">没有符合条件的安装包。</p> : null}
+                  {pageRules.map((rule) => {
+                    const ruleCategory = rule.pageKind?.labelZh || rule.category
+                    return (
+                      <button
+                        className={rule.id === ruleId ? 'test-verification-rule is-selected' : 'test-verification-rule'}
+                        key={rule.id}
+                        type="button"
+                        onClick={() => setRuleId(rule.id)}
+                      >
+                        <span>
+                          <strong>{rule.name}</strong>
+                          <small>{rule.id}</small>
                         </span>
-                        <span className="test-verification-link-meta">
-                          <span>{link.version || '版本未知'}</span>
-                          <span>{formatVerificationSize(link.size)}</span>
-                          <span>{arch}</span>
-                          <span title={link.objectKey}>对象 {shortObjectKey(link.objectKey)}</span>
+                        <em>{ruleCategory}</em>
+                      </button>
+                    )
+                  })}
+                </div>
+                <nav className="test-verification-pagination" aria-label="安装包分页">
+                  <span>{visibleRules.length ? `${rulePage * rulePageSize + 1}-${Math.min((rulePage + 1) * rulePageSize, visibleRules.length)} / ${visibleRules.length}` : '0 个'}</span>
+                  <div>
+                    <Button aria-label="上一页" title="上一页" size="icon" variant="ghost" disabled={rulePage === 0} onClick={() => setRulePage((current) => Math.max(0, current - 1))}><CaretLeft /></Button>
+                    <Button aria-label="下一页" title="下一页" size="icon" variant="ghost" disabled={rulePage >= rulePageCount - 1} onClick={() => setRulePage((current) => Math.min(rulePageCount - 1, current + 1))}><CaretRight /></Button>
+                  </div>
+                </nav>
+              </section>
+              <section className="test-verification-version-panel">
+                <div className="test-verification-panel-heading">
+                  <div>
+                    <strong>{selectedRule?.name || '选择安装包'}</strong>
+                    <span>{selectedRule ? `${versions.length} 个版本 · ${arch}` : '从左侧目录选择安装包'}</span>
+                  </div>
+                  {selectedRule && versions.length > 0 ? <span className="test-verification-version-count">显示 {Math.min(visibleVersionCount, versions.length)} / {versions.length}</span> : null}
+                </div>
+                {loadingVersions ? <p className="test-verification-empty-state">正在加载版本目录...</p> : null}
+                {!loadingVersions && selectedRule && versions.length === 0 ? <p className="test-verification-empty-state">该安装包暂无可交付版本。</p> : null}
+                {!loadingVersions && !selectedRule ? <p className="test-verification-empty-state">选择安装包后查看所有可用版本。</p> : null}
+                {versions.length > 0 ? <div className="test-verification-version-list">
+                  {versions.slice(0, visibleVersionCount).map((version, index) => {
+                    const value = versionValue(version)
+                    const versionKey = `${selectedRule?.id}:${channel}:${arch}:${value}`
+                    const chosen = selectedVersionItems(version).length > 0
+                    const versionLabel = version.label || version.version || version.hash || `版本 ${index + 1}`
+                    return (
+                      <button
+                        aria-pressed={chosen}
+                        className={`test-verification-version-row${chosen ? ' is-selected' : ''}`}
+                        key={`${value}-${version.lastModified || index}`}
+                        type="button"
+                        onClick={() => void toggleVersion(version)}
+                        disabled={Boolean(loadingVersionKey)}
+                      >
+                        <span className="test-verification-version-marker" aria-hidden>{chosen ? <Check size={13} weight="bold" /> : null}</span>
+                        <span className="test-verification-version-main">
+                          <strong>{versionLabel}</strong>
+                          <small>{version.hash && version.hash !== versionLabel ? version.hash : '点击选择此版本的安装包'}</small>
                         </span>
-                      </span>
-                      <time>{formatVerificationDate(link.lastModified)}</time>
-                    </label>
-                  )
-                })}
-              </div> : null}
+                        <span className="test-verification-version-meta">{formatVerificationDate(version.lastModified)}</span>
+                        {loadingVersionKey === versionKey ? <span className="test-verification-version-state">加载中...</span> : chosen ? <span className="test-verification-version-state">已选</span> : null}
+                      </button>
+                    )
+                  })}
+                </div> : null}
+                {versions.length > visibleVersionCount ? <Button className="test-verification-more" type="button" variant="outline" onClick={() => setVisibleVersionCount((current) => Math.min(current + 10, versions.length))}>加载更多版本（剩余 {versions.length - visibleVersionCount}）</Button> : null}
+              </section>
             </div>
             {selected.length > 0 ? (
               <div className="test-verification-selected">
@@ -4936,13 +5106,6 @@ function BugVerificationDialog({
                 </div>
               </div>
             ) : null}
-            <label className="test-verification-empty-option">
-              <Checkbox checked={selected.length === 0} onCheckedChange={(checked) => { if (checked === true) setSelected([]) }} />
-              <span>
-                <strong>本次不关联安装包</strong>
-                <small>直接提交验证，后续仍可在验证记录中补充说明。</small>
-              </span>
-            </label>
           </div>
         </div>
         <DialogFooter className="test-verification-footer">
@@ -4952,8 +5115,7 @@ function BugVerificationDialog({
           </div>
           <div className="test-verification-actions">
             <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>取消</Button>
-            <Button type="button" variant="secondary" disabled={busy} onClick={() => void submit([])}>跳过并提交</Button>
-            <Button type="button" disabled={busy} onClick={() => void submit()}>{busy ? '提交中...' : '提交验证' + (selected.length ? '（' + selected.length + '）' : '')}</Button>
+            <Button type="button" disabled={busy} onClick={() => void submit()}>{busy ? '提交中...' : selected.length ? `提交验证（${selected.length}）` : '提交验证（不关联安装包）'}</Button>
           </div>
         </DialogFooter>
       </DialogContent>
