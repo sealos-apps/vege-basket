@@ -4796,6 +4796,34 @@ function BugVerificationDialog({
       }])
   }
 
+  function removeSelected(objectKey: string) {
+    setSelected((current) => current.filter((item) => item.objectKey !== objectKey))
+  }
+
+  function formatVerificationDate(value?: string) {
+    if (!value) return '更新时间未知'
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return '更新时间未知'
+    return new Intl.DateTimeFormat('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(date)
+  }
+
+  function formatVerificationSize(size?: number) {
+    if (size == null) return '大小未知'
+    if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
+    return `${Math.round(size / 1024 / 1024 * 10) / 10} MB`
+  }
+
+  function shortObjectKey(objectKey: string) {
+    const segment = objectKey.split('/').pop() || objectKey
+    return segment.length > 18 ? `${segment.slice(0, 8)}…${segment.slice(-8)}` : segment
+  }
+
   async function submit(packages = selected) {
     if (!bug) return
     if (await onSubmit(bug, packages)) onOpenChange(false)
@@ -4804,57 +4832,129 @@ function BugVerificationDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="test-workbench-dialog test-verification-dialog">
-        <DialogHeader>
-          <DialogTitle>提交验证</DialogTitle>
-          <DialogDescription>可选择零个或多个安装包。提交后会保存当时的安装包信息快照。</DialogDescription>
+        <DialogHeader className="test-verification-header">
+          <div>
+            <div className="test-verification-kicker"><span><Check size={12} weight="bold" /></span>验证交付物</div>
+            <DialogTitle>提交验证</DialogTitle>
+            <DialogDescription>可选择一个或多个安装包，也可以不关联安装包。提交后会保存本次验证使用的版本快照。</DialogDescription>
+          </div>
         </DialogHeader>
-        <div className="test-verification-picker">
-          <div className="test-verification-controls">
-            <Label>渠道
-              <Select value={channel} onValueChange={(value) => { setChannel(value as 'release' | 'ci'); setLinks([]) }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="release">正式包</SelectItem><SelectItem value="ci">测试包</SelectItem></SelectContent>
-              </Select>
-            </Label>
-            <Label>安装包
-              <Select value={ruleId} onValueChange={(value) => { setRuleId(value); setLinks([]) }}>
-                <SelectTrigger><SelectValue placeholder="选择安装包" /></SelectTrigger>
-                <SelectContent>{rules.map((rule) => <SelectItem key={rule.id} value={rule.id}>{rule.name}</SelectItem>)}</SelectContent>
-              </Select>
-            </Label>
-            <Label>架构
-              <Select value={arch} onValueChange={(value) => { setArch(value); setLinks([]) }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="amd64">amd64</SelectItem><SelectItem value="arm64">arm64</SelectItem></SelectContent>
-              </Select>
-            </Label>
-            <Button type="button" variant="outline" disabled={loading || loadingLinks || !ruleId} onClick={() => void loadLinks()}>
-              {loadingLinks ? '加载中...' : '加载版本'}
-            </Button>
+        <div className="test-verification-body">
+          <div className="test-verification-picker">
+            <div className="test-verification-section-heading">
+              <strong>选择验证包</strong>
+              <span>可跨安装包和架构累积选择</span>
+            </div>
+            <div className="test-verification-controls">
+              <div className="test-verification-field">
+                <span>渠道</span>
+                <div className="test-verification-segmented" role="tablist" aria-label="安装包渠道">
+                  {([
+                    ['release', '正式包'],
+                    ['ci', '测试包'],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      aria-selected={channel === value}
+                      className={channel === value ? 'is-active' : undefined}
+                      key={value}
+                      role="tab"
+                      type="button"
+                      onClick={() => { setChannel(value); setLinks([]) }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <Label>安装包
+                <Select value={ruleId} onValueChange={(value) => { setRuleId(value); setLinks([]) }}>
+                  <SelectTrigger><SelectValue placeholder="选择安装包" /></SelectTrigger>
+                  <SelectContent>{rules.map((rule) => <SelectItem key={rule.id} value={rule.id}>{rule.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </Label>
+              <Label>架构
+                <Select value={arch} onValueChange={(value) => { setArch(value); setLinks([]) }}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="amd64">amd64</SelectItem><SelectItem value="arm64">arm64</SelectItem></SelectContent>
+                </Select>
+              </Label>
+              <Button className="test-verification-load" type="button" variant="outline" disabled={loading || loadingLinks || !ruleId} onClick={() => void loadLinks()}>
+                <ArrowCounterClockwise size={15} weight="bold" />
+                {loadingLinks ? '加载中...' : '加载版本'}
+              </Button>
+            </div>
+            {error ? <p className="test-form-error">{error}</p> : null}
+            <div className="test-verification-version-panel">
+              <div className="test-verification-version-heading">
+                <strong>可交付版本</strong>
+                <span>{links.length ? `${links.length} 个版本` : '选择安装包后加载版本'}</span>
+              </div>
+              {loading ? <p className="test-verification-empty-state">正在加载安装包目录...</p> : null}
+              {!loading && links.length === 0 ? <p className="test-verification-empty-state">选择安装包并加载版本后，可勾选要交给测试人员的安装包。</p> : null}
+              {links.length > 0 ? <div className="test-verification-links">
+                {links.map((link) => {
+                  const checked = selected.some((item) => item.objectKey === link.objectKey)
+                  return (
+                    <label className={checked ? 'test-verification-link is-selected' : 'test-verification-link'} key={link.objectKey}>
+                      <Checkbox checked={checked} onCheckedChange={() => toggleLink(link)} />
+                      <span className="test-verification-link-main">
+                        <span className="test-verification-link-title">
+                          <strong>{link.name}</strong>
+                          {checked ? <em>已选</em> : null}
+                        </span>
+                        <span className="test-verification-link-meta">
+                          <span>{link.version || '版本未知'}</span>
+                          <span>{formatVerificationSize(link.size)}</span>
+                          <span>{arch}</span>
+                          <span title={link.objectKey}>对象 {shortObjectKey(link.objectKey)}</span>
+                        </span>
+                      </span>
+                      <time>{formatVerificationDate(link.lastModified)}</time>
+                    </label>
+                  )
+                })}
+              </div> : null}
+            </div>
+            {selected.length > 0 ? (
+              <div className="test-verification-selected">
+                <div className="test-verification-selected-heading">
+                  <strong>已选安装包</strong>
+                  <span>{selected.length} 个</span>
+                </div>
+                <div className="test-verification-chips">
+                  {selected.map((item) => (
+                    <span className="test-verification-chip" key={item.objectKey}>
+                      <span>
+                        <strong>{item.sourcePackageName}</strong>
+                        <small>{item.version || '版本未知'} · {item.arch}</small>
+                      </span>
+                      <button aria-label={`移除 ${item.sourcePackageName} ${item.version}`} type="button" onClick={() => removeSelected(item.objectKey)}>
+                        <X size={14} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <label className="test-verification-empty-option">
+              <Checkbox checked={selected.length === 0} onCheckedChange={(checked) => { if (checked === true) setSelected([]) }} />
+              <span>
+                <strong>本次不关联安装包</strong>
+                <small>直接提交验证，后续仍可在验证记录中补充说明。</small>
+              </span>
+            </label>
           </div>
-          {error ? <p className="test-form-error">{error}</p> : null}
-          {loading ? <p className="test-list-empty">正在加载安装包目录...</p> : null}
-          {!loading && links.length === 0 ? <p className="test-inline-empty">选择安装包并加载版本后，可勾选要交给测试人员的安装包。</p> : null}
-          <div className="test-verification-links">
-            {links.map((link) => {
-              const checked = selected.some((item) => item.objectKey === link.objectKey)
-              const sizeLabel = link.size == null
-                ? '大小未知'
-                : String(Math.round(link.size / 1024 / 1024 * 10) / 10) + ' MB'
-              return (
-                <label className="test-verification-link" key={link.objectKey}>
-                  <Checkbox checked={checked} onCheckedChange={() => toggleLink(link)} />
-                  <span><strong>{link.name}</strong><small>{link.version} · {sizeLabel}</small></span>
-                </label>
-              )
-            })}
-          </div>
-          {selected.length > 0 ? <p className="test-verification-count">{'已选择 ' + selected.length + ' 个安装包'}</p> : <p className="test-verification-count">本次不关联安装包</p>}
         </div>
-        <DialogFooter>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>取消</Button>
-          <Button type="button" variant="secondary" disabled={busy} onClick={() => void submit([])}>跳过并提交</Button>
-          <Button type="button" disabled={busy} onClick={() => void submit()}>{busy ? '提交中...' : '提交验证' + (selected.length ? '（' + selected.length + '）' : '')}</Button>
+        <DialogFooter className="test-verification-footer">
+          <div className="test-verification-footer-status">
+            <strong>{selected.length > 0 ? `已选择 ${selected.length} 个安装包` : '未选择安装包'}</strong>
+            <span>提交后将记录版本快照，便于后续追溯。</span>
+          </div>
+          <div className="test-verification-actions">
+            <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>取消</Button>
+            <Button type="button" variant="secondary" disabled={busy} onClick={() => void submit([])}>跳过并提交</Button>
+            <Button type="button" disabled={busy} onClick={() => void submit()}>{busy ? '提交中...' : '提交验证' + (selected.length ? '（' + selected.length + '）' : '')}</Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
