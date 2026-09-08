@@ -196,6 +196,28 @@ export type TestBugEvent = {
   transferSource?: 'manual' | 'offboarding'
 }
 
+export type TestBugVerificationPackage = {
+  arch: string
+  channel: 'release' | 'ci'
+  channelLabel: string
+  id: number
+  objectKey: string
+  objectLastModified?: string
+  packageName: string
+  sizeBytes?: number
+  sourcePackageId: string
+  sourcePackageName: string
+  version: string
+}
+
+export type TestBugVerificationSubmission = {
+  id: number
+  packages: TestBugVerificationPackage[]
+  submittedAt: string
+  submittedByName?: string
+  submittedByUserId?: number
+}
+
 export type TestBug = {
   actualResult: string
   assigneeName?: string
@@ -237,6 +259,7 @@ export type TestBug = {
   transferSpaceCandidates?: Array<{ id: number; name: string; versionLabel?: string }>
   transferCandidates?: Array<{ id: number; name: string }>
   updatedAt: string
+  verificationSubmissions?: TestBugVerificationSubmission[]
 }
 
 export type TestWorkspaceUser = {

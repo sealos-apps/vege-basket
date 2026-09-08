@@ -81,7 +81,11 @@ import {
   type BugFilterCondition,
   type BugFilterJoin,
 } from './bug-filter'
-import { uploadWorkbenchAttachment } from '@/api'
+import {
+  fetchPackageMarketDetail,
+  fetchPackageMarketRules,
+  uploadWorkbenchAttachment,
+} from '@/api'
 import {
   clearBugCommentDraftIfMatches,
   loadBugCommentDraft,
@@ -120,6 +124,7 @@ import {
   removeTestPlanCase,
   removeTestSpaceMember,
   rejectAssignedTestBug,
+  submitAssignedBugVerification,
   transferAssignedTestBug,
   transferTestBugToSpace,
   updateTestSpace,
@@ -160,10 +165,21 @@ import type {
   TestWorkbenchProjectOption,
 } from '@/test-workbench-types'
 import type { OrganizationContext } from '../../shared/organization-context'
-import type { Priority } from '@/types'
+import type { PackageMarketLink, PackageMarketRule, Priority } from '@/types'
 import './test-workbench.css'
 
 type WorkbenchTab = 'cases' | 'plans' | 'bugs' | 'weekly_report' | 'notifications'
+type VerificationPackageSelection = {
+  arch: string
+  channel: 'release' | 'ci'
+  objectKey: string
+  objectLastModified?: string
+  packageName: string
+  sizeBytes?: number
+  sourcePackageId: string
+  sourcePackageName: string
+  version: string
+}
 
 const emptyWorkbench: TestWorkbenchData = {
   bugs: [],
@@ -2338,6 +2354,7 @@ function BugDetail({ bug, busy, departedUserIds, draftOwnerUserId, onAssignee, o
       <span>更新时间 <strong>{formatTimestamp(bug.updatedAt)}</strong></span>
     </div>
     <DetailBlock title="复现步骤" content={bug.reproductionSteps} /><DetailBlock title="预期结果" content={bug.expectedResult} /><DetailBlock title="实际结果" content={bug.actualResult} />
+    <BugVerificationSubmissions submissions={bug.verificationSubmissions} />
     <BugCommentsSection
       bug={bug}
       busy={busy}
@@ -3178,6 +3195,34 @@ function DetailBlock({ content, title }: { content: string; title: string }) {
     <section className="test-detail-block">
       <h3>{title}</h3>
       <BugEvidenceContent content={content} title={title} />
+    </section>
+  )
+}
+
+function BugVerificationSubmissions({ submissions = [] }: { submissions?: TestBug['verificationSubmissions'] }) {
+  return (
+    <section className="test-verification-history">
+      <h3>验证提交</h3>
+      {submissions.length === 0 ? <p className="test-verification-empty">暂无验证提交记录</p> : submissions.map((submission) => (
+        <article className="test-verification-history-item" key={submission.id}>
+          <div className="test-verification-history-head">
+            <strong>{submission.submittedByName || '未知用户'}</strong>
+            <time>{formatTimestamp(submission.submittedAt)}</time>
+          </div>
+          {submission.packages.length === 0 ? (
+            <p className="test-verification-empty">未关联安装包</p>
+          ) : (
+            <ul>
+              {submission.packages.map((item) => (
+                <li key={item.id}>
+                  <strong>{item.packageName}</strong>
+                  <span>{item.channelLabel} · {item.arch} · {item.version}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </article>
+      ))}
     </section>
   )
 }
@@ -4659,6 +4704,163 @@ function BugRejectDialog({ bug, busy, onOpenChange, onSubmit, open }: {
   )
 }
 
+function BugVerificationDialog({
+  bug,
+  busy,
+  onOpenChange,
+  onSubmit,
+  open,
+  organizationId,
+}: {
+  bug?: TestBug
+  busy: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (bug: TestBug, packages: VerificationPackageSelection[]) => Promise<boolean>
+  open: boolean
+  organizationId: OrganizationContext
+}) {
+  const [rules, setRules] = useState<PackageMarketRule[]>([])
+  const [ruleId, setRuleId] = useState('')
+  const [channel, setChannel] = useState<'release' | 'ci'>('release')
+  const [arch, setArch] = useState('amd64')
+  const [links, setLinks] = useState<PackageMarketLink[]>([])
+  const [selected, setSelected] = useState<VerificationPackageSelection[]>([])
+  const [loading, setLoading] = useState(false)
+  const [loadingLinks, setLoadingLinks] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!open || organizationId == null) return
+    let active = true
+    setLoading(true)
+    setError('')
+    fetchPackageMarketRules({ organizationId })
+      .then((result) => {
+        if (!active) return
+        const visible = result.rules.filter((rule) => result.visibleRuleIds[channel]?.includes(rule.id))
+        setRules(visible)
+        setRuleId((current) => current && visible.some((rule) => rule.id === current) ? current : visible[0]?.id ?? '')
+      })
+      .catch((loadError) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : '安装包市场加载失败')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => { active = false }
+  }, [channel, open, organizationId])
+
+  useEffect(() => {
+    if (open) {
+      setSelected([])
+      setLinks([])
+      setError('')
+    }
+  }, [bug?.id, open])
+
+  const selectedRule = rules.find((rule) => rule.id === ruleId)
+  async function loadLinks() {
+    if (!selectedRule || organizationId == null) return
+    setLoadingLinks(true)
+    setError('')
+    try {
+      const detail = await fetchPackageMarketDetail({
+        arch,
+        channel,
+        context: { organizationId },
+        includeAll: true,
+        packageId: selectedRule.id,
+      })
+      setLinks(detail.links)
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '安装包列表加载失败')
+    } finally {
+      setLoadingLinks(false)
+    }
+  }
+
+  function toggleLink(link: PackageMarketLink) {
+    if (!selectedRule) return
+    setSelected((current) => current.some((item) => item.objectKey === link.objectKey)
+      ? current.filter((item) => item.objectKey !== link.objectKey)
+      : [...current, {
+        arch,
+        channel,
+        objectKey: link.objectKey,
+        objectLastModified: link.lastModified,
+        packageName: link.name,
+        sizeBytes: link.size,
+        sourcePackageId: selectedRule.id,
+        sourcePackageName: selectedRule.name,
+        version: link.version,
+      }])
+  }
+
+  async function submit(packages = selected) {
+    if (!bug) return
+    if (await onSubmit(bug, packages)) onOpenChange(false)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="test-workbench-dialog test-verification-dialog">
+        <DialogHeader>
+          <DialogTitle>提交验证</DialogTitle>
+          <DialogDescription>可选择零个或多个安装包。提交后会保存当时的安装包信息快照。</DialogDescription>
+        </DialogHeader>
+        <div className="test-verification-picker">
+          <div className="test-verification-controls">
+            <Label>渠道
+              <Select value={channel} onValueChange={(value) => { setChannel(value as 'release' | 'ci'); setLinks([]) }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="release">正式包</SelectItem><SelectItem value="ci">测试包</SelectItem></SelectContent>
+              </Select>
+            </Label>
+            <Label>安装包
+              <Select value={ruleId} onValueChange={(value) => { setRuleId(value); setLinks([]) }}>
+                <SelectTrigger><SelectValue placeholder="选择安装包" /></SelectTrigger>
+                <SelectContent>{rules.map((rule) => <SelectItem key={rule.id} value={rule.id}>{rule.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </Label>
+            <Label>架构
+              <Select value={arch} onValueChange={(value) => { setArch(value); setLinks([]) }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="amd64">amd64</SelectItem><SelectItem value="arm64">arm64</SelectItem></SelectContent>
+              </Select>
+            </Label>
+            <Button type="button" variant="outline" disabled={loading || loadingLinks || !ruleId} onClick={() => void loadLinks()}>
+              {loadingLinks ? '加载中...' : '加载版本'}
+            </Button>
+          </div>
+          {error ? <p className="test-form-error">{error}</p> : null}
+          {loading ? <p className="test-list-empty">正在加载安装包目录...</p> : null}
+          {!loading && links.length === 0 ? <p className="test-inline-empty">选择安装包并加载版本后，可勾选要交给测试人员的安装包。</p> : null}
+          <div className="test-verification-links">
+            {links.map((link) => {
+              const checked = selected.some((item) => item.objectKey === link.objectKey)
+              const sizeLabel = link.size == null
+                ? '大小未知'
+                : String(Math.round(link.size / 1024 / 1024 * 10) / 10) + ' MB'
+              return (
+                <label className="test-verification-link" key={link.objectKey}>
+                  <Checkbox checked={checked} onCheckedChange={() => toggleLink(link)} />
+                  <span><strong>{link.name}</strong><small>{link.version} · {sizeLabel}</small></span>
+                </label>
+              )
+            })}
+          </div>
+          {selected.length > 0 ? <p className="test-verification-count">{'已选择 ' + selected.length + ' 个安装包'}</p> : <p className="test-verification-count">本次不关联安装包</p>}
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>取消</Button>
+          <Button type="button" variant="secondary" disabled={busy} onClick={() => void submit([])}>跳过并提交</Button>
+          <Button type="button" disabled={busy} onClick={() => void submit()}>{busy ? '提交中...' : '提交验证' + (selected.length ? '（' + selected.length + '）' : '')}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function AssignedTestBugs({
   currentUserId,
   initialBugId,
@@ -4688,6 +4890,8 @@ export function AssignedTestBugs({
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [rejectBug, setRejectBug] = useState<TestBug>()
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
+  const [verificationBug, setVerificationBug] = useState<TestBug>()
+  const [verificationDialogOpen, setVerificationDialogOpen] = useState(false)
   const [filterDialogOpen, setFilterDialogOpen] = useState(false)
   const [filterJoin, setFilterJoin] = useState<BugFilterJoin>('and')
   const [filterConditions, setFilterConditions] = useState<BugFilterCondition[]>(createDefaultBugFilterConditions)
@@ -4986,7 +5190,7 @@ export function AssignedTestBugs({
                     {selected.canManage && selected.status === 'in_progress' ? (
                       <>
                         <Button className="test-bug-reject-button" variant="destructive" disabled>驳回</Button>
-                        <Button disabled={busy} onClick={() => void mutate(() => updateAssignedTestBug(organizationId, selected.id, 'pending_verification'))}>提交验证</Button>
+                        <Button disabled={busy} onClick={() => { setVerificationBug(selected); setVerificationDialogOpen(true) }}>提交验证</Button>
                       </>
                     ) : null}
                   </div>
@@ -5001,6 +5205,7 @@ export function AssignedTestBugs({
                 <DetailBlock title="复现步骤" content={selected.reproductionSteps} />
                 <DetailBlock title="预期结果" content={selected.expectedResult} />
                 <DetailBlock title="实际结果" content={selected.actualResult} />
+                <BugVerificationSubmissions submissions={selected.verificationSubmissions} />
                 <BugCommentsSection
                   bug={selected}
                   busy={busy}
@@ -5040,6 +5245,17 @@ export function AssignedTestBugs({
         open={rejectDialogOpen}
         onOpenChange={setRejectDialogOpen}
         onSubmit={(bug, reason) => mutate(() => rejectAssignedTestBug(organizationId, bug.id, reason))}
+      />
+      <BugVerificationDialog
+        bug={verificationBug}
+        busy={busy}
+        onOpenChange={(open) => {
+          setVerificationDialogOpen(open)
+          if (!open) window.setTimeout(() => setVerificationBug(undefined), 180)
+        }}
+        onSubmit={(bug, packages) => mutate(() => submitAssignedBugVerification(organizationId, bug.id, packages))}
+        open={verificationDialogOpen}
+        organizationId={organizationId}
       />
       {selected ? <BugShareDialog bugId={selected.id} open={shareOpen} onOpenChange={setShareOpen} /> : null}
       <BugFilterBuilderDialog

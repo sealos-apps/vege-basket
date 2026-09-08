@@ -415,6 +415,30 @@ export function updateAssignedTestBug(organizationId: OrganizationContext, bugId
   })
 }
 
+export function submitAssignedBugVerification(
+  organizationId: OrganizationContext,
+  bugId: number,
+  packages: Array<{
+    arch: string
+    channel: 'release' | 'ci'
+    objectKey: string
+    objectLastModified?: string
+    packageName: string
+    sizeBytes?: number
+    sourcePackageId: string
+    sourcePackageName: string
+    version: string
+  }>,
+) {
+  return request<{ bugs: TestWorkbenchData['bugs'] }>(
+    withOrganizationContext(`/api/test-bugs/${bugId}/assigned/verification-submissions`, organizationId),
+    {
+      method: 'POST',
+      body: JSON.stringify({ packages }),
+    },
+  )
+}
+
 export function transferAssignedTestBug(
   organizationId: OrganizationContext,
   bugId: number,

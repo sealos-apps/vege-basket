@@ -26,6 +26,7 @@ const testWorkbenchApiSource = readFileSync(new URL('../src/test-workbench-api.t
 const testWorkbenchSource = readFileSync(new URL('./test-workbench.ts', import.meta.url), 'utf8')
 const encryptExistingSource = readFileSync(new URL('./encrypt-existing.ts', import.meta.url), 'utf8')
 const versionMigrationSource = readFileSync(new URL('./migrations/20260904_test_space_version_uniqueness.sql', import.meta.url), 'utf8')
+const verificationMigrationSource = readFileSync(new URL('./migrations/20260908_test_bug_verification_packages.sql', import.meta.url), 'utf8')
 
 test('test spaces persist encrypted organization-scoped unique versions', () => {
   assert.match(schemaSource, /add column if not exists version_label text/u)
@@ -147,6 +148,27 @@ test('developer workbench offers start and reject for pending confirmation Bugs'
   assert.match(testWorkbenchClientSource, /<DialogTitle>驳回 Bug<\/DialogTitle>/u)
   assert.match(testWorkbenchClientSource, /rejectAssignedTestBug\(organizationId, bug\.id, reason\)/u)
   assert.match(testWorkbenchClientSource, /驳回记录/u)
+})
+
+test('verification submissions snapshot zero or many validated package artifacts atomically', () => {
+  assert.match(schemaSource, /create table if not exists test_bug_verification_submissions/u)
+  assert.match(schemaSource, /create table if not exists test_bug_verification_packages/u)
+  assert.match(schemaSource, /unique \(test_bug_verification_submission_id, object_key\)/u)
+  assert.match(verificationMigrationSource, /^begin;$/mu)
+  assert.match(verificationMigrationSource, /^commit;$/mu)
+  assert.match(testWorkbenchSource, /router\.post\('\/test-bugs\/:bugId\/assigned\/verification-submissions'/u)
+  assert.match(testWorkbenchSource, /parseVerificationPackages\(request\.body\?\.packages\)/u)
+  assert.match(testWorkbenchSource, /packages\.length > 20/u)
+  assert.match(testWorkbenchSource, /objectKeys\.has\(objectKey\)/u)
+  assert.match(testWorkbenchSource, /for update of b/u)
+  assert.match(testWorkbenchSource, /ensurePackageMarketRuleAllowed\(rules, policy, item\.sourcePackageId, item\.channel\)/u)
+  assert.match(testWorkbenchSource, /isPackageMarketObjectKeyAllowedForRule/u)
+  assert.match(testWorkbenchSource, /insert into test_bug_verification_submissions/u)
+  assert.match(testWorkbenchSource, /update test_bugs[\s\S]*set status = 'pending_verification'/u)
+  assert.match(testWorkbenchSource, /请通过提交验证流程选择安装包后再提交/u)
+  assert.match(testWorkbenchClientSource, /跳过并提交/u)
+  assert.match(testWorkbenchClientSource, /submitAssignedBugVerification\(organizationId, bug\.id, packages\)/u)
+  assert.match(testWorkbenchClientSource, /BugVerificationSubmissions/u)
 })
 
 test('reopening a rejected or closed Bug is a dedicated button next to share that returns it to pending confirmation', () => {

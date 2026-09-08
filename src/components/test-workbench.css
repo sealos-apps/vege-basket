@@ -1130,6 +1130,123 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.test-verification-dialog {
+  width: min(94vw, 760px);
+  max-width: 760px;
+}
+
+.test-verification-picker {
+  display: grid;
+  gap: 14px;
+}
+
+.test-verification-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.test-verification-controls label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted-text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.test-verification-links {
+  display: grid;
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.test-verification-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.test-verification-link:last-child {
+  border-bottom: 0;
+}
+
+.test-verification-link span {
+  display: grid;
+  gap: 2px;
+}
+
+.test-verification-link small,
+.test-verification-history-item time,
+.test-verification-empty {
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.test-verification-count {
+  margin: 0;
+  color: var(--body-text, var(--muted-text));
+  font-size: 13px;
+}
+
+.test-verification-history {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.test-verification-history h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.test-verification-history-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.test-verification-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.test-verification-history-item ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.test-verification-history-item li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--body-text, var(--muted-text));
+  font-size: 13px;
+}
+
+.test-verification-history-item li span {
+  color: var(--muted-text);
+}
+
+@media (max-width: 720px) {
+  .test-verification-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 .test-detail-block {
   margin-top: 20px;
 }
