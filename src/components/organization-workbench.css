@@ -1272,7 +1272,9 @@
 }
 
 .organization-weekly-rules-dialog {
-  width: min(92vw, 620px);
+  width: min(92vw, 680px);
+  max-height: min(90vh, 780px);
+  overflow-y: auto;
 }
 
 .organization-weekly-rules-form {
@@ -1316,6 +1318,121 @@
   color: var(--muted-text);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.organization-weekly-assignees {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px;
+}
+
+.organization-weekly-assignees > legend {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 4px;
+  color: var(--strong);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.organization-weekly-assignees > legend small,
+.organization-weekly-assignees > p {
+  color: var(--muted-text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.organization-weekly-assignees > p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.organization-weekly-assignee-tools {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.organization-weekly-assignee-tools > div {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.organization-weekly-assignee-search {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-text);
+}
+
+.organization-weekly-assignee-search [data-slot='input'] {
+  min-width: 0;
+  height: 34px;
+}
+
+.organization-weekly-assignee-list {
+  min-height: 52px;
+  max-height: 210px;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  border-block: 1px solid var(--line);
+}
+
+.organization-weekly-assignee-list > label {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.organization-weekly-assignee-list > label:last-of-type {
+  border-bottom: 0;
+}
+
+.organization-weekly-assignee-list > label > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.organization-weekly-assignee-list strong,
+.organization-weekly-assignee-list small {
+  overflow-wrap: anywhere;
+}
+
+.organization-weekly-assignee-list strong {
+  color: var(--strong);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.organization-weekly-assignee-list small,
+.organization-weekly-assignee-list > p {
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.organization-weekly-assignee-list > p {
+  margin: auto;
+  padding: 16px;
 }
 
 .organization-report-header-actions [data-slot='button'] {
@@ -1925,6 +2042,15 @@
 
   .organization-weekly-rule-control {
     grid-template-columns: auto minmax(0, 1fr) 112px;
+  }
+
+  .organization-weekly-assignee-tools {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .organization-weekly-assignee-tools > div {
+    justify-content: flex-end;
   }
 }
 

@@ -102,6 +102,8 @@ psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
   --file=server/migrations/20260904_test_environments.sql
 psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
   --file=server/migrations/20260904_test_space_version_uniqueness.sql
+psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
+  --file=server/migrations/20260908_weekly_report_assignees.sql
 ```
 
 Future changes that need data transformation, destructive cleanup, or incompatible behavior
@@ -120,6 +122,12 @@ The test-space version release adds `test_spaces.version_label_lookup` and an or
 unique index. Run `db:encrypt-existing` after taking the approved backup to encrypt legacy
 version labels and populate the lookup; it aborts without writing if duplicate versions already
 exist within one organization.
+
+The weekly-report assignee release adds
+`organization_memberships.weekly_report_required`. Existing and future memberships default to
+requiring a report, while the reserved `admin` account is excluded. The application startup path
+applies the compatible addition idempotently; the matching forward-only migration remains the
+independent structural record and must only be run against an explicitly authorized database.
 
 `npm run db:init` applies the current idempotent schema. `npm run db:encrypt-existing`
 applies the schema and encrypts supported legacy plaintext fields. Both are mutating

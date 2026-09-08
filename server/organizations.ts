@@ -70,6 +70,7 @@ type OrganizationRouterDependencies = {
 type OrganizationMembership = {
   access_role: OrganizationAccessRole
   organization_id: string
+  weekly_report_required: boolean
 }
 
 function asyncRoute(
@@ -135,7 +136,7 @@ async function requireSession(request: express.Request, response: express.Respon
 async function getOrganizationMembership(organizationId: number, userId: number) {
   const result = await query<OrganizationMembership>(
     `
-    select organization_id, access_role
+    select organization_id, access_role, weekly_report_required
     from organization_memberships
     where organization_id = $1 and user_id = $2 and status = 'active'
     `,
@@ -315,6 +316,12 @@ function linkedTodoIds(value: unknown) {
   return ids.every((id): id is number => id !== null) ? ids : null
 }
 
+function weeklyReportAssigneeIds(value: unknown) {
+  if (!Array.isArray(value) || value.length > 1_000) return null
+  const ids = Array.from(new Set(value.map(positiveId)))
+  return ids.every((id): id is number => id !== null) ? ids : null
+}
+
 async function lockProjectMutation(client: PoolClient, projectId: number) {
   await client.query(
     'select pg_advisory_xact_lock(hashtextextended($1::text, 0))',
@@ -391,14 +398,17 @@ export async function acceptOrganizationInviteTokenWithClient(
 
   await client.query(
     `insert into organization_memberships
-      (organization_id, user_id, access_role, status, invited_by_user_id, joined_at, removed_at)
-     values ($1, $2, 'member', 'active', $3, now(), null)
+      (organization_id, user_id, access_role, status, weekly_report_required,
+       invited_by_user_id, joined_at, removed_at)
+     select $1, $2, 'member', 'active', lower(email) <> 'admin', $3, now(), null
+     from users where id = $2
      on conflict (organization_id, user_id) do update
        set access_role = case
              when organization_memberships.access_role = 'owner' then 'owner'
              else 'member'
            end,
            status = 'active',
+           weekly_report_required = excluded.weekly_report_required,
            invited_by_user_id = excluded.invited_by_user_id,
            joined_at = now(),
            removed_at = null`,
@@ -457,16 +467,18 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       joined_at: Date
       roles: string[]
       user_id: string
+      weekly_report_required: boolean
     }>(
       `
-      select m.user_id, m.access_role, m.joined_at, u.email, u.display_name,
+      select m.user_id, m.access_role, m.joined_at, m.weekly_report_required,
+        u.email, u.display_name,
         coalesce(nullif(u.feishu_user_id, ''), nullif(u.feishu_email, '')) is not null as feishu_bound,
         coalesce(array_agg(distinct ur.role order by ur.role) filter (where ur.role is not null), '{}') as roles
       from organization_memberships m
       join users u on u.id = m.user_id
       left join user_roles ur on ur.user_id = u.id
       where m.organization_id = $1 and m.status = 'active'
-      group by m.user_id, m.access_role, m.joined_at, u.id
+      group by m.user_id, m.access_role, m.joined_at, m.weekly_report_required, u.id
       order by case m.access_role when 'owner' then 0 when 'admin' then 1 else 2 end,
         lower(coalesce(nullif(u.display_name, ''), u.email))
       `,
@@ -717,7 +729,19 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
         u.email, u.display_name
       from organization_weekly_reports r
       join users u on u.id = r.user_id
-      where r.organization_id = $1 and ($2::boolean and r.status = 'submitted' or r.user_id = $3)
+      join organization_memberships report_membership
+        on report_membership.organization_id = r.organization_id
+       and report_membership.user_id = r.user_id
+      where r.organization_id = $1 and (
+        (
+          $2::boolean
+          and r.status = 'submitted'
+          and report_membership.status = 'active'
+          and report_membership.weekly_report_required = true
+          and lower(u.email) <> 'admin'
+        )
+        or r.user_id = $3
+      )
       order by r.week_start desc, lower(coalesce(nullif(u.display_name, ''), u.email))
       limit 200
       `,
@@ -892,6 +916,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
     canManageProjects,
     canManageTestEnvironments: canManageTestEnvironments(membership.access_role, assignedRoles),
     canManageWeeklyReports,
+    canWriteWeeklyReport: membership.weekly_report_required,
     createdAt: row.created_at.toISOString(),
     id: Number(row.id),
     invitations: invitations.rows.map((invite) => ({
@@ -909,6 +934,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       joinedAt: member.joined_at.toISOString(),
       roles: member.roles,
       username: member.email,
+      weeklyReportRequired: member.weekly_report_required,
     })),
     name: decryptText(row.name),
     ownerUserId: Number(row.owner_user_id),
@@ -1107,9 +1133,10 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       )
       await client.query(
         `insert into organization_memberships
-          (organization_id, user_id, access_role, status, invited_by_user_id)
-         values ($1, $2, 'owner', 'active', $3)`,
-        [organizationId, Number(owner.rows[0].id), session.userId],
+          (organization_id, user_id, access_role, status, weekly_report_required,
+           invited_by_user_id)
+         values ($1, $2, 'owner', 'active', $4, $3)`,
+        [organizationId, Number(owner.rows[0].id), session.userId, ownerUsername !== 'admin'],
       )
       await writeAudit(client, organizationId, session.userId, 'organization.created', 'organization', String(organizationId), name)
       await client.query('commit')
@@ -1322,9 +1349,13 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     if (!(await requireOrganizationWeeklyReportManager(response, organizationId, session.userId))) return
     const weekStartsOn = normalizeOrganizationWeekStartsOn(request.body?.weekStartsOn)
     const weeklyReportRules = normalizeWeeklyReportRules(request.body?.weeklyReportRules)
-    if (!weekStartsOn || !weeklyReportRules) {
+    const weeklyReportAssigneeUserIds = weeklyReportAssigneeIds(
+      request.body?.weeklyReportAssigneeUserIds,
+    )
+    if (!weekStartsOn || !weeklyReportRules
+      || !weeklyReportAssigneeUserIds) {
       response.status(400).json({
-        error: '周报规则无效：截止时间必须早于下一轮开放时间，且日期与时间格式正确',
+        error: '周报规则无效：请检查填写成员、日期和时间设置',
       })
       return
     }
@@ -1350,6 +1381,23 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         response.status(409).json({ error: '组织权限已变化，请刷新后重试' })
         return
       }
+      const assigneeIds = weeklyReportAssigneeUserIds
+      const assignees = await client.query<{ user_id: string }>(
+        `select membership.user_id
+         from organization_memberships membership
+         join users on users.id = membership.user_id
+         where membership.organization_id = $1
+           and membership.status = 'active'
+           and lower(users.email) <> 'admin'
+           and membership.user_id = any($2::bigint[])
+         for update of membership`,
+        [organizationId, assigneeIds],
+      )
+      if (assignees.rows.length !== assigneeIds.length) {
+        await client.query('rollback')
+        response.status(400).json({ error: '周报填写成员必须是当前组织成员' })
+        return
+      }
       await client.query(
         `update organizations
          set week_starts_on = $1,
@@ -1368,6 +1416,16 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           organizationId,
         ],
       )
+      await client.query(
+        `update organization_memberships membership
+         set weekly_report_required = (membership.user_id = any($2::bigint[]))
+         from users
+         where membership.organization_id = $1
+           and membership.status = 'active'
+           and users.id = membership.user_id
+        `,
+        [organizationId, assigneeIds],
+      )
       await writeAudit(
         client,
         organizationId!,
@@ -1375,7 +1433,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         'organization.weekly_report_rules_changed',
         'organization',
         String(organizationId),
-        JSON.stringify({ weekStartsOn, weeklyReportRules }),
+        JSON.stringify({ weekStartsOn, weeklyReportAssigneeUserIds: assigneeIds, weeklyReportRules }),
       )
       await client.query('commit')
     } catch (error) {
@@ -1571,20 +1629,22 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       await client.query('begin')
       const membership = await client.query(
         `insert into organization_memberships
-          (organization_id, user_id, access_role, status, invited_by_user_id, joined_at, removed_at)
-         values ($1, $2, 'member', 'active', $3, now(), null)
+          (organization_id, user_id, access_role, status, weekly_report_required,
+           invited_by_user_id, joined_at, removed_at)
+         values ($1, $2, 'member', 'active', $4, $3, now(), null)
          on conflict (organization_id, user_id) do update
            set access_role = case
                  when organization_memberships.access_role = 'owner' then 'owner'
                  else 'member'
                end,
                status = 'active',
+               weekly_report_required = excluded.weekly_report_required,
                invited_by_user_id = excluded.invited_by_user_id,
                joined_at = now(),
                removed_at = null
          where organization_memberships.status <> 'active'
          returning user_id`,
-        [organizationId, targetUserId, session.userId],
+        [organizationId, targetUserId, session.userId, username !== 'admin'],
       )
       if (!membership.rows[0]) {
         await client.query('rollback')
@@ -2775,10 +2835,13 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     const session = await requireSession(request, response)
     if (!session) return
     const organizationId = positiveId(request.params.organizationId)
-    if (!(await requireOrganizationMember(response, organizationId, session.userId))) return
+    if (!organizationId) {
+      response.status(400).json({ error: 'Valid organization is required' })
+      return
+    }
     const weekStart = normalizeOrganizationWeekStart(
       request.params.weekStart,
-      await getOrganizationWeekStartsOn(organizationId!),
+      await getOrganizationWeekStartsOn(organizationId),
     )
     const content = String(request.body.content ?? '').trim().slice(0, 12_000)
     const status = request.body.status === 'submitted' ? 'submitted' : 'draft'
@@ -2786,16 +2849,43 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       response.status(400).json({ error: 'Valid week and report content are required' })
       return
     }
-    await query(
-      `insert into organization_weekly_reports
-        (organization_id, user_id, week_start, content, status, submitted_at)
-       values ($1, $2, $3, $4, $5, case when $5 = 'submitted' then now() else null end)
-       on conflict (organization_id, user_id, week_start) do update
-         set content = excluded.content, status = excluded.status, updated_at = now(),
-           submitted_at = case when excluded.status = 'submitted' then now() else null end`,
-      [organizationId, session.userId, weekStart, encryptText(content), status],
-    )
-    response.json(await getOrganizationDetail(organizationId!, session.userId))
+    const client = await pool.connect()
+    try {
+      await client.query('begin')
+      const membership = await client.query<{ weekly_report_required: boolean }>(
+        `select weekly_report_required
+         from organization_memberships
+         where organization_id = $1 and user_id = $2 and status = 'active'
+         for update`,
+        [organizationId, session.userId],
+      )
+      if (!membership.rows[0]) {
+        await client.query('rollback')
+        response.status(404).json({ error: 'Organization not found' })
+        return
+      }
+      if (!membership.rows[0].weekly_report_required) {
+        await client.query('rollback')
+        response.status(403).json({ error: '当前无需填写周报' })
+        return
+      }
+      await client.query(
+        `insert into organization_weekly_reports
+          (organization_id, user_id, week_start, content, status, submitted_at)
+         values ($1, $2, $3, $4, $5, case when $5 = 'submitted' then now() else null end)
+         on conflict (organization_id, user_id, week_start) do update
+           set content = excluded.content, status = excluded.status, updated_at = now(),
+             submitted_at = case when excluded.status = 'submitted' then now() else null end`,
+        [organizationId, session.userId, weekStart, encryptText(content), status],
+      )
+      await client.query('commit')
+    } catch (error) {
+      await client.query('rollback')
+      throw error
+    } finally {
+      client.release()
+    }
+    response.json(await getOrganizationDetail(organizationId, session.userId))
   }))
 
   router.post('/organizations/:organizationId/weekly-summaries/:weekStart', asyncRoute(async (request, response) => {
@@ -2818,7 +2908,13 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     }>(
       `select r.content, u.email, u.display_name
        from organization_weekly_reports r join users u on u.id = r.user_id
+       join organization_memberships membership
+         on membership.organization_id = r.organization_id
+        and membership.user_id = r.user_id
+        and membership.status = 'active'
+        and membership.weekly_report_required = true
        where r.organization_id = $1 and r.week_start = $2 and r.status = 'submitted'
+         and lower(u.email) <> 'admin'
        order by lower(coalesce(nullif(u.display_name, ''), u.email))`,
       [organizationId, weekStart],
     )
@@ -3226,12 +3322,18 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         )
         await client.query(
           `insert into organization_memberships
-            (organization_id, user_id, access_role, status, invited_by_user_id, joined_at, removed_at)
-           select $1, $2, 'member', 'active', invited_by_user_id, now(), null
-           from organization_invitations where id = $3
+            (organization_id, user_id, access_role, status, weekly_report_required,
+             invited_by_user_id, joined_at, removed_at)
+           select $1, $2, 'member', 'active', lower(users.email) <> 'admin',
+             invitation.invited_by_user_id, now(), null
+           from organization_invitations invitation
+           join users on users.id = $2
+           where invitation.id = $3
            on conflict (organization_id, user_id) do update
              set access_role = case when organization_memberships.access_role = 'owner' then 'owner' else 'member' end,
-               status = 'active', removed_at = null, joined_at = now()`,
+               status = 'active',
+               weekly_report_required = excluded.weekly_report_required,
+               removed_at = null, joined_at = now()`,
           [organizationId, respondedByUserId, invitationId],
         )
       }

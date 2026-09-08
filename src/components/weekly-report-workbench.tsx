@@ -279,6 +279,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   ))
   const [weekStartsOn, setWeekStartsOn] = useState(1)
   const [weeklyReportRules, setWeeklyReportRules] = useState<WeeklyReportRules>(defaultWeeklyReportRules)
+  const [canWriteWeeklyReport, setCanWriteWeeklyReport] = useState<boolean | null>(null)
   const [weekStart, setWeekStart] = useState('')
   const [report, setReport] = useState<PersonalWeeklyReport | null>(null)
   const [content, setContent] = useState('')
@@ -401,7 +402,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   }), [content, selectedSources, sourceMode])
 
   const applyReport = useCallback((next: PersonalWeeklyReport) => {
-    const nextContent = next.state === 'empty' && !next.content.trim()
+    const nextContent = canWriteWeeklyReport && next.state === 'empty' && !next.content.trim()
       ? WEEKLY_REPORT_TEMPLATE
       : next.content
     setWeekStart(next.weekStart)
@@ -415,7 +416,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
       sources: next.sources,
     })
     setSaveState('saved')
-  }, [])
+  }, [canWriteWeeklyReport])
 
   const previousOrganizationId = useRef(organizationId)
 
@@ -425,6 +426,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     setReportList(null)
     setReportListPage(0)
     setCurrentWeekSubmitted(null)
+    setCanWriteWeeklyReport(null)
     if (workspaceView !== 'editor') return
     setReport(null)
     setContent('')
@@ -453,6 +455,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
         if (organizationChanged) setCurrentWeekSubmitted(null)
         setWeekStartsOn(detail.weekStartsOn)
         setWeeklyReportRules(detail.weeklyReportRules)
+        setCanWriteWeeklyReport(detail.canWriteWeeklyReport)
         const current = currentWeekStart(detail.weekStartsOn, today)
         const preferredWeek = organizationId === initialContext.current.organizationId
           && initialContext.current.weekStart
@@ -482,7 +485,9 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     setLoading(true)
     Promise.all([
       fetchPersonalWeeklyReport(organizationId, weekStart),
-      fetchWeeklyReportSources(organizationId, weekStart),
+      canWriteWeeklyReport
+        ? fetchWeeklyReportSources(organizationId, weekStart)
+        : Promise.resolve({ sources: [] }),
     ])
       .then(([nextReport, sourceResult]) => {
         if (!active) return
@@ -501,7 +506,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     return () => {
       active = false
     }
-  }, [applyReport, organizationId, weekStart, workspaceView])
+  }, [applyReport, canWriteWeeklyReport, organizationId, weekStart, workspaceView])
 
   useEffect(() => {
     if (workspaceView !== 'list' || !organizationId) return
@@ -537,7 +542,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   }, [now, organizationId, refreshToken, reportListPage, reportListRefresh, today, weekStartsOn, weeklyReportRules, workspaceView])
 
   const persistDraft = useCallback(async () => {
-    if (!report || !organizationId || !weekStart || saveInFlight.current) return report
+    if (!canWriteWeeklyReport || !report || !organizationId || !weekStart || saveInFlight.current) return report
     const captured = {
       content,
       sourceMode,
@@ -566,7 +571,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     } finally {
       saveInFlight.current = false
     }
-  }, [content, organizationId, report, selectedSources, sourceMode, weekStart])
+  }, [canWriteWeeklyReport, content, organizationId, report, selectedSources, sourceMode, weekStart])
 
   const prepareOrganizationChange = useCallback(async () => {
     if (busy || saveInFlight.current) return false
@@ -582,13 +587,13 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   useImperativeHandle(ref, () => ({ prepareOrganizationChange }), [prepareOrganizationChange])
 
   useEffect(() => {
-    if (workspaceView !== 'editor' || !report || loading || busy || currentSignature === lastSavedSignature.current) return
+    if (!canWriteWeeklyReport || workspaceView !== 'editor' || !report || loading || busy || currentSignature === lastSavedSignature.current) return
     setSaveState('idle')
     const timer = window.setTimeout(() => {
       void persistDraft().catch(() => undefined)
     }, 900)
     return () => window.clearTimeout(timer)
-  }, [busy, currentSignature, loading, persistDraft, report, workspaceView])
+  }, [busy, canWriteWeeklyReport, currentSignature, loading, persistDraft, report, workspaceView])
 
   function toggleSource(source: WeeklyReportSourceCandidate) {
     const key = sourceKey(source)
@@ -734,6 +739,10 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     today,
     weekStart: activeWeekStart,
   })
+  const canCreateWeeklyReport = canWriteWeeklyReport === true && createAvailability.enabled
+  const weeklyReportCreationReason = canWriteWeeklyReport === false
+    ? '当前无需填写本组织周报。'
+    : createAvailability.reason
 
   const weeklyReportToolbar = topbarActionHost && organizationId > 0
     ? createPortal(
@@ -758,8 +767,8 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
           </Select>
         ) : (
           <CreateWeeklyReportButton
-            enabled={createAvailability.enabled}
-            reason={createAvailability.reason}
+            enabled={canCreateWeeklyReport}
+            reason={weeklyReportCreationReason}
             onCreate={() => openEditor(activeWeekStart)}
           />
         )}
@@ -835,13 +844,14 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
                       <span>{item.submittedAt ? `提交于 ${formatDateTime(item.submittedAt)}` : '草稿自动保存'}</span>
                     </div>
                     <Button
-                      aria-label={`编辑 ${formatWeekRange(item.weekStart)} 周报`}
-                      title="编辑周报"
+                      aria-label={`${canWriteWeeklyReport ? '编辑' : '查看'} ${formatWeekRange(item.weekStart)} 周报`}
+                      title={canWriteWeeklyReport ? '编辑周报' : '查看周报'}
                       type="button"
                       variant="outline"
                       onClick={() => openEditor(item.weekStart)}
                     >
-                      <PencilSimple size={16} /> 编辑
+                      {canWriteWeeklyReport ? <PencilSimple size={16} /> : <ClipboardText size={16} />}
+                      {canWriteWeeklyReport ? '编辑' : '查看'}
                     </Button>
                   </article>
                 )
@@ -850,12 +860,14 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
           ) : (
             <div className="weekly-report-index-empty">
               <ClipboardText size={32} weight="duotone" />
-              <strong>还没有周报</strong>
-              <CreateWeeklyReportButton
-                enabled={createAvailability.enabled}
-                reason={createAvailability.reason}
-                onCreate={() => openEditor(activeWeekStart)}
-              />
+              <strong>{canWriteWeeklyReport ? '还没有周报' : '当前无需填写周报'}</strong>
+              {canWriteWeeklyReport ? (
+                <CreateWeeklyReportButton
+                  enabled={canCreateWeeklyReport}
+                  reason={weeklyReportCreationReason}
+                  onCreate={() => openEditor(activeWeekStart)}
+                />
+              ) : null}
             </div>
           )}
 
@@ -886,28 +898,35 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
           ) : null}
         </div>
       ) : (
-      <div className={`weekly-report-layout ${sourcePanelOpen ? '' : 'source-collapsed'}`}>
+      <div className={`weekly-report-layout ${canWriteWeeklyReport && sourcePanelOpen ? '' : 'source-collapsed'}`}>
         {embedded ? <div id="weekly-report-embedded-toolbar-actions" className="weekly-report-embedded-toolbar-host" /> : null}
         <div className="weekly-report-editor-panel">
-          <div className="weekly-report-editor-heading">
-            <div className="weekly-report-editor-title">
-              <Button
-                aria-label="返回周报列表"
-                disabled={busy || saveState === 'saving'}
-                size="icon"
-                title="返回周报列表"
-                type="button"
-                variant="ghost"
-                onClick={() => void returnToList()}
-              ><ArrowLeft /></Button>
-              <div>
-                <h3>{formatWeekRange(weekStart)}</h3>
-                <span>{report?.publishedRevision ? `已提交第 ${report.publishedRevision} 版` : '尚未提交'}</span>
+          <div className="weekly-report-editor-header">
+            <div className="weekly-report-editor-heading">
+              <div className="weekly-report-editor-title">
+                <Button
+                  aria-label="返回周报列表"
+                  disabled={busy || saveState === 'saving'}
+                  size="icon"
+                  title="返回周报列表"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => void returnToList()}
+                ><ArrowLeft /></Button>
+                <div>
+                  <h3>{formatWeekRange(weekStart)}</h3>
+                  <span>{report?.publishedRevision ? `已提交第 ${report.publishedRevision} 版` : '尚未提交'}</span>
+                </div>
               </div>
+              {canWriteWeeklyReport ? (
+                <Button type="button" variant="outline" onClick={() => setSourcePanelOpen((open) => !open)}>
+                  <LinkSimple size={16} /> {sourcePanelOpen ? '收起关联项' : `关联工作 ${selectedSources.length}`}
+                </Button>
+              ) : null}
             </div>
-            <Button type="button" variant="outline" onClick={() => setSourcePanelOpen((open) => !open)}>
-              <LinkSimple size={16} /> {sourcePanelOpen ? '收起关联项' : `关联工作 ${selectedSources.length}`}
-            </Button>
+            {!canWriteWeeklyReport ? (
+              <div className="weekly-report-readonly-note">当前无需填写本组织周报，已有内容仅供查看。</div>
+            ) : null}
           </div>
           <WeeklyReportEditorBoundary>
             <Suspense fallback={<div className="weekly-report-editor-loading">正在加载编辑器...</div>}>
@@ -915,6 +934,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
                 ref={editorRef}
                 ariaLabel="周报正文"
                 placeholder="记录本周完成事项、风险阻塞和下周计划..."
+                readOnly={!canWriteWeeklyReport}
                 value={content}
                 onReady={() => {
                   setEditorReady(true)
@@ -926,7 +946,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
               />
             </Suspense>
           </WeeklyReportEditorBoundary>
-          <footer className="weekly-report-actions">
+          {canWriteWeeklyReport ? <footer className="weekly-report-actions">
             <div>
               <Button
                 aria-busy={generating}
@@ -958,10 +978,10 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
                 <PaperPlaneTilt size={16} /> 确认提交
               </Button>
             </div>
-          </footer>
+          </footer> : null}
         </div>
 
-        {sourcePanelOpen ? (
+        {canWriteWeeklyReport && sourcePanelOpen ? (
           <aside className="weekly-report-source-panel" aria-label="关联工作项">
             <div className="weekly-report-source-heading">
               <div className="weekly-report-source-copy">

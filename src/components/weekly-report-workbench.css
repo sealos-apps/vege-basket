@@ -341,6 +341,20 @@
   padding-bottom: 16px;
 }
 
+.weekly-report-editor-header {
+  display: grid;
+}
+
+.weekly-report-readonly-note {
+  margin-bottom: 14px;
+  border-left: 3px solid var(--brand);
+  padding: 8px 10px;
+  background: color-mix(in oklch, var(--brand) 7%, var(--surface));
+  color: var(--muted-text);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .weekly-report-editor-title {
   min-width: 0;
   display: flex;

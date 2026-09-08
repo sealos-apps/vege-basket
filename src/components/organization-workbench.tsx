@@ -13,6 +13,7 @@ import {
   GearSix,
   Heartbeat,
   LinkSimple,
+  MagnifyingGlass,
   PencilSimple,
   PaperPlaneTilt,
   Package as PackageIcon,
@@ -349,11 +350,14 @@ export function OrganizationWorkbench({
   const [topbarActionHost, setTopbarActionHost] = useState<HTMLElement | null>(null)
   const [weeklyCollection, setWeeklyCollection] = useState<WeeklyReportCollection | null>(null)
   const [weeklyCollectionLoading, setWeeklyCollectionLoading] = useState(false)
+  const [weeklyCollectionRefresh, setWeeklyCollectionRefresh] = useState(0)
   const [weeklyReminderNotice, setWeeklyReminderNotice] = useState('')
   const [weeklyRulesOpen, setWeeklyRulesOpen] = useState(false)
   const [weeklyRulesError, setWeeklyRulesError] = useState('')
   const [weeklyRulesDraft, setWeeklyRulesDraft] = useState<WeeklyReportRules>(defaultWeeklyReportRules)
   const [weeklyRulesWeekStartsOn, setWeeklyRulesWeekStartsOn] = useState(1)
+  const [weeklyReportAssigneeUserIds, setWeeklyReportAssigneeUserIds] = useState<number[]>([])
+  const [weeklyReportAssigneeQuery, setWeeklyReportAssigneeQuery] = useState('')
   const packageMarketDraftOrganizationId = useRef(0)
   const canAccessOrganizationManagement = currentUser.isSystemAdmin
     || currentUser.roles.includes('organization_admin')
@@ -475,6 +479,9 @@ export function OrganizationWorkbench({
     if (detail) {
       setWeeklyRulesDraft(detail.weeklyReportRules)
       setWeeklyRulesWeekStartsOn(detail.weekStartsOn)
+      setWeeklyReportAssigneeUserIds(detail.members
+        .filter((member) => member.weeklyReportRequired && member.username.toLowerCase() !== 'admin')
+        .map((member) => member.id))
     }
   }, [detail])
 
@@ -620,9 +627,12 @@ export function OrganizationWorkbench({
     try {
       const nextDetail = await updateOrganizationWeeklyReportRules(detail.id, {
         weekStartsOn: weeklyRulesWeekStartsOn,
+        weeklyReportAssigneeUserIds,
         weeklyReportRules: rules,
       })
       setDetail(nextDetail)
+      setWeeklyCollection(null)
+      setWeeklyCollectionRefresh((value) => value + 1)
       setWeeklyRulesOpen(false)
     } catch (saveError) {
       setWeeklyRulesError(errorMessage(saveError))
@@ -702,13 +712,27 @@ export function OrganizationWorkbench({
     detail?.weekStartsOn ?? 1,
     detail?.weeklyReportRules ?? defaultWeeklyReportRules,
   )
-  const submittedReports = detail?.reports.filter((report) => (
-    report.weekStart === weekStart && report.status === 'submitted'
-  )) ?? []
   const weeklyReportMemberCount = weeklyCollection?.members.length
-    ?? detail?.members.filter((member) => member.username.toLowerCase() !== 'admin').length
+    ?? detail?.members.filter((member) => (
+      member.weeklyReportRequired && member.username.toLowerCase() !== 'admin'
+    )).length
     ?? 0
   const currentSummary = detail?.summaries.find((summary) => summary.weekStart === weekStart)
+  const weeklyReportAssigneeCandidates = detail?.members.filter((member) => (
+    member.username.toLowerCase() !== 'admin'
+  )) ?? []
+  const normalizedWeeklyReportAssigneeQuery = weeklyReportAssigneeQuery.trim().toLocaleLowerCase('zh-CN')
+  const visibleWeeklyReportAssigneeCandidates = weeklyReportAssigneeCandidates.filter((member) => (
+    !normalizedWeeklyReportAssigneeQuery
+    || member.displayName.toLocaleLowerCase('zh-CN').includes(normalizedWeeklyReportAssigneeQuery)
+    || member.username.toLocaleLowerCase('zh-CN').includes(normalizedWeeklyReportAssigneeQuery)
+  ))
+
+  function toggleWeeklyReportAssignee(userId: number, checked: boolean) {
+    setWeeklyReportAssigneeUserIds((current) => checked
+      ? [...new Set([...current, userId])]
+      : current.filter((id) => id !== userId))
+  }
 
   const weeklyOrganizationId = detail?.id ?? 0
   const canManageWeeklyReports = detail?.canManageWeeklyReports ?? false
@@ -730,7 +754,7 @@ export function OrganizationWorkbench({
   useEffect(() => {
     if (tab !== 'reports') return
     void loadWeeklyCollection()
-  }, [loadWeeklyCollection, tab])
+  }, [loadWeeklyCollection, tab, weeklyCollectionRefresh])
 
   async function remindWeeklyReportUsers(userIds: number[]) {
     if (!detail || userIds.length === 0) return
@@ -1315,6 +1339,10 @@ export function OrganizationWorkbench({
                     if (open) {
                       setWeeklyRulesDraft(detail.weeklyReportRules)
                       setWeeklyRulesWeekStartsOn(detail.weekStartsOn)
+                      setWeeklyReportAssigneeUserIds(detail.members
+                        .filter((member) => member.weeklyReportRequired && member.username.toLowerCase() !== 'admin')
+                        .map((member) => member.id))
+                      setWeeklyReportAssigneeQuery('')
                     }
                   }}>
                     <DialogTrigger asChild>
@@ -1396,6 +1424,63 @@ export function OrganizationWorkbench({
                         <p className="organization-weekly-rules-hint">
                           截止时间必须早于下一轮周报的开放时间，避免两个填写时段重叠。
                         </p>
+                        <fieldset className="organization-weekly-assignees">
+                          <legend>
+                            <span>填写成员</span>
+                            <small>已选 {weeklyReportAssigneeUserIds.length} / {weeklyReportAssigneeCandidates.length}</small>
+                          </legend>
+                          <div className="organization-weekly-assignee-tools">
+                            <span className="organization-weekly-assignee-search">
+                              <MagnifyingGlass aria-hidden="true" size={15} />
+                              <Input
+                                aria-label="搜索周报填写成员"
+                                placeholder="搜索姓名或用户名"
+                                type="search"
+                                value={weeklyReportAssigneeQuery}
+                                onChange={(event) => setWeeklyReportAssigneeQuery(event.target.value)}
+                              />
+                            </span>
+                            <div>
+                              <Button
+                                disabled={visibleWeeklyReportAssigneeCandidates.length === 0}
+                                size="sm"
+                                type="button"
+                                variant="ghost"
+                                onClick={() => setWeeklyReportAssigneeUserIds((current) => [
+                                  ...new Set([
+                                    ...current,
+                                    ...visibleWeeklyReportAssigneeCandidates.map((member) => member.id),
+                                  ]),
+                                ])}
+                              >全选</Button>
+                              <Button
+                                disabled={weeklyReportAssigneeUserIds.length === 0}
+                                size="sm"
+                                type="button"
+                                variant="ghost"
+                                onClick={() => setWeeklyReportAssigneeUserIds([])}
+                              >清空</Button>
+                            </div>
+                          </div>
+                          <div className="organization-weekly-assignee-list">
+                            {visibleWeeklyReportAssigneeCandidates.map((member) => (
+                              <label key={member.id}>
+                                <Checkbox
+                                  checked={weeklyReportAssigneeUserIds.includes(member.id)}
+                                  onCheckedChange={(checked) => toggleWeeklyReportAssignee(member.id, checked === true)}
+                                />
+                                <span>
+                                  <strong>{member.displayName}</strong>
+                                  <small>{member.username}</small>
+                                </span>
+                              </label>
+                            ))}
+                            {visibleWeeklyReportAssigneeCandidates.length === 0 ? (
+                              <p>没有匹配的组织成员</p>
+                            ) : null}
+                          </div>
+                          <p>未选成员仍可查看自己的历史周报，但不再计入提交统计和填写提醒。</p>
+                        </fieldset>
                         <DialogFooter>
                           <DialogClose asChild><Button disabled={busy} type="button" variant="outline">取消</Button></DialogClose>
                           <Button disabled={busy} type="submit">保存规则</Button>
@@ -1405,7 +1490,12 @@ export function OrganizationWorkbench({
                   </Dialog>
                 ) : null}
                 <Button
-                  disabled={busy || submittedReports.length === 0 || !detail.canManageWeeklyReports}
+                  disabled={
+                    busy
+                    || weeklyCollectionLoading
+                    || !weeklyCollection?.members.some((member) => member.revision != null)
+                    || !detail.canManageWeeklyReports
+                  }
                   type="button"
                   onClick={() => void mutate(() => generateOrganizationWeeklySummary(detail.id, weekStart))}
                 ><Sparkle size={16} /> AI 汇总</Button>

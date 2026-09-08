@@ -239,6 +239,10 @@ the draft. AI generation uses the same item-based contract. Selected work source
 when the selection is inside a heading, insertion occurs immediately below that heading.
 Organization collection and reminder actions require both owner/admin organization
 membership and the additive `organization_admin` role.
+The membership row also stores the organization's long-lived weekly-report assignment. Rule
+changes replace that assignee set immediately: only current assignees may create, generate, save,
+or submit reports, while prior personal reports remain readable. Collection, reminders, and
+organization summaries derive from the same active assignee set.
 
 External entry points have separate trust boundaries:
 

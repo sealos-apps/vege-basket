@@ -17,6 +17,7 @@ test('organization weekly collection does not reload from whole detail object re
   assert.match(workbenchSource, /const canManageWeeklyReports = detail\?\.canManageWeeklyReports \?\? false/u)
   assert.match(workbenchSource, /fetchWeeklyReportCollection\(weeklyOrganizationId, weekStart\)/u)
   assert.match(workbenchSource, /\}, \[canManageWeeklyReports, weekStart, weeklyOrganizationId\]\)/u)
+  assert.match(workbenchSource, /\[loadWeeklyCollection, tab, weeklyCollectionRefresh\]/u)
   assert.match(workbenchSource, /weeklyCollectionLoading && !weeklyCollection/u)
   assert.doesNotMatch(workbenchSource, /weeklyCollectionLoading \? <EmptyRow/u)
 })

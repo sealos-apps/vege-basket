@@ -194,7 +194,11 @@ must remain bound to the authorized project ID.
   newest week first, with `limit` and `offset` pagination. One organization member has at most
   one report record for each normalized organization week.
 - Organization weekly-report collection omits the reserved `admin` username from member rows,
-  submission counts, and reminder targets.
+  submission counts, and reminder targets. Organization weekly-report managers configure a
+  long-lived assignee set together with the reporting window. Membership defaults to requiring a
+  report, while an empty set is valid. Changes take effect immediately across personal write and
+  AI-generation permission, collection counts, reminder targets, and organization AI summaries;
+  removed assignees retain read-only access to their own historical reports.
 - Todo responses expose an optional single watcher through `watcherUserId` and
   `watcherName`. `POST /api/todos` and `PATCH /api/todos/:todoId` accept
   `watcherUserId`; a non-null watcher must be the project owner or an active project

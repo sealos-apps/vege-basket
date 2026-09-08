@@ -619,7 +619,11 @@ export function updateOrganizationWeekStart(organizationId: number, weekStartsOn
 
 export function updateOrganizationWeeklyReportRules(
   organizationId: number,
-  payload: { weekStartsOn: number; weeklyReportRules: WeeklyReportRules },
+  payload: {
+    weekStartsOn: number
+    weeklyReportAssigneeUserIds: number[]
+    weeklyReportRules: WeeklyReportRules
+  },
 ) {
   return request<OrganizationDetail>(`/api/organizations/${organizationId}/weekly-report-rules`, {
     method: 'PATCH',
