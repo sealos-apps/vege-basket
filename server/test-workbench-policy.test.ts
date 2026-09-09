@@ -115,11 +115,11 @@ test('developer can reject only Bugs that are not yet being fixed', () => {
   assert.equal(canDeveloperRejectBug('closed'), false)
 })
 
-test('bug status and comment kind checks include pending confirmation and reject', () => {
+test('bug status and comment kind checks include pending confirmation, reject, and legacy acceptance', () => {
   assert.match(schemaSource, /update test_bugs[\s\S]*where status in \('confirmed', 'reopened'\)/u)
   assert.match(schemaSource, /update test_bugs[\s\S]*where status = 'duplicate'/u)
   assert.match(schemaSource, /check \(status in \('new', 'pending_confirmation', 'assigned', 'in_progress', 'pending_verification', 'closed', 'rejected'\)\)/u)
-  assert.match(schemaSource, /check \(kind in \('comment', 'transfer', 'reject'\)\)/u)
+  assert.match(schemaSource, /check \(kind in \('comment', 'transfer', 'reject', 'acceptance'\)\)/u)
 })
 
 test('returning a Bug to pending confirmation keeps the status change notification', () => {
