@@ -183,6 +183,11 @@ test('verification package picker supports filtered paginated catalogs and incre
   assert.match(testWorkbenchClientSource, /fetchPackageMarketReleaseVersions/u)
   assert.match(testWorkbenchClientSource, /fetchPackageMarketCiVersions/u)
   assert.match(testWorkbenchClientSource, /加载更多版本/u)
+  assert.match(testWorkbenchClientSource, /type SelectedVerificationPackage = VerificationPackageSelection &/u)
+  assert.match(testWorkbenchClientSource, /selectionKey: string/u)
+  assert.match(testWorkbenchClientSource, /const selectedGroups = useMemo/u)
+  assert.match(testWorkbenchClientSource, /function verificationPackageSnapshot\(item: SelectedVerificationPackage\)/u)
+  assert.match(testWorkbenchClientSource, /const payload = packages\.map\(verificationPackageSnapshot\)/u)
   assert.doesNotMatch(testWorkbenchClientSource, /跳过并提交/u)
 })
 

@@ -183,6 +183,24 @@ type VerificationPackageSelection = {
   version: string
 }
 
+type SelectedVerificationPackage = VerificationPackageSelection & {
+  selectionKey: string
+}
+
+function verificationPackageSnapshot(item: SelectedVerificationPackage): VerificationPackageSelection {
+  return {
+    arch: item.arch,
+    channel: item.channel,
+    objectKey: item.objectKey,
+    objectLastModified: item.objectLastModified,
+    packageName: item.packageName,
+    sizeBytes: item.sizeBytes,
+    sourcePackageId: item.sourcePackageId,
+    sourcePackageName: item.sourcePackageName,
+    version: item.version,
+  }
+}
+
 const emptyWorkbench: TestWorkbenchData = {
   bugs: [],
   cases: [],
@@ -4731,7 +4749,7 @@ function BugVerificationDialog({
   const [rulePage, setRulePage] = useState(0)
   const [versions, setVersions] = useState<PackageMarketVersion[]>([])
   const [visibleVersionCount, setVisibleVersionCount] = useState(10)
-  const [selected, setSelected] = useState<VerificationPackageSelection[]>([])
+  const [selected, setSelected] = useState<SelectedVerificationPackage[]>([])
   const [loading, setLoading] = useState(false)
   const [loadingVersions, setLoadingVersions] = useState(false)
   const [loadingVersionKey, setLoadingVersionKey] = useState('')
@@ -4848,14 +4866,15 @@ function BugVerificationDialog({
     return channel === 'ci' ? (version.hash || version.version || version.label) : (version.version || version.label)
   }
 
+  function versionSelectionKey(version: PackageMarketVersion) {
+    if (!selectedRule) return ''
+    return `${selectedRule.id}:${channel}:${arch}:${versionValue(version)}`
+  }
+
   function selectedVersionItems(version: PackageMarketVersion) {
-    if (!selectedRule) return []
-    const value = versionValue(version)
-    const values = new Set([value, version.label, version.version, version.hash].filter(Boolean))
-    return selected.filter((item) => item.sourcePackageId === selectedRule.id
-      && item.channel === channel
-      && item.arch === arch
-      && values.has(item.version))
+    const selectionKey = versionSelectionKey(version)
+    if (!selectionKey) return []
+    return selected.filter((item) => item.selectionKey === selectionKey)
   }
 
   async function toggleVersion(version: PackageMarketVersion) {
@@ -4867,6 +4886,7 @@ function BugVerificationDialog({
       return
     }
     const loadingKey = `${selectedRule.id}:${channel}:${arch}:${value}`
+    const selectionKey = `${selectedRule.id}:${channel}:${arch}:${value}`
     const requestId = ++versionSelectionRequestRef.current
     setLoadingVersionKey(loadingKey)
     setError('')
@@ -4898,6 +4918,7 @@ function BugVerificationDialog({
             sizeBytes: link.size,
             sourcePackageId: selectedRule.id,
             sourcePackageName: selectedRule.name,
+            selectionKey,
             version: link.version || value,
           })
         })
@@ -4911,9 +4932,17 @@ function BugVerificationDialog({
     }
   }
 
-  function removeSelected(objectKey: string) {
-    setSelected((current) => current.filter((item) => item.objectKey !== objectKey))
+  function removeSelected(selectionKey: string) {
+    setSelected((current) => current.filter((item) => item.selectionKey !== selectionKey))
   }
+
+  const selectedGroups = useMemo(() => {
+    const groups = new Map<string, { item: SelectedVerificationPackage; selectionKey: string }>()
+    selected.forEach((item) => {
+      if (!groups.has(item.selectionKey)) groups.set(item.selectionKey, { item, selectionKey: item.selectionKey })
+    })
+    return Array.from(groups.values())
+  }, [selected])
 
   function formatVerificationDate(value?: string) {
     if (!value) return '更新时间未知'
@@ -4930,7 +4959,8 @@ function BugVerificationDialog({
 
   async function submit(packages = selected) {
     if (!bug) return
-    if (await onSubmit(bug, packages)) onOpenChange(false)
+    const payload = packages.map(verificationPackageSnapshot)
+    if (await onSubmit(bug, payload)) onOpenChange(false)
   }
 
   return (
@@ -5085,20 +5115,20 @@ function BugVerificationDialog({
                 {versions.length > visibleVersionCount ? <Button className="test-verification-more" type="button" variant="outline" onClick={() => setVisibleVersionCount((current) => Math.min(current + 10, versions.length))}>加载更多版本（剩余 {versions.length - visibleVersionCount}）</Button> : null}
               </section>
             </div>
-            {selected.length > 0 ? (
+            {selectedGroups.length > 0 ? (
               <div className="test-verification-selected">
                 <div className="test-verification-selected-heading">
                   <strong>已选安装包</strong>
-                  <span>{selected.length} 个</span>
+                  <span>{selectedGroups.length} 个</span>
                 </div>
                 <div className="test-verification-chips">
-                  {selected.map((item) => (
-                    <span className="test-verification-chip" key={item.objectKey}>
+                  {selectedGroups.map(({ item, selectionKey }) => (
+                    <span className="test-verification-chip" key={selectionKey}>
                       <span>
                         <strong>{item.sourcePackageName}</strong>
                         <small>{item.version || '版本未知'} · {item.arch}</small>
                       </span>
-                      <button aria-label={`移除 ${item.sourcePackageName} ${item.version}`} type="button" onClick={() => removeSelected(item.objectKey)}>
+                      <button aria-label={`移除 ${item.sourcePackageName} ${item.version}`} type="button" onClick={() => removeSelected(selectionKey)}>
                         <X size={14} />
                       </button>
                     </span>
@@ -5110,12 +5140,12 @@ function BugVerificationDialog({
         </div>
         <DialogFooter className="test-verification-footer">
           <div className="test-verification-footer-status">
-            <strong>{selected.length > 0 ? `已选择 ${selected.length} 个安装包` : '未选择安装包'}</strong>
+            <strong>{selectedGroups.length > 0 ? `已选择 ${selectedGroups.length} 个安装包` : '未选择安装包'}</strong>
             <span>提交后将记录版本快照，便于后续追溯。</span>
           </div>
           <div className="test-verification-actions">
             <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>取消</Button>
-            <Button type="button" disabled={busy} onClick={() => void submit()}>{busy ? '提交中...' : selected.length ? `提交验证（${selected.length}）` : '提交验证（不关联安装包）'}</Button>
+            <Button type="button" disabled={busy} onClick={() => void submit()}>{busy ? '提交中...' : selectedGroups.length ? `提交验证（${selectedGroups.length}）` : '提交验证（不关联安装包）'}</Button>
           </div>
         </DialogFooter>
       </DialogContent>
