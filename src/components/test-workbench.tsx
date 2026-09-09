@@ -511,11 +511,13 @@ export function TestWorkbench({
   currentUserId,
   projects,
   refreshToken = 0,
+  workspaceContent,
 }: {
   accountMenu: ReactNode
   currentUserId?: number
   projects: TestWorkbenchProjectOption[]
   refreshToken?: number
+  workspaceContent?: ReactNode
 }) {
   const [data, setData] = useState<TestWorkbenchData>(emptyWorkbench)
   const [loading, setLoading] = useState(true)
@@ -1208,7 +1210,7 @@ export function TestWorkbench({
       </aside>
 
       <section className="test-workbench-content">
-          {loading ? (
+          {workspaceContent ?? (loading ? (
             <div className="test-workbench-loading">正在加载测试工作台...</div>
           ) : tab === 'weekly_report' ? (
             <div className="test-workbench-weekly-report">
@@ -1359,7 +1361,7 @@ export function TestWorkbench({
                 onDeleteComment={(bug, comment) => mutate(() => deleteTestBugComment(bug.testSpaceId, bug.id, comment.id))}
               />
             </>
-          )}
+          ))}
       </section>
 
       <TestSpaceSettingsDialog

@@ -46,8 +46,21 @@ test('rejects empty and oversized changelog fields', () => {
 })
 
 test('changelog loads independently from workspace polling and starts collapsed', () => {
+  const changelogUsages = [...appSource.matchAll(/<ChangelogWorkbench\b([\s\S]*?)\/>/gu)]
   assert.doesNotMatch(changelogWorkbenchSource, /refreshToken/u)
-  assert.doesNotMatch(appSource, /<ChangelogWorkbench[\s\S]*?refreshToken=/u)
+  assert.ok(changelogUsages.length >= 1)
+  assert.ok(changelogUsages.every(([, props]) => !props.includes('refreshToken=')))
   assert.match(changelogWorkbenchSource, /useState<number \| null>\(null\)/u)
   assert.doesNotMatch(changelogWorkbenchSource, /result\.entries\[0\]\?\.id/u)
+})
+
+test('tester reads the changelog inside the test workbench without switching personas', () => {
+  assert.match(
+    appSource,
+    /authUser\?\.activeRole === 'tester' && \(view === 'testing' \|\| view === 'changelog'\)/u,
+  )
+  assert.match(appSource, /workspaceContent=\{view === 'changelog' \? \(/u)
+  assert.match(appSource, /onBack=\{\(\) => setView\('testing'\)\}/u)
+  assert.match(changelogWorkbenchSource, /onBack\?: \(\) => void/u)
+  assert.match(changelogWorkbenchSource, /返回测试工作台/u)
 })

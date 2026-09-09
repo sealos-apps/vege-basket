@@ -1979,7 +1979,7 @@ alter table test_bug_comments
 
 alter table test_bug_comments
   add constraint test_bug_comments_kind_check
-  check (kind in ('acceptance', 'comment', 'transfer', 'reject'));
+  check (kind in ('comment', 'transfer', 'reject', 'acceptance'));
 
 create table if not exists test_bug_events (
   id bigserial primary key,
