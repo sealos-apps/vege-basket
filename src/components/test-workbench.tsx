@@ -116,6 +116,7 @@ import {
   deleteTestBug,
   deleteTestBugComment,
   fetchAssignedTestBugs,
+  fetchTestBugVerificationScript,
   fetchTestSpaceInviteLinkInfo,
   fetchTestSpaceSettings,
   fetchTestWorkbench,
@@ -2375,7 +2376,7 @@ function BugDetail({ bug, busy, departedUserIds, draftOwnerUserId, onAssignee, o
       <span>更新时间 <strong>{formatTimestamp(bug.updatedAt)}</strong></span>
     </div>
     <DetailBlock title="复现步骤" content={bug.reproductionSteps} /><DetailBlock title="预期结果" content={bug.expectedResult} /><DetailBlock title="实际结果" content={bug.actualResult} />
-    <BugVerificationSubmissions submissions={bug.verificationSubmissions} />
+    <BugVerificationSubmissions bugId={bug.id} submissions={bug.verificationSubmissions} />
     <BugCommentsSection
       bug={bug}
       busy={busy}
@@ -2696,7 +2697,7 @@ function BugCommentsSection({ bug, busy, currentUserId, departedUserIds = [], dr
   return (
     <section className="test-comments">
       <h3>协作记录</h3>
-      {bug.comments.map((item) => (
+      {bug.comments.filter((item) => item.kind !== 'acceptance').map((item) => (
         <BugCommentArticle
           key={item.id}
           bug={bug}
@@ -2755,13 +2756,12 @@ function BugCommentArticle({ bug, busy, comment, currentUserId, departedUserIds 
   }, [comment.content, editing])
 
   return (
-    <article className={`test-comment-item${comment.kind === 'acceptance' ? ' is-acceptance' : ''}`}>
+    <article className="test-comment-item">
       <div className="test-comment-header">
         <div className="test-comment-byline">
           <UserName departedUserIds={departedUserIds} name={comment.authorName} userId={comment.authorUserId} />
           {comment.kind === 'transfer' ? <Badge variant="outline">转移记录</Badge> : null}
           {comment.kind === 'reject' ? <Badge variant="outline">驳回记录</Badge> : null}
-          {comment.kind === 'acceptance' ? <Badge className="test-acceptance-comment-badge">验收记录</Badge> : null}
           <span aria-hidden="true">·</span>
           <time>{formatTimestamp(comment.createdAt)}{edited ? ` · 编辑于 ${formatTimestamp(comment.updatedAt)}` : ''}</time>
         </div>
@@ -3223,40 +3223,108 @@ function DetailBlock({ content, title }: { content: string; title: string }) {
   )
 }
 
-function BugVerificationSubmissions({ submissions = [] }: { submissions?: TestBug['verificationSubmissions'] }) {
+function BugVerificationSubmissions({ bugId, submissions = [] }: {
+  bugId: number
+  submissions?: TestBug['verificationSubmissions']
+}) {
   return (
     <section className="test-verification-history">
-      <h3>验证提交</h3>
-      {submissions.length === 0 ? <p className="test-verification-empty">暂无验证提交记录</p> : submissions.map((submission) => {
-        const packageSelections = Array.from(new Map(
-          submission.packages.map((item) => [item.sourcePackageId, item]),
-        ).values())
-        return (
-          <article className="test-verification-history-item" key={submission.id}>
-            <div className="test-verification-history-head">
-              <strong>{submission.submittedByName || '未知用户'}</strong>
-              <time>{formatTimestamp(submission.submittedAt)}</time>
-            </div>
-            {submission.containerImages.length > 0 ? (
-              <ul className="test-verification-history-images">
-                {submission.containerImages.map((item) => <li key={item.id}><code>{item.image}</code></li>)}
-              </ul>
-            ) : packageSelections.length === 0 ? (
-              <p className="test-verification-empty">历史记录未关联交付物</p>
-            ) : (
-              <ul>
-                {packageSelections.map((item) => (
-                  <li key={item.id}>
-                    <strong>{item.sourcePackageName || item.packageName}</strong>
-                    <span>{item.channelLabel} · {item.arch} · {item.version}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </article>
-        )
-      })}
+      <div className="test-acceptance-records-heading">
+        <h3>验收记录</h3>
+        <span>交付物摘要与验证脚本</span>
+      </div>
+      {submissions.length === 0 ? <p className="test-verification-empty">暂无验收记录</p> : submissions.map((submission) => (
+        <BugAcceptanceRecord bugId={bugId} key={submission.id} submission={submission} />
+      ))}
     </section>
+  )
+}
+
+function BugAcceptanceRecord({ bugId, submission }: {
+  bugId: number
+  submission: NonNullable<TestBug['verificationSubmissions']>[number]
+}) {
+  const [expireMinutes, setExpireMinutes] = useState<30 | 60 | 120>(30)
+  const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle')
+  const hasPackages = submission.packages.length > 0
+  const packageSelections = useMemo(() => Array.from(new Map(
+    submission.packages.map((item) => [item.sourcePackageId, item]),
+  ).values()), [submission.packages])
+
+  useEffect(() => {
+    setCopyState('idle')
+    setExpireMinutes(30)
+  }, [submission.id])
+
+  async function copyVerificationScript() {
+    setCopyState('copying')
+    try {
+      if (!navigator.clipboard) throw new Error('Clipboard is not available')
+      const result = await fetchTestBugVerificationScript(
+        bugId,
+        submission.id,
+        hasPackages ? expireMinutes : undefined,
+      )
+      await navigator.clipboard.writeText(result.script)
+      setCopyState('copied')
+    } catch {
+      setCopyState('failed')
+    }
+  }
+
+  return (
+    <article className="test-verification-history-item">
+      <div className="test-verification-history-head">
+        <div>
+          <Badge variant="outline">{hasPackages ? '安装包' : '集群镜像'}</Badge>
+          <strong>{submission.submittedByName || '未知用户'}</strong>
+        </div>
+        <time>{formatTimestamp(submission.submittedAt)}</time>
+      </div>
+      {submission.containerImages.length > 0 ? (
+        <ul className="test-verification-history-images">
+          {submission.containerImages.map((item) => <li key={item.id}><code>{item.image}</code></li>)}
+        </ul>
+      ) : packageSelections.length === 0 ? (
+        <p className="test-verification-empty">历史记录未关联交付物</p>
+      ) : (
+        <ul>
+          {packageSelections.map((item) => (
+            <li key={item.id}>
+              <strong>{item.sourcePackageName || item.packageName}</strong>
+              <span>{item.channelLabel} · {item.arch} · {item.version}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {hasPackages || submission.containerImages.length > 0 ? (
+        <div className="test-acceptance-record-actions">
+          {hasPackages ? (
+            <Label className="test-acceptance-expiry">下载链接有效期
+              <Select value={String(expireMinutes)} onValueChange={(value) => setExpireMinutes(Number(value) as 30 | 60 | 120)}>
+                <SelectTrigger aria-label="下载链接有效期"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="30">30 分钟（推荐）</SelectItem>
+                  <SelectItem value="60">1 小时</SelectItem>
+                  <SelectItem value="120">2 小时</SelectItem>
+                </SelectContent>
+              </Select>
+            </Label>
+          ) : <span className="test-acceptance-direct-run">直接使用集群镜像运行</span>}
+          <Button
+            aria-label={copyState === 'copied' ? '已复制验证脚本' : '复制验证脚本'}
+            disabled={copyState === 'copying'}
+            title={copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败，请重试' : '复制验证脚本'}
+            type="button"
+            onClick={() => void copyVerificationScript()}
+          >
+            {copyState === 'copied' ? <CheckCircle weight="bold" /> : <CopySimple />}
+            {copyState === 'copying' ? '生成中...' : copyState === 'copied' ? '已复制验证脚本' : '复制验证脚本'}
+          </Button>
+        </div>
+      ) : null}
+      {copyState === 'failed' ? <p className="test-form-error" role="status">验证脚本生成或复制失败，请重试。</p> : null}
+    </article>
   )
 }
 
@@ -5003,7 +5071,7 @@ function BugVerificationDialog({
     const needsContainerImages = packages.length === 0
     if (needsContainerImages && !canSubmitContainerImages) {
       setContainerImagesTouched(true)
-      setError('请逐项填写符合规则的容器镜像名称。')
+      setError('请逐项填写符合规则的集群镜像名称。')
       return
     }
     const payload = packages.map(verificationPackageSnapshot)
@@ -5186,7 +5254,7 @@ function BugVerificationDialog({
               <section className="test-verification-container-images" aria-labelledby="test-verification-container-images-title">
                 <div className="test-verification-section-heading">
                   <div>
-                    <strong id="test-verification-container-images-title">关联容器镜像</strong>
+                    <strong id="test-verification-container-images-title">关联集群镜像</strong>
                     <span>未关联安装包时，至少填写一个带版本标识的镜像名称</span>
                   </div>
                   <span>{containerImages.length} / 20</span>
@@ -5203,7 +5271,7 @@ function BugVerificationDialog({
                           <Input
                             aria-describedby={showError ? `container-image-error-${index}` : undefined}
                             aria-invalid={showError}
-                            aria-label={`容器镜像名称 ${index + 1}`}
+                            aria-label={`集群镜像名称 ${index + 1}`}
                             autoCapitalize="none"
                             autoComplete="off"
                             maxLength={512}
@@ -5216,10 +5284,10 @@ function BugVerificationDialog({
                             }}
                           />
                           <Button
-                            aria-label={`移除容器镜像 ${index + 1}`}
+                            aria-label={`移除集群镜像 ${index + 1}`}
                             disabled={containerImages.length === 1}
                             size="icon"
-                            title="移除容器镜像"
+                            title="移除集群镜像"
                             type="button"
                             variant="ghost"
                             onClick={() => setContainerImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
@@ -5243,12 +5311,12 @@ function BugVerificationDialog({
         </div>
         <DialogFooter className="test-verification-footer">
           <div className="test-verification-footer-status">
-            <strong>{selectedGroups.length > 0 ? `已选择 ${selectedGroups.length} 个安装包` : `已填写 ${normalizedContainerImages.length} 个容器镜像`}</strong>
+            <strong>{selectedGroups.length > 0 ? `已选择 ${selectedGroups.length} 个安装包` : `已填写 ${normalizedContainerImages.length} 个集群镜像`}</strong>
             <span>{selectedGroups.length > 0 ? '提交后将记录版本快照，便于后续追溯。' : '每个镜像名称都会在提交前再次校验。'}</span>
           </div>
           <div className="test-verification-actions">
             <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>取消</Button>
-            <Button type="button" disabled={busy || (selectedGroups.length === 0 && !canSubmitContainerImages)} onClick={() => void submit()}>{busy ? '提交中...' : selectedGroups.length ? `提交验证（${selectedGroups.length}）` : `提交验证（镜像 ${normalizedContainerImages.length}）`}</Button>
+            <Button type="button" disabled={busy || (selectedGroups.length === 0 && !canSubmitContainerImages)} onClick={() => void submit()}>{busy ? '提交中...' : selectedGroups.length ? `提交验证（${selectedGroups.length}）` : `提交验证（集群镜像 ${normalizedContainerImages.length}）`}</Button>
           </div>
         </DialogFooter>
       </DialogContent>
@@ -5600,7 +5668,7 @@ export function AssignedTestBugs({
                 <DetailBlock title="复现步骤" content={selected.reproductionSteps} />
                 <DetailBlock title="预期结果" content={selected.expectedResult} />
                 <DetailBlock title="实际结果" content={selected.actualResult} />
-                <BugVerificationSubmissions submissions={selected.verificationSubmissions} />
+                <BugVerificationSubmissions bugId={selected.id} submissions={selected.verificationSubmissions} />
                 <BugCommentsSection
                   bug={selected}
                   busy={busy}

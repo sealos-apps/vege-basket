@@ -23,6 +23,7 @@ import {
   getOrganizationPackageMarketPolicy,
 } from './organization-package-market.ts'
 import {
+  createPackageItemDownloadLink,
   isPackageMarketObjectKeyAllowedForRule,
   listPackageMarketRules,
 } from './package-market.ts'
@@ -52,6 +53,10 @@ import {
   type OrganizationContext,
 } from '../shared/organization-context.ts'
 import { containerImageReferenceKey, normalizeContainerImageReference } from '../shared/container-image-reference.ts'
+import {
+  createClusterImageVerificationScript,
+  createPackageVerificationScript,
+} from './verification-deployment-script.ts'
 
 type TestSpaceAccess = 'owner' | 'editor' | 'viewer'
 type TestSpaceMembershipStatus = 'pending' | 'active' | 'declined'
@@ -232,29 +237,78 @@ function parseVerificationContainerImages(value: unknown): string[] | null {
   return images
 }
 
-function verificationCommandValue(value: string) {
-  return JSON.stringify(value)
-}
-
 function formatVerificationAcceptanceComment(
   packages: readonly VerificationPackageInput[],
   containerImages: readonly string[],
 ) {
   if (containerImages.length > 0) {
-    return containerImages.map((image) => `$ veges bug verify-image --image ${verificationCommandValue(image)}`).join('\n')
+    return `已提交 ${containerImages.length} 个集群镜像交付物。`
   }
   const selections = new Map<string, VerificationPackageInput>()
   for (const item of packages) {
     if (!selections.has(item.sourcePackageId)) selections.set(item.sourcePackageId, item)
   }
-  return Array.from(selections.values()).map((item) => [
-    '$ veges bug verify-package \\',
-    `  --package ${verificationCommandValue(item.sourcePackageName)} \\`,
-    `  --version ${verificationCommandValue(item.version)} \\`,
-    `  --channel ${verificationCommandValue(item.channel === 'ci' ? '测试包' : '正式包')} \\`,
-    `  --arch ${verificationCommandValue(item.arch)} \\`,
-    `  --updated-at ${verificationCommandValue(item.objectLastModified)}`,
-  ].join('\n')).join('\n\n')
+  return `已提交 ${selections.size} 个安装包交付物。`
+}
+
+const verificationScriptExpireMinutes = [30, 60, 120] as const
+
+function parseVerificationScriptExpireMinutes(value: unknown) {
+  const minutes = Number(value)
+  return verificationScriptExpireMinutes.includes(minutes as (typeof verificationScriptExpireMinutes)[number])
+    ? minutes
+    : null
+}
+
+async function requireVerificationScriptAccess(
+  request: express.Request,
+  response: express.Response,
+  bugId: number,
+) {
+  const session = await getAuthenticatedRoleSession(request)
+  if (!session) {
+    response.status(401).json({ error: 'Unauthorized' })
+    return null
+  }
+  if (session.activeRole !== 'developer' && session.activeRole !== 'tester') {
+    response.status(403).json({ error: 'Active tester or developer role is required' })
+    return null
+  }
+  const role = await query<{ assigned: boolean }>(
+    `select exists(
+      select 1 from user_roles
+      where user_id = $1 and role in ($2::text, 'organization_admin')
+    ) as assigned`,
+    [session.userId, session.activeRole],
+  )
+  if (!role.rows[0]?.assigned) {
+    response.status(403).json({ error: 'Active tester or developer role is required' })
+    return null
+  }
+  const access = await query<{ allowed: boolean }>(
+    `
+    select exists(
+      select 1
+      from test_bugs b
+      join test_spaces space on space.id = b.test_space_id
+      left join test_space_memberships membership
+        on membership.test_space_id = space.id
+       and membership.user_id = $2
+       and membership.status = 'active'
+      where b.id = $1
+        and (
+          ($3::text = 'tester' and (${testSpaceMembershipPresentSql('membership')} or ${managedOrganizationReadScopeSql('space.organization_id', '$2')}))
+          or ($3::text = 'developer' and (b.assignee_user_id = $2 or ${managedOrganizationReadScopeSql('space.organization_id', '$2')}))
+        )
+    ) as allowed
+    `,
+    [bugId, session.userId, session.activeRole],
+  )
+  if (!access.rows[0]?.allowed) {
+    response.status(404).json({ error: 'Verification submission not found' })
+    return null
+  }
+  return session
 }
 
 function parseOptionalTestEnvironmentId(value: unknown):
@@ -4942,11 +4996,11 @@ router.post('/test-bugs/:bugId/assigned/verification-submissions', asyncRoute(as
   const packages = parseVerificationPackages(request.body?.packages)
   const containerImages = parseVerificationContainerImages(request.body?.containerImages)
   if (!bugId || !packages || !containerImages) {
-    response.status(400).json({ error: '验证交付物无效，请选择安装包或填写符合规则的容器镜像。' })
+    response.status(400).json({ error: '验证交付物无效，请选择安装包或填写符合规则的集群镜像。' })
     return
   }
   if ((packages.length === 0 && containerImages.length === 0) || (packages.length > 0 && containerImages.length > 0)) {
-    response.status(400).json({ error: '安装包与容器镜像必须二选一，且至少关联一项交付物。' })
+    response.status(400).json({ error: '安装包与集群镜像必须二选一，且至少关联一项交付物。' })
     return
   }
 
@@ -5070,6 +5124,84 @@ router.post('/test-bugs/:bugId/assigned/verification-submissions', asyncRoute(as
   })
   if (statusEvent) onTestBugStatusChanged(statusEvent)
   response.json(await getAssignedBugs(session.userId, organizationId))
+}))
+
+router.get('/test-bugs/:bugId/verification-submissions/:submissionId/script', asyncRoute(async (request, response) => {
+  const bugId = positiveId(request.params.bugId)
+  const submissionId = positiveId(request.params.submissionId)
+  if (!bugId || !submissionId) {
+    response.status(400).json({ error: '有效的 Bug 和验收记录是必填项' })
+    return
+  }
+  if (!await requireVerificationScriptAccess(request, response, bugId)) return
+
+  const [packages, containerImages] = await Promise.all([
+    query<{
+      channel: 'release' | 'ci'
+      object_key: string
+      source_package_id: string
+    }>(
+      `
+      select package.source_package_id, package.channel, package.object_key
+      from test_bug_verification_packages package
+      join test_bug_verification_submissions submission
+        on submission.id = package.test_bug_verification_submission_id
+      where submission.id = $1 and submission.test_bug_id = $2
+      order by package.position, package.id
+      `,
+      [submissionId, bugId],
+    ),
+    query<{ image_ref: string }>(
+      `
+      select image.image_ref
+      from test_bug_verification_container_images image
+      join test_bug_verification_submissions submission
+        on submission.id = image.test_bug_verification_submission_id
+      where submission.id = $1 and submission.test_bug_id = $2
+      order by image.position, image.id
+      `,
+      [submissionId, bugId],
+    ),
+  ])
+  if ((packages.rows.length === 0 && containerImages.rows.length === 0) || (packages.rows.length > 0 && containerImages.rows.length > 0)) {
+    response.status(404).json({ error: '验收记录未关联可用交付物' })
+    return
+  }
+  if (containerImages.rows.length > 0) {
+    const images = containerImages.rows.map((item) => decryptText(item.image_ref))
+    if (images.some((image) => !normalizeContainerImageReference(image, { requireTagOrDigest: true }).valid)) {
+      response.status(409).json({ error: '验收记录中的集群镜像无效，无法生成验证脚本' })
+      return
+    }
+    response.json({ script: createClusterImageVerificationScript(images) })
+    return
+  }
+
+  const expireMinutes = parseVerificationScriptExpireMinutes(request.query.expireMinutes)
+  if (!expireMinutes) {
+    response.status(400).json({ error: '下载链接有效期仅支持 30 分钟、1 小时或 2 小时' })
+    return
+  }
+  const rules = await listPackageMarketRules()
+  for (const item of packages.rows) {
+    if (!isPackageMarketObjectKeyAllowedForRule({
+      channel: item.channel,
+      objectKey: item.object_key,
+      packageId: item.source_package_id,
+      rules,
+    })) {
+      response.status(409).json({ error: '验证安装包已不符合当前对象规则，无法生成下载脚本' })
+      return
+    }
+  }
+  const links = packages.rows.map((item) => ({
+    ...createPackageItemDownloadLink(item.object_key, expireMinutes),
+    objectKey: item.object_key,
+  }))
+  response.json({
+    expiresAt: links.reduce((earliest, item) => item.expiresAt < earliest ? item.expiresAt : earliest, links[0]?.expiresAt ?? ''),
+    script: createPackageVerificationScript(links),
+  })
 }))
 
 router.post('/test-bugs/:bugId/assigned/comments', asyncRoute(async (request, response) => {

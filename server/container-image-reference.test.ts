@@ -27,8 +27,15 @@ test('rejects unpinned, duplicate-prone, and unsafe verification image reference
   }
 })
 
-test('treats docker transport and canonical image names as the same verification delivery', () => {
+test('deduplicates the same cluster image name and tag without blocking another version', () => {
   const image = 'ghcr.io/example/admin:v2.1.0'
-  const dockerTransportImage = `docker://${image}`
-  assert.equal(containerImageReferenceKey(dockerTransportImage), containerImageReferenceKey(image))
+  assert.equal(containerImageReferenceKey(`docker://${image}`), containerImageReferenceKey(image))
+  assert.equal(
+    containerImageReferenceKey('GHCR.IO/example/admin:v2.1.0'),
+    containerImageReferenceKey(image),
+  )
+  assert.notEqual(
+    containerImageReferenceKey('ghcr.io/example/admin:v2.1.1'),
+    containerImageReferenceKey(image),
+  )
 })

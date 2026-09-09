@@ -440,6 +440,19 @@ export function submitAssignedBugVerification(
   )
 }
 
+export function fetchTestBugVerificationScript(
+  bugId: number,
+  submissionId: number,
+  expireMinutes?: 30 | 60 | 120,
+) {
+  const params = new URLSearchParams()
+  if (expireMinutes) params.set('expireMinutes', String(expireMinutes))
+  const query = params.size > 0 ? `?${params}` : ''
+  return request<{ expiresAt?: string; script: string }>(
+    `/api/test-bugs/${bugId}/verification-submissions/${submissionId}/script${query}`,
+  )
+}
+
 export function transferAssignedTestBug(
   organizationId: OrganizationContext,
   bugId: number,

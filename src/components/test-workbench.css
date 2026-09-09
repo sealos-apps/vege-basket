@@ -1821,17 +1821,30 @@
   margin-top: 20px;
 }
 
-.test-verification-history h3 {
+.test-acceptance-records-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.test-acceptance-records-heading h3 {
   margin: 0;
   font-size: 13px;
+}
+
+.test-acceptance-records-heading span {
+  color: var(--muted-text);
+  font-size: 12px;
 }
 
 .test-verification-history-item {
   display: grid;
   gap: 8px;
   padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 1px solid color-mix(in oklch, var(--brand) 22%, var(--line));
+  border-left: 3px solid var(--brand);
+  border-radius: 6px;
   background: var(--surface);
 }
 
@@ -1840,6 +1853,24 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.test-verification-history-head > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.test-verification-history-head > div > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.test-verification-history-head [data-slot="badge"] {
+  flex: 0 0 auto;
+  color: var(--brand);
 }
 
 .test-verification-history-item ul {
@@ -1881,6 +1912,40 @@
   font-size: 12px;
 }
 
+.test-acceptance-record-actions {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in oklch, var(--brand) 15%, var(--line));
+}
+
+.test-acceptance-expiry {
+  display: grid;
+  gap: 5px;
+  color: var(--muted-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.test-acceptance-expiry [data-slot="select-trigger"] {
+  width: 156px;
+  min-height: 32px;
+  color: var(--strong);
+  font-size: 12px;
+}
+
+.test-acceptance-direct-run {
+  padding: 7px 0;
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.test-acceptance-record-actions > [data-slot="button"] {
+  min-width: 144px;
+}
+
 @media (max-width: 720px) {
   .test-verification-browser {
     grid-template-columns: 1fr;
@@ -1903,6 +1968,17 @@
   .test-verification-actions {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.8fr);
+  }
+
+  .test-acceptance-records-heading,
+  .test-acceptance-record-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .test-acceptance-expiry [data-slot="select-trigger"],
+  .test-acceptance-record-actions > [data-slot="button"] {
+    width: 100%;
   }
 
   .test-verification-actions [data-slot="button"],

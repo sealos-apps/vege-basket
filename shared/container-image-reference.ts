@@ -5,7 +5,16 @@ export type ContainerImageReferenceResult =
   | { valid: true; value: string }
 
 export function containerImageReferenceKey(image: string) {
-  return image.startsWith('docker://') ? image.slice('docker://'.length) : image
+  const imageBody = image.startsWith('docker://') ? image.slice('docker://'.length) : image
+  const digestIndex = imageBody.indexOf('@sha256:')
+  if (digestIndex >= 0) {
+    return `${imageBody.slice(0, digestIndex).toLowerCase()}${imageBody.slice(digestIndex).toLowerCase()}`
+  }
+  const slashIndex = imageBody.lastIndexOf('/')
+  const tagIndex = imageBody.lastIndexOf(':')
+  return tagIndex > slashIndex
+    ? `${imageBody.slice(0, tagIndex).toLowerCase()}${imageBody.slice(tagIndex)}`
+    : imageBody.toLowerCase()
 }
 
 function isPrivateIpv4(hostname: string) {

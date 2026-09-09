@@ -359,8 +359,10 @@ The schema is normalized around these groups:
   case folders and cases, space-level test plans with selected test subjects and immutable
   case snapshots, reusable organization test environments, Bugs, Bug comments, and immutable
   verification delivery snapshots. Each verification submission records either package artifacts
-  or encrypted, pinned container-image references and writes one linked immutable acceptance
-  comment in the status-change transaction.
+  or encrypted, pinned cluster-image references and writes one linked immutable acceptance
+  comment in the status-change transaction. The acceptance record is the sole delivery surface:
+  package download URLs are signed only when an authorized reader copies a verification script,
+  while cluster-image scripts use the immutable image reference directly.
   Test spaces are an owner-managed authorization boundary independent from projects.
   Test subjects describe the tested object itself and record their creator; only that
   creator may delete the subject and its cascading test data. Test plans may optionally
