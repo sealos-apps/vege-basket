@@ -239,6 +239,10 @@ the draft. AI generation uses the same item-based contract. Selected work source
 when the selection is inside a heading, insertion occurs immediately below that heading.
 Organization collection and reminder actions require both owner/admin organization
 membership and the additive `organization_admin` role.
+The membership row also stores the organization's long-lived weekly-report assignment. Rule
+changes replace that assignee set immediately: only current assignees may create, generate, save,
+or submit reports, while prior personal reports remain readable. Collection, reminders, and
+organization summaries derive from the same active assignee set.
 
 External entry points have separate trust boundaries:
 
@@ -495,7 +499,7 @@ database mutation, not a read-only smoke test. Versioned files under
 applied before code that depends on a new structure. The application does not
 automatically execute those versioned files, and there is no automatic down migration.
 The image-sync surface additionally requires an instance-level `GITHUB_ACTIONS_TOKEN` scoped
-to `labring/sealos-pro` Actions write. It never accepts repository, workflow, ref, or token
+to `sealos-apps/sealos-pro` Actions write. It never accepts repository, workflow, ref, or token
 values from the browser. Each dispatch carries a server-generated UUID as the workflow
 `request_id`; uncertain POST responses remain recoverable until a matching GitHub `run-name`
 is found or the five-minute reconciliation window expires. Real dispatch verification consumes

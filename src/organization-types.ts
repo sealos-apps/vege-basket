@@ -35,6 +35,7 @@ export type OrganizationMember = {
   joinedAt: string
   roles: UserRole[]
   username: string
+  weeklyReportRequired: boolean
 }
 
 export type OrganizationProject = {
@@ -187,6 +188,7 @@ export type OrganizationDetail = {
   canManageProjects: boolean
   canManageTestEnvironments: boolean
   canManageWeeklyReports: boolean
+  canWriteWeeklyReport: boolean
   createdAt: string
   departedUserIds: number[]
   id: number

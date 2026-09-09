@@ -22,7 +22,7 @@
 | Veges update log | `server/changelog.ts`, `src/components/changelog-workbench.tsx`, `src/api.ts`, `src/types.ts` |
 | Package timeline transactions | `server/project-package-timeline.ts` |
 | OSS rules and URL signing | `server/package-market.ts`, `server/trial-combo-package-rules.yaml` |
-| GitHub image sync workflow | `server/image-sync-workflows.ts`, external `sealos-pro/.github/workflows/sync-images-tar-oss.yml` |
+| GitHub image sync workflow | `server/image-sync-workflows.ts`, external `sealos-apps/sealos-pro/.github/workflows/sync-images-tar-oss.yml` |
 | Container runtime | `Dockerfile` |
 | Docker CI 工作流 | `.github/workflows/docker-pr.yml`, `.github/workflows/docker-push.yml` |
 | Sealos install surface | `.sealos/template/index.yaml` |
@@ -49,7 +49,7 @@ Core and AI controls:
 | `AI_RATE_LIMIT` | `5` requests per user per in-memory window. |
 | `AI_GLOBAL_RATE_LIMIT` | `30` total requests per application replica per window. |
 | `VEGES_ADMIN_USERNAMES` | Comma-separated normalized usernames allowed to manage account roles; empty disables role administration. |
-| `GITHUB_ACTIONS_TOKEN` | Instance-level fine-grained token scoped to `labring/sealos-pro` with Actions write permission. It is never returned to the browser. |
+| `GITHUB_ACTIONS_TOKEN` | Instance-level fine-grained token scoped to `sealos-apps/sealos-pro` with Actions write permission. It is never returned to the browser. |
 | `AI_RATE_WINDOW_MS` | `60000`. |
 | `AI_MAX_MESSAGE_LENGTH` | `2000` characters. |
 | `AI_MAX_CONTEXT_CHARS` | `12000` characters. |
@@ -194,7 +194,11 @@ must remain bound to the authorized project ID.
   newest week first, with `limit` and `offset` pagination. One organization member has at most
   one report record for each normalized organization week.
 - Organization weekly-report collection omits the reserved `admin` username from member rows,
-  submission counts, and reminder targets.
+  submission counts, and reminder targets. Organization weekly-report managers configure a
+  long-lived assignee set together with the reporting window. Membership defaults to requiring a
+  report, while an empty set is valid. Changes take effect immediately across personal write and
+  AI-generation permission, collection counts, reminder targets, and organization AI summaries;
+  removed assignees retain read-only access to their own historical reports.
 - Todo responses expose an optional single watcher through `watcherUserId` and
   `watcherName`. `POST /api/todos` and `PATCH /api/todos/:todoId` accept
   `watcherUserId`; a non-null watcher must be the project owner or an active project

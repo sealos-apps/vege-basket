@@ -267,11 +267,22 @@ create table if not exists organization_memberships (
     check (access_role in ('owner', 'admin', 'member')),
   status text not null default 'active'
     check (status in ('active', 'removed')),
+  weekly_report_required boolean not null default true,
   invited_by_user_id bigint references users(id) on delete set null,
   joined_at timestamptz not null default now(),
   removed_at timestamptz,
   primary key (organization_id, user_id)
 );
+
+alter table organization_memberships
+  add column if not exists weekly_report_required boolean not null default true;
+
+update organization_memberships membership
+set weekly_report_required = false
+from users
+where users.id = membership.user_id
+  and lower(users.email) = 'admin'
+  and membership.weekly_report_required = true;
 
 create table if not exists organization_invitations (
   id bigserial primary key,

@@ -64,6 +64,7 @@ type WeeklyReportRouterDependencies = {
 type OrganizationMembership = {
   access_role: OrganizationAccessRole
   organization_id: string
+  weekly_report_required: boolean
 }
 
 class WeeklyReportError extends Error {
@@ -174,7 +175,7 @@ const sourceProjectAccessSql = `
 
 async function getMembership(client: PoolClient, organizationId: number, userId: number) {
   const result = await client.query<OrganizationMembership>(
-    `select organization_id, access_role
+    `select organization_id, access_role, weekly_report_required
      from organization_memberships
      where organization_id = $1 and user_id = $2 and status = 'active'`,
     [organizationId, userId],
@@ -186,6 +187,29 @@ async function requireMember(client: PoolClient, organizationId: number, userId:
   const membership = await getMembership(client, organizationId, userId)
   if (!membership) throw new WeeklyReportError(404, '组织不存在')
   return membership
+}
+
+async function requireWeeklyReportAssignee(
+  client: PoolClient,
+  organizationId: number,
+  userId: number,
+) {
+  const result = await client.query<OrganizationMembership>(
+    `select organization_id, access_role, weekly_report_required
+     from organization_memberships
+     where organization_id = $1
+       and user_id = $2
+       and status = 'active'
+       and weekly_report_required = true
+     for update`,
+    [organizationId, userId],
+  )
+  if (!result.rows[0]) {
+    const membership = await getMembership(client, organizationId, userId)
+    if (!membership) throw new WeeklyReportError(404, '组织不存在')
+    throw new WeeklyReportError(403, '当前无需填写周报')
+  }
+  return result.rows[0]
 }
 
 async function requireWeeklyReportManager(client: PoolClient, organizationId: number, userId: number) {
@@ -469,7 +493,7 @@ async function saveDraft(params: {
       `select pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
       [`weekly-report:${params.organizationId}:${params.userId}:${params.weekStart}`],
     )
-    await requireMember(client, params.organizationId, params.userId)
+    await requireWeeklyReportAssignee(client, params.organizationId, params.userId)
     const weekStart = await normalizeExistingReportWeek(
       client,
       params.organizationId,
@@ -684,7 +708,7 @@ async function submitWeeklyReport(params: {
       `select pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
       [`weekly-report:${params.organizationId}:${params.userId}:${params.weekStart}`],
     )
-    await requireMember(client, params.organizationId, params.userId)
+    await requireWeeklyReportAssignee(client, params.organizationId, params.userId)
     const weekStart = await normalizeExistingReportWeek(
       client,
       params.organizationId,
@@ -994,6 +1018,7 @@ async function loadCollection(client: PoolClient, organizationId: number, weekSt
        on revision.id = report.published_revision_id
      where membership.organization_id = $1
        and membership.status = 'active'
+       and membership.weekly_report_required = true
        and lower(users.email) <> 'admin'
      order by lower(coalesce(nullif(users.display_name, ''), users.email))`,
     [organizationId, weekStart],
@@ -1143,7 +1168,7 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
     let generationFacts: WeeklyReportGenerationFacts
     let normalizedWeekStart: string
     try {
-      await requireMember(client, organizationId, session.userId)
+      await requireWeeklyReportAssignee(client, organizationId, session.userId)
       normalizedWeekStart = await normalizeExistingReportWeek(
         client,
         organizationId,
@@ -1309,6 +1334,8 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
           and report.week_start = $2
          where membership.organization_id = $1
            and membership.status = 'active'
+           and membership.weekly_report_required = true
+           and lower(users.email) <> 'admin'
            and report.published_revision_id is null
            and coalesce(report.status, 'draft') <> 'submitted'
            and membership.user_id = any($3::bigint[])

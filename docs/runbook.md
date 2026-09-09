@@ -8,7 +8,7 @@
 - Encryption keys generated and stored outside Git.
 - A company-owned Feishu custom application whose availability scope is restricted to
   intended internal users before using OAuth as the shared-AI account bootstrap path.
-- A fine-grained GitHub Token scoped only to `labring/sealos-pro` with Actions write
+- A fine-grained GitHub Token scoped only to `sealos-apps/sealos-pro` with Actions write
   permission when testing the image-sync workbench.
 
 Use `.env.example` as a shape reference. Never commit `.env`, access keys, session
@@ -102,6 +102,8 @@ psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
   --file=server/migrations/20260904_test_environments.sql
 psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
   --file=server/migrations/20260904_test_space_version_uniqueness.sql
+psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
+  --file=server/migrations/20260908_weekly_report_assignees.sql
 ```
 
 Future changes that need data transformation, destructive cleanup, or incompatible behavior
@@ -120,6 +122,12 @@ The test-space version release adds `test_spaces.version_label_lookup` and an or
 unique index. Run `db:encrypt-existing` after taking the approved backup to encrypt legacy
 version labels and populate the lookup; it aborts without writing if duplicate versions already
 exist within one organization.
+
+The weekly-report assignee release adds
+`organization_memberships.weekly_report_required`. Existing and future memberships default to
+requiring a report, while the reserved `admin` account is excluded. The application startup path
+applies the compatible addition idempotently; the matching forward-only migration remains the
+independent structural record and must only be run against an explicitly authorized database.
 
 `npm run db:init` applies the current idempotent schema. `npm run db:encrypt-existing`
 applies the schema and encrypts supported legacy plaintext fields. Both are mutating
@@ -154,7 +162,7 @@ fine-grained Token. Apply the schema, sign in as two ordinary users, and verify 
 a task but can list and refresh only their own task IDs. Confirm the first user cannot infer the
 second user's task through direct ID lookup. Use a harmless public image, verify Run/Job/Step
 progress and the terminal conclusion, then confirm the GitHub link matches
-`labring/sealos-pro/actions/runs/*`. Also inject a dispatch response timeout, confirm the local
+`sealos-apps/sealos-pro/actions/runs/*`. Also inject a dispatch response timeout, confirm the local
 task remains `dispatching`, then restore GitHub access and refresh until the matching
 `request_id` run is attached without a second workflow run. Confirm the workflow run name does
 not expose the image reference and that both the tar and md5 objects exist under the UTC date.
@@ -250,7 +258,7 @@ encrypted record, and the workflow that triggered rollback.
 - Package market fails: verify the HTTPS OSS origin, bucket credentials, bundled or
   configured rules file, and allowed object-key roots.
 - Image sync is unavailable: verify `GITHUB_ACTIONS_TOKEN` is present and scoped to
-  `labring/sealos-pro` with Actions write permission, then verify the API host is reachable from
+  `sealos-apps/sealos-pro` with Actions write permission, then verify the API host is reachable from
   the Veges runtime. A transient dispatch timeout should leave the task in `dispatching`; use
   refresh to reconcile the `request_id` run name before submitting anything else. A 409 means
   the current user already has an active run; a 429 means the ten-runs-per-hour user quota or

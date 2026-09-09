@@ -65,7 +65,7 @@ npm run dev
 | `APP_PUBLIC_URL` | 浏览器访问 Veges 的公开根地址；本地默认 `http://localhost:5173`，用于飞书日报待办链接。 |
 | `AI_API_BASE`、`AI_API_KEY`、`AI_MODEL` | 整个实例共用的 OpenAI 兼容模型配置，直接由服务端环境变量注入。 |
 | `AI_RATE_*`、`AI_GLOBAL_RATE_LIMIT`、`AI_MAX_*` | 单用户/实例级 AI 请求频率、输入长度和上下文上限。 |
-| `GITHUB_ACTIONS_TOKEN` | 镜像同步工作台使用的实例级 GitHub Token，仅限 `labring/sealos-pro` 的 Actions 写权限。 |
+| `GITHUB_ACTIONS_TOKEN` | 镜像同步工作台使用的实例级 GitHub Token，仅限 `sealos-apps/sealos-pro` 的 Actions 写权限。 |
 | `FEISHU_*` | 飞书 OAuth、事件回调和通知投递；启用事件回调前必须配置 `FEISHU_VERIFICATION_TOKEN`。 |
 | `OSS_*`、`PACKAGE_MARKET_*` | 待办图片、安装包浏览和签名下载；启用对应能力时配置。 |
 | `PORT` | API 监听端口，默认 `8787`。 |

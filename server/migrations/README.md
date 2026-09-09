@@ -27,6 +27,7 @@ The current migrations are:
 | `20260904_test_space_version_uniqueness.sql` | Adds the encrypted test-space version lookup and organization-scoped uniqueness index. |
 | `20260908_test_bug_verification_packages.sql` | Adds immutable Bug verification submissions and selected package snapshots. |
 | `20260909_test_bug_verification_deliveries.sql` | Adds encrypted container-image delivery snapshots and one immutable acceptance comment per verification submission. |
+| `20260908_weekly_report_assignees.sql` | Adds the organization membership flag used by the long-lived weekly report assignee list and excludes the reserved admin account. |
 
 For the organization package-market policy release, update the image only. API startup applies
 the matching idempotent `schemaSql` definition, so no manual `psql` or `db:init` run is required.
@@ -46,6 +47,8 @@ psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
   --file=server/migrations/20260828_organization_package_market_policy_shared_selection.sql
 psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
   --file=server/migrations/20260904_test_environments.sql
+psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
+  --file=server/migrations/20260908_weekly_report_assignees.sql
 ```
 
 The files are wrapped in one transaction and remain append-only structural records. The
