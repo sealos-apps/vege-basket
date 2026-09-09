@@ -471,7 +471,7 @@ test('transfers an assigned organization Bug atomically with an immutable collab
   assert.match(route, /transferReason: transfer\.assigningUnassignedBug \? undefined : reason/u)
 
   assert.match(schemaSource, /test_bug_comments_kind_check/u)
-  assert.match(schemaSource, /kind in \('comment', 'transfer', 'reject'\)/u)
+  assert.match(schemaSource, /kind in \('comment', 'transfer', 'reject', 'acceptance'\)/u)
   assert.ok((testWorkbenchSource.match(/and c\.kind = 'comment'/g) ?? []).length >= 4)
   assert.match(testWorkbenchClientSource, /comment\.kind !== 'transfer'/u)
 })
