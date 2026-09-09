@@ -22,7 +22,7 @@
 | Veges update log | `server/changelog.ts`, `src/components/changelog-workbench.tsx`, `src/api.ts`, `src/types.ts` |
 | Package timeline transactions | `server/project-package-timeline.ts` |
 | OSS rules and URL signing | `server/package-market.ts`, `server/trial-combo-package-rules.yaml` |
-| GitHub image sync workflow | `server/image-sync-workflows.ts`, external `sealos-pro/.github/workflows/sync-images-tar-oss.yml` |
+| GitHub image sync workflow | `server/image-sync-workflows.ts`, external `sealos-apps/sealos-pro/.github/workflows/sync-images-tar-oss.yml` |
 | Container runtime | `Dockerfile` |
 | Docker CI 工作流 | `.github/workflows/docker-pr.yml`, `.github/workflows/docker-push.yml` |
 | Sealos install surface | `.sealos/template/index.yaml` |
@@ -49,7 +49,7 @@ Core and AI controls:
 | `AI_RATE_LIMIT` | `5` requests per user per in-memory window. |
 | `AI_GLOBAL_RATE_LIMIT` | `30` total requests per application replica per window. |
 | `VEGES_ADMIN_USERNAMES` | Comma-separated normalized usernames allowed to manage account roles; empty disables role administration. |
-| `GITHUB_ACTIONS_TOKEN` | Instance-level fine-grained token scoped to `labring/sealos-pro` with Actions write permission. It is never returned to the browser. |
+| `GITHUB_ACTIONS_TOKEN` | Instance-level fine-grained token scoped to `sealos-apps/sealos-pro` with Actions write permission. It is never returned to the browser. |
 | `AI_RATE_WINDOW_MS` | `60000`. |
 | `AI_MAX_MESSAGE_LENGTH` | `2000` characters. |
 | `AI_MAX_CONTEXT_CHARS` | `12000` characters. |

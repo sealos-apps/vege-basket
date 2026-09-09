@@ -79,7 +79,7 @@ type GitHubWorkflowJob = {
 }
 
 const githubApiVersion = '2026-03-10'
-const githubOwner = 'labring'
+const githubOwner = 'sealos-apps'
 const githubRepo = 'sealos-pro'
 const githubWorkflow = 'sync-images-tar-oss.yml'
 const githubRef = 'main'

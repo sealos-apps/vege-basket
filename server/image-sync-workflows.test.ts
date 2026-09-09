@@ -67,13 +67,13 @@ test('correlates workflow runs by the server-generated dispatch key', () => {
     workflow_runs: [
       {
         created_at: '2026-08-06T01:54:00Z',
-        html_url: 'https://github.com/labring/sealos-pro/actions/runs/2',
+        html_url: 'https://github.com/sealos-apps/sealos-pro/actions/runs/2',
         id: 2,
         name: 'Sync image tar [other]',
       },
       {
         created_at: '2026-08-06T01:53:40Z',
-        html_url: 'https://github.com/labring/sealos-pro/actions/runs/1',
+        html_url: 'https://github.com/sealos-apps/sealos-pro/actions/runs/1',
         id: 1,
         name: `Sync image tar [${dispatchKey}]`,
       },
@@ -81,8 +81,16 @@ test('correlates workflow runs by the server-generated dispatch key', () => {
   }, dispatchKey), {
     runCreatedAt: '2026-08-06T01:53:40.000Z',
     runId: 1,
-    runUrl: 'https://github.com/labring/sealos-pro/actions/runs/1',
+    runUrl: 'https://github.com/sealos-apps/sealos-pro/actions/runs/1',
   })
+  assert.equal(selectGitHubWorkflowRun({
+    workflow_runs: [{
+      created_at: '2026-08-06T01:53:40Z',
+      html_url: 'https://github.com/labring/sealos-pro/actions/runs/1',
+      id: 1,
+      name: `Sync image tar [${dispatchKey}]`,
+    }],
+  }, dispatchKey), null)
   assert.equal(selectGitHubWorkflowRun({ workflow_runs: [{ id: 1 }] }, dispatchKey), null)
 })
 
