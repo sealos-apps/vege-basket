@@ -27,6 +27,7 @@ const testWorkbenchSource = readFileSync(new URL('./test-workbench.ts', import.m
 const encryptExistingSource = readFileSync(new URL('./encrypt-existing.ts', import.meta.url), 'utf8')
 const versionMigrationSource = readFileSync(new URL('./migrations/20260904_test_space_version_uniqueness.sql', import.meta.url), 'utf8')
 const verificationMigrationSource = readFileSync(new URL('./migrations/20260908_test_bug_verification_packages.sql', import.meta.url), 'utf8')
+const verificationDeliveriesMigrationSource = readFileSync(new URL('./migrations/20260909_test_bug_verification_deliveries.sql', import.meta.url), 'utf8')
 
 test('test spaces persist encrypted organization-scoped unique versions', () => {
   assert.match(schemaSource, /add column if not exists version_label text/u)
@@ -116,11 +117,11 @@ test('developer can reject only Bugs that are not yet being fixed', () => {
   assert.equal(canDeveloperRejectBug('closed'), false)
 })
 
-test('bug status and comment kind checks include pending confirmation and reject', () => {
+test('bug status and comment kind checks include pending confirmation, reject, and acceptance', () => {
   assert.match(schemaSource, /update test_bugs[\s\S]*where status in \('confirmed', 'reopened'\)/u)
   assert.match(schemaSource, /update test_bugs[\s\S]*where status = 'duplicate'/u)
   assert.match(schemaSource, /check \(status in \('new', 'pending_confirmation', 'assigned', 'in_progress', 'pending_verification', 'closed', 'rejected'\)\)/u)
-  assert.match(schemaSource, /check \(kind in \('comment', 'transfer', 'reject'\)\)/u)
+  assert.match(schemaSource, /check \(kind in \('acceptance', 'comment', 'transfer', 'reject'\)\)/u)
 })
 
 test('returning a Bug to pending confirmation keeps the status change notification', () => {
@@ -150,25 +151,41 @@ test('developer workbench offers start and reject for pending confirmation Bugs'
   assert.match(testWorkbenchClientSource, /驳回记录/u)
 })
 
-test('verification submissions snapshot zero or many validated package artifacts atomically', () => {
+test('verification submissions snapshot one delivery mode and emit an immutable acceptance comment atomically', () => {
   assert.match(schemaSource, /create table if not exists test_bug_verification_submissions/u)
   assert.match(schemaSource, /create table if not exists test_bug_verification_packages/u)
+  assert.match(schemaSource, /create table if not exists test_bug_verification_container_images/u)
   assert.match(schemaSource, /unique \(test_bug_verification_submission_id, object_key\)/u)
   assert.match(verificationMigrationSource, /^begin;$/mu)
   assert.match(verificationMigrationSource, /^commit;$/mu)
+  assert.match(verificationDeliveriesMigrationSource, /^begin;$/mu)
+  assert.match(verificationDeliveriesMigrationSource, /verification_submission_id bigint/u)
+  assert.match(verificationDeliveriesMigrationSource, /kind in \('acceptance', 'comment', 'transfer', 'reject'\)/u)
+  assert.match(verificationDeliveriesMigrationSource, /idx_test_bug_comments_verification_submission/u)
   assert.match(testWorkbenchSource, /router\.post\('\/test-bugs\/:bugId\/assigned\/verification-submissions'/u)
   assert.match(testWorkbenchSource, /parseVerificationPackages\(request\.body\?\.packages\)/u)
+  assert.match(testWorkbenchSource, /parseVerificationContainerImages\(request\.body\?\.containerImages\)/u)
   assert.match(testWorkbenchSource, /packages\.length > 20/u)
   assert.match(testWorkbenchSource, /objectKeys\.has\(objectKey\)/u)
+  assert.match(testWorkbenchSource, /packageVersions\.get\(sourcePackageId\)/u)
+  assert.match(testWorkbenchSource, /安装包与容器镜像必须二选一/u)
+  assert.match(testWorkbenchSource, /normalizeContainerImageReference\(candidate, \{ requireTagOrDigest: true \}\)/u)
   assert.match(testWorkbenchSource, /for update of b/u)
   assert.match(testWorkbenchSource, /ensurePackageMarketRuleAllowed\(rules, policy, item\.sourcePackageId, item\.channel\)/u)
   assert.match(testWorkbenchSource, /isPackageMarketObjectKeyAllowedForRule/u)
   assert.match(testWorkbenchSource, /insert into test_bug_verification_submissions/u)
+  assert.match(testWorkbenchSource, /insert into test_bug_verification_container_images/u)
+  assert.match(testWorkbenchSource, /insert into test_bug_comments[\s\S]*?'acceptance'/u)
+  assert.match(testWorkbenchSource, /formatVerificationAcceptanceComment/u)
   assert.match(testWorkbenchSource, /update test_bugs[\s\S]*set status = 'pending_verification'/u)
   assert.match(testWorkbenchSource, /请通过提交验证流程选择安装包后再提交/u)
-  assert.match(testWorkbenchClientSource, /提交验证（不关联安装包）/u)
-  assert.match(testWorkbenchClientSource, /submitAssignedBugVerification\(organizationId, bug\.id, packages\)/u)
+  assert.match(testWorkbenchClientSource, /关联容器镜像/u)
+  assert.match(testWorkbenchClientSource, /容器镜像名称 \$\{index \+ 1\}/u)
+  assert.match(testWorkbenchClientSource, /normalizeContainerImageReference\(value, \{ requireTagOrDigest: true \}\)/u)
+  assert.match(testWorkbenchClientSource, /提交验证（镜像 \$\{normalizedContainerImages\.length\}）/u)
+  assert.match(testWorkbenchClientSource, /submitAssignedBugVerification\(organizationId, bug\.id, packages, containerImages\)/u)
   assert.match(testWorkbenchClientSource, /BugVerificationSubmissions/u)
+  assert.match(testWorkbenchClientSource, /submission\.packages\.map\(\(item\) => \[item\.sourcePackageId, item\]\)/u)
 })
 
 test('verification package picker supports filtered paginated catalogs and incremental version loading', () => {
@@ -188,6 +205,8 @@ test('verification package picker supports filtered paginated catalogs and incre
   assert.match(testWorkbenchClientSource, /const selectedGroups = useMemo/u)
   assert.match(testWorkbenchClientSource, /function verificationPackageSnapshot\(item: SelectedVerificationPackage\)/u)
   assert.match(testWorkbenchClientSource, /const payload = packages\.map\(verificationPackageSnapshot\)/u)
+  assert.match(testWorkbenchClientSource, /已选择 \$\{conflictingSelection\.sourcePackageName\}/u)
+  assert.match(testWorkbenchClientSource, /请先移除后再选择其他版本/u)
   assert.doesNotMatch(testWorkbenchClientSource, /跳过并提交/u)
 })
 

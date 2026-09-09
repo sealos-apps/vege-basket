@@ -177,7 +177,7 @@ export type TestBugComment = {
   content: string
   createdAt: string
   id: number
-  kind: 'comment' | 'transfer' | 'reject'
+  kind: 'acceptance' | 'comment' | 'transfer' | 'reject'
   updatedAt: string
 }
 
@@ -210,7 +210,13 @@ export type TestBugVerificationPackage = {
   version: string
 }
 
+export type TestBugVerificationContainerImage = {
+  id: number
+  image: string
+}
+
 export type TestBugVerificationSubmission = {
+  containerImages: TestBugVerificationContainerImage[]
   id: number
   packages: TestBugVerificationPackage[]
   submittedAt: string

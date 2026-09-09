@@ -51,6 +51,7 @@ import {
   parseOrganizationContext,
   type OrganizationContext,
 } from '../shared/organization-context.ts'
+import { containerImageReferenceKey, normalizeContainerImageReference } from '../shared/container-image-reference.ts'
 
 type TestSpaceAccess = 'owner' | 'editor' | 'viewer'
 type TestSpaceMembershipStatus = 'pending' | 'active' | 'declined'
@@ -148,7 +149,7 @@ type VerificationPackageInput = {
   arch: string
   channel: 'release' | 'ci'
   objectKey: string
-  objectLastModified?: string
+  objectLastModified: string
   packageName: string
   sizeBytes?: number
   sourcePackageId: string
@@ -160,9 +161,17 @@ function verificationPackageText(value: unknown, maxLength: number) {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : ''
 }
 
+function verificationPackageTimestamp(value: unknown) {
+  const raw = verificationPackageText(value, 80)
+  if (!raw) return null
+  const date = new Date(raw)
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
 function parseVerificationPackages(value: unknown): VerificationPackageInput[] | null {
   if (!Array.isArray(value)) return null
   const objectKeys = new Set<string>()
+  const packageVersions = new Map<string, string>()
   const packages: VerificationPackageInput[] = []
   if (value.length > 20) return null
   for (const item of value) {
@@ -175,7 +184,7 @@ function parseVerificationPackages(value: unknown): VerificationPackageInput[] |
     const arch = verificationPackageText(candidate.arch, 40).toLowerCase()
     const version = verificationPackageText(candidate.version, 200)
     const objectKey = verificationPackageText(candidate.objectKey, 1000)
-    const objectLastModified = verificationPackageText(candidate.objectLastModified, 80) || undefined
+    const objectLastModified = verificationPackageTimestamp(candidate.objectLastModified)
     const rawSize = candidate.sizeBytes
     const sizeBytes = rawSize == null || rawSize === ''
       ? undefined
@@ -184,10 +193,14 @@ function parseVerificationPackages(value: unknown): VerificationPackageInput[] |
         : null
     if (
       !channel || !sourcePackageId || !sourcePackageName || !packageName ||
-      !arch || !version || !objectKey || sizeBytes === null || objectKeys.has(objectKey)
+      !arch || !version || !objectKey || !objectLastModified || sizeBytes === null || objectKeys.has(objectKey)
     ) {
       return null
     }
+    const versionKey = `${channel}:${arch}:${version}`
+    const previousVersionKey = packageVersions.get(sourcePackageId)
+    if (previousVersionKey && previousVersionKey !== versionKey) return null
+    packageVersions.set(sourcePackageId, versionKey)
     objectKeys.add(objectKey)
     packages.push({
       arch,
@@ -203,6 +216,45 @@ function parseVerificationPackages(value: unknown): VerificationPackageInput[] |
     if (packages.length > 20) return null
   }
   return packages
+}
+
+function parseVerificationContainerImages(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length > 20) return null
+  const images: string[] = []
+  const seen = new Set<string>()
+  for (const candidate of value) {
+    const image = normalizeContainerImageReference(candidate, { requireTagOrDigest: true })
+    const imageKey = image.valid ? containerImageReferenceKey(image.value) : ''
+    if (!image.valid || seen.has(imageKey)) return null
+    seen.add(imageKey)
+    images.push(image.value)
+  }
+  return images
+}
+
+function verificationCommandValue(value: string) {
+  return JSON.stringify(value)
+}
+
+function formatVerificationAcceptanceComment(
+  packages: readonly VerificationPackageInput[],
+  containerImages: readonly string[],
+) {
+  if (containerImages.length > 0) {
+    return containerImages.map((image) => `$ veges bug verify-image --image ${verificationCommandValue(image)}`).join('\n')
+  }
+  const selections = new Map<string, VerificationPackageInput>()
+  for (const item of packages) {
+    if (!selections.has(item.sourcePackageId)) selections.set(item.sourcePackageId, item)
+  }
+  return Array.from(selections.values()).map((item) => [
+    '$ veges bug verify-package \\',
+    `  --package ${verificationCommandValue(item.sourcePackageName)} \\`,
+    `  --version ${verificationCommandValue(item.version)} \\`,
+    `  --channel ${verificationCommandValue(item.channel === 'ci' ? '测试包' : '正式包')} \\`,
+    `  --arch ${verificationCommandValue(item.arch)} \\`,
+    `  --updated-at ${verificationCommandValue(item.objectLastModified)}`,
+  ].join('\n')).join('\n\n')
 }
 
 function parseOptionalTestEnvironmentId(value: unknown):
@@ -1338,6 +1390,8 @@ async function recordTestBugEvent(
 
 type VerificationSubmissionRow = {
   created_at: Date
+  container_image_id: string | null
+  container_image_ref: string | null
   package_arch: string | null
   package_channel: 'release' | 'ci' | null
   package_channel_label: string | null
@@ -1364,6 +1418,7 @@ function mapVerificationSubmissions(rows: readonly VerificationSubmissionRow[]) 
     let submission = submissionsById.get(submissionId)
     if (!submission) {
       submission = {
+        containerImages: [],
         id: submissionId,
         packages: [],
         submittedAt: row.created_at.toISOString(),
@@ -1374,21 +1429,26 @@ function mapVerificationSubmissions(rows: readonly VerificationSubmissionRow[]) 
       const bugId = Number(row.test_bug_id)
       submissionsByBug.set(bugId, [...(submissionsByBug.get(bugId) ?? []), submission])
     }
-    if (!row.package_id) continue
-    const packages = submission.packages as Array<Record<string, unknown>>
-    packages.push({
-      arch: row.package_arch ?? '',
-      channel: row.package_channel,
-      channelLabel: row.package_channel_label ?? '',
-      id: Number(row.package_id),
-      objectKey: row.package_object_key ?? '',
-      objectLastModified: row.package_object_last_modified?.toISOString(),
-      packageName: row.package_name ?? '',
-      sizeBytes: row.package_size_bytes == null ? undefined : Number(row.package_size_bytes),
-      sourcePackageId: row.package_source_package_id ?? '',
-      sourcePackageName: row.package_source_package_name ?? '',
-      version: row.package_version ?? '',
-    })
+    if (row.package_id) {
+      const packages = submission.packages as Array<Record<string, unknown>>
+      packages.push({
+        arch: row.package_arch ?? '',
+        channel: row.package_channel,
+        channelLabel: row.package_channel_label ?? '',
+        id: Number(row.package_id),
+        objectKey: row.package_object_key ?? '',
+        objectLastModified: row.package_object_last_modified?.toISOString(),
+        packageName: row.package_name ?? '',
+        sizeBytes: row.package_size_bytes == null ? undefined : Number(row.package_size_bytes),
+        sourcePackageId: row.package_source_package_id ?? '',
+        sourcePackageName: row.package_source_package_name ?? '',
+        version: row.package_version ?? '',
+      })
+    }
+    if (row.container_image_id) {
+      const containerImages = submission.containerImages as Array<Record<string, unknown>>
+      containerImages.push({ id: Number(row.container_image_id), image: decryptText(row.container_image_ref ?? '') })
+    }
   }
   return submissionsByBug
 }
@@ -1708,7 +1768,8 @@ async function getTestWorkbench(userId: number) {
              package.arch as package_arch, package.version as package_version,
              package.object_key as package_object_key,
              package.object_last_modified as package_object_last_modified,
-             package.size_bytes as package_size_bytes
+             package.size_bytes as package_size_bytes,
+             image.id as container_image_id, image.image_ref as container_image_ref
       from test_bug_verification_submissions submission
       join test_bugs b on b.id = submission.test_bug_id
       join test_spaces space on space.id = b.test_space_id
@@ -1717,8 +1778,10 @@ async function getTestWorkbench(userId: number) {
       left join users submitter on submitter.id = submission.submitted_by_user_id
       left join test_bug_verification_packages package
         on package.test_bug_verification_submission_id = submission.id
+      left join test_bug_verification_container_images image
+        on image.test_bug_verification_submission_id = submission.id
       where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
-      order by submission.created_at desc, submission.id desc, package.position
+      order by submission.created_at desc, submission.id desc, package.position, image.position
       `,
       [userId],
     ),
@@ -1833,13 +1896,15 @@ async function getTestWorkbench(userId: number) {
       {
         authorName: row.author_display_name || row.author_email || '未知用户',
         authorUserId: row.author_user_id ? Number(row.author_user_id) : undefined,
-        canEdit: row.kind !== 'transfer' && row.kind !== 'reject' && row.author_user_id
+        canEdit: row.kind === 'comment' && row.author_user_id
           ? Number(row.author_user_id) === userId
           : false,
         content: decryptText(row.content),
         createdAt: row.created_at.toISOString(),
         id: Number(row.id),
-        kind: row.kind === 'transfer' ? 'transfer' : (row.kind === 'reject' ? 'reject' : 'comment'),
+        kind: row.kind === 'transfer'
+          ? 'transfer'
+          : (row.kind === 'reject' ? 'reject' : (row.kind === 'acceptance' ? 'acceptance' : 'comment')),
         updatedAt: (row.updated_at ?? row.created_at).toISOString(),
       },
     ])
@@ -4297,7 +4362,7 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
       {
         authorName: row.author_display_name || row.author_email || '未知用户',
         authorUserId: row.author_user_id ? Number(row.author_user_id) : undefined,
-        canEdit: row.kind !== 'transfer' && row.kind !== 'reject' && row.author_user_id
+        canEdit: row.kind === 'comment' && row.author_user_id
           ? Number(row.author_user_id) === userId && (
             Number(row.assignee_user_id) === userId || row.organization_admin_access
           )
@@ -4305,7 +4370,9 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
         content: decryptText(row.content),
         createdAt: row.created_at.toISOString(),
         id: Number(row.id),
-        kind: row.kind === 'transfer' ? 'transfer' : (row.kind === 'reject' ? 'reject' : 'comment'),
+        kind: row.kind === 'transfer'
+          ? 'transfer'
+          : (row.kind === 'reject' ? 'reject' : (row.kind === 'acceptance' ? 'acceptance' : 'comment')),
         updatedAt: (row.updated_at ?? row.created_at).toISOString(),
       },
     ])
@@ -4359,19 +4426,22 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
            package.arch as package_arch, package.version as package_version,
            package.object_key as package_object_key,
            package.object_last_modified as package_object_last_modified,
-           package.size_bytes as package_size_bytes
+           package.size_bytes as package_size_bytes,
+           image.id as container_image_id, image.image_ref as container_image_ref
     from test_bug_verification_submissions submission
     join test_bugs b on b.id = submission.test_bug_id
     join test_spaces space on space.id = b.test_space_id
     left join users submitter on submitter.id = submission.submitted_by_user_id
     left join test_bug_verification_packages package
       on package.test_bug_verification_submission_id = submission.id
+    left join test_bug_verification_container_images image
+      on image.test_bug_verification_submission_id = submission.id
     where space.organization_id is not distinct from $2::bigint
       and (
         (b.assignee_user_id = $1 and b.status not in ('closed', 'rejected'))
         or ${managedOrganizationReadScopeSql('space.organization_id')}
       )
-    order by submission.created_at desc, submission.id desc, package.position
+    order by submission.created_at desc, submission.id desc, package.position, image.position
     `,
     [userId, organizationId],
   )
@@ -4870,8 +4940,13 @@ router.post('/test-bugs/:bugId/assigned/verification-submissions', asyncRoute(as
   if (organizationId === undefined) return
   const bugId = positiveId(request.params.bugId)
   const packages = parseVerificationPackages(request.body?.packages)
-  if (!bugId || !packages) {
-    response.status(400).json({ error: '安装包选择无效，最多可选择 20 个不同的安装包' })
+  const containerImages = parseVerificationContainerImages(request.body?.containerImages)
+  if (!bugId || !packages || !containerImages) {
+    response.status(400).json({ error: '验证交付物无效，请选择安装包或填写符合规则的容器镜像。' })
+    return
+  }
+  if ((packages.length === 0 && containerImages.length === 0) || (packages.length > 0 && containerImages.length > 0)) {
+    response.status(400).json({ error: '安装包与容器镜像必须二选一，且至少关联一项交付物。' })
     return
   }
 
@@ -4943,11 +5018,34 @@ router.post('/test-bugs/:bugId/assigned/verification-submissions', asyncRoute(as
           item.arch,
           item.version,
           item.objectKey,
-          item.objectLastModified ?? null,
+          item.objectLastModified,
           item.sizeBytes ?? null,
         ],
       )
     }
+    for (const [position, image] of containerImages.entries()) {
+      await client.query(
+        `
+        insert into test_bug_verification_container_images (
+          test_bug_verification_submission_id, position, image_ref
+        ) values ($1, $2, $3)
+        `,
+        [submissionId, position, encryptText(image)],
+      )
+    }
+    await client.query(
+      `
+      insert into test_bug_comments (
+        test_bug_id, author_user_id, content, kind, verification_submission_id
+      ) values ($1, $2, $3, 'acceptance', $4)
+      `,
+      [
+        bugId,
+        session.userId,
+        encryptText(formatVerificationAcceptanceComment(packages, containerImages)),
+        submissionId,
+      ],
+    )
     await client.query(
       `
       update test_bugs

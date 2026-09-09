@@ -429,12 +429,13 @@ export function submitAssignedBugVerification(
     sourcePackageName: string
     version: string
   }>,
+  containerImages: string[],
 ) {
   return request<{ bugs: TestWorkbenchData['bugs'] }>(
     withOrganizationContext(`/api/test-bugs/${bugId}/assigned/verification-submissions`, organizationId),
     {
       method: 'POST',
-      body: JSON.stringify({ packages }),
+      body: JSON.stringify({ containerImages, packages }),
     },
   )
 }

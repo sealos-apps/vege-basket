@@ -6,6 +6,7 @@ import { decryptText, encryptText } from './crypto.ts'
 import { pool, query } from './db.ts'
 import { normalizeOssEndpoint } from './package-market.ts'
 import { getAuthenticatedRoleSession } from './roles.ts'
+import { normalizeContainerImageReference } from '../shared/container-image-reference.ts'
 
 export const imageSyncArchitectures = ['amd64', 'arm64'] as const
 export type ImageSyncArchitecture = (typeof imageSyncArchitectures)[number]
@@ -175,42 +176,14 @@ export function selectGitHubWorkflowRun(value: unknown, dispatchKey: string) {
     })[0] ?? null
 }
 
-function isPrivateIpv4(hostname: string) {
-  const octets = hostname.split('.').map(Number)
-  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false
-  }
-  return octets[0] === 10 ||
-    octets[0] === 127 ||
-    (octets[0] === 169 && octets[1] === 254) ||
-    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
-    (octets[0] === 192 && octets[1] === 168)
-}
-
-function hasUnsafeRegistry(imageBody: string) {
-  const firstSegment = imageBody.split('/')[0].toLowerCase()
-  if (!firstSegment.includes('.') && !firstSegment.includes(':')) return false
-  const hostname = firstSegment.replace(/:\d+$/, '')
-  return hostname === 'localhost' || hostname.endsWith('.local') || isPrivateIpv4(hostname)
-}
-
 export function normalizeImageSyncInput(input: { arch?: unknown; image?: unknown }) {
   const arch = String(input.arch ?? '').trim().toLowerCase()
   if (!imageSyncArchitectures.includes(arch as ImageSyncArchitecture)) {
     throw new ImageSyncWorkflowError('INVALID_ARCHITECTURE', '目标架构必须是 amd64 或 arm64。', 400)
   }
 
-  const image = String(input.image ?? '').trim()
-  const imageBody = image.startsWith('docker://') ? image.slice('docker://'.length) : image
-  if (
-    image.length === 0 ||
-    image.length > 512 ||
-    imageBody.length === 0 ||
-    imageBody.includes('://') ||
-    !/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(imageBody) ||
-    imageBody.endsWith('/') ||
-    hasUnsafeRegistry(imageBody)
-  ) {
+  const image = normalizeContainerImageReference(input.image)
+  if (!image.valid) {
     throw new ImageSyncWorkflowError(
       'INVALID_IMAGE_REFERENCE',
       '请输入有效的完整镜像引用，且长度不能超过 512 个字符。',
@@ -218,7 +191,7 @@ export function normalizeImageSyncInput(input: { arch?: unknown; image?: unknown
     )
   }
 
-  return { arch: arch as ImageSyncArchitecture, image }
+  return { arch: arch as ImageSyncArchitecture, image: image.value }
 }
 
 export function mapGitHubRunStatus(status: unknown, conclusion: unknown): {

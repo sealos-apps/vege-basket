@@ -357,7 +357,10 @@ The schema is normalized around these groups:
   mentioned users receive a personal Feishu message (never the project chat).
 - Testing: `test_spaces`, pending/active memberships, expiring invite links, test subjects,
   case folders and cases, space-level test plans with selected test subjects and immutable
-  case snapshots, reusable organization test environments, Bugs, and Bug comments.
+  case snapshots, reusable organization test environments, Bugs, Bug comments, and immutable
+  verification delivery snapshots. Each verification submission records either package artifacts
+  or encrypted, pinned container-image references and writes one linked immutable acceptance
+  comment in the status-change transaction.
   Test spaces are an owner-managed authorization boundary independent from projects.
   Test subjects describe the tested object itself and record their creator; only that
   creator may delete the subject and its cascading test data. Test plans may optionally

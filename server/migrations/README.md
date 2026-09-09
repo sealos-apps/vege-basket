@@ -26,6 +26,7 @@ The current migrations are:
 | `20260904_test_environments.sql` | Adds reusable encrypted organization test environments, space assignments, and nullable Bug environment references with assignment integrity. |
 | `20260904_test_space_version_uniqueness.sql` | Adds the encrypted test-space version lookup and organization-scoped uniqueness index. |
 | `20260908_test_bug_verification_packages.sql` | Adds immutable Bug verification submissions and selected package snapshots. |
+| `20260909_test_bug_verification_deliveries.sql` | Adds encrypted container-image delivery snapshots and one immutable acceptance comment per verification submission. |
 
 For the organization package-market policy release, update the image only. API startup applies
 the matching idempotent `schemaSql` definition, so no manual `psql` or `db:init` run is required.

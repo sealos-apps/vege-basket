@@ -1709,6 +1709,70 @@
   color: var(--strong);
 }
 
+.test-verification-container-images {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid color-mix(in oklch, var(--brand) 20%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--brand) 4%, var(--surface));
+}
+
+.test-verification-container-images .test-verification-section-heading {
+  margin: 0;
+}
+
+.test-verification-container-image-list {
+  display: grid;
+  gap: 8px;
+}
+
+.test-verification-container-image {
+  display: grid;
+  gap: 5px;
+}
+
+.test-verification-container-image-input {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 8px;
+}
+
+.test-verification-container-image-index {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted-text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.test-verification-container-image-input input {
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.test-verification-container-image-input [data-slot="button"] {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+}
+
+.test-verification-container-image .test-form-error {
+  margin: 0 0 0 36px;
+}
+
+.test-verification-add-container-image {
+  justify-self: start;
+}
+
 .test-workbench-dialog.test-verification-dialog > [data-slot="dialog-footer"] {
   display: flex;
   align-items: center;
@@ -1796,6 +1860,25 @@
 
 .test-verification-history-item li span {
   color: var(--muted-text);
+}
+
+.test-verification-history-images {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.test-verification-history-images code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in oklch, var(--brand) 22%, var(--line));
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--brand) 5%, var(--surface));
+  color: var(--strong);
+  font-size: 12px;
 }
 
 @media (max-width: 720px) {
@@ -2206,6 +2289,33 @@
 .test-comment-item {
   display: grid;
   gap: 8px;
+}
+
+.test-comment-item.is-acceptance {
+  padding: 12px;
+  border: 1px solid color-mix(in oklch, var(--brand) 25%, var(--line));
+  border-left: 3px solid var(--brand);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--brand) 4%, var(--surface));
+}
+
+.test-acceptance-comment-badge {
+  background: color-mix(in oklch, var(--brand) 14%, var(--surface));
+  color: var(--strong);
+}
+
+.test-acceptance-command {
+  overflow-x: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in oklch, var(--brand) 22%, var(--line));
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--strong) 5%, var(--surface));
+  color: var(--strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 .test-comment-header {

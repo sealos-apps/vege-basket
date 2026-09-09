@@ -1968,7 +1968,7 @@ alter table test_bug_comments
 
 alter table test_bug_comments
   add constraint test_bug_comments_kind_check
-  check (kind in ('comment', 'transfer', 'reject'));
+  check (kind in ('acceptance', 'comment', 'transfer', 'reject'));
 
 create table if not exists test_bug_events (
   id bigserial primary key,
@@ -2011,8 +2011,38 @@ create table if not exists test_bug_verification_packages (
   unique (test_bug_verification_submission_id, object_key)
 );
 
+create table if not exists test_bug_verification_container_images (
+  id bigserial primary key,
+  test_bug_verification_submission_id bigint not null
+    references test_bug_verification_submissions(id) on delete cascade,
+  position integer not null check (position >= 0),
+  image_ref text not null,
+  unique (test_bug_verification_submission_id, position)
+);
+
+alter table test_bug_comments
+  add column if not exists verification_submission_id bigint
+    references test_bug_verification_submissions(id) on delete cascade;
+
+alter table test_bug_comments
+  drop constraint if exists test_bug_comments_acceptance_submission_check;
+
+alter table test_bug_comments
+  add constraint test_bug_comments_acceptance_submission_check
+  check (
+    (kind = 'acceptance' and verification_submission_id is not null)
+    or (kind <> 'acceptance' and verification_submission_id is null)
+  );
+
 create index if not exists idx_test_bug_verification_submissions_bug
   on test_bug_verification_submissions(test_bug_id, created_at desc, id desc);
+
+create index if not exists idx_test_bug_verification_container_images_submission
+  on test_bug_verification_container_images(test_bug_verification_submission_id, position);
+
+create unique index if not exists idx_test_bug_comments_verification_submission
+  on test_bug_comments(verification_submission_id)
+  where verification_submission_id is not null;
 
 alter table test_bug_events
   add column if not exists transfer_source text,
