@@ -4773,7 +4773,7 @@ ${packageTimelineText}`
     />
   ) : null
 
-  if (view === 'testing' && authUser?.activeRole === 'tester') {
+  if (authUser?.activeRole === 'tester' && (view === 'testing' || view === 'changelog')) {
     return (
       <>
         {roleSelectionDialog}
@@ -4795,6 +4795,14 @@ ${packageTimelineText}`
           currentUserId={authUser.id}
           projects={projects.map((project) => ({ id: project.id, name: project.name }))}
           refreshToken={workspaceRefreshVersion}
+          workspaceContent={view === 'changelog' ? (
+            <ChangelogWorkbench
+              createRequest={changelogCreateRequest}
+              onBack={() => setView('testing')}
+              onCanManageChange={setChangelogCanManage}
+              onEditorModeChange={setChangelogEditorOpen}
+            />
+          ) : undefined}
         />
       </>
     )

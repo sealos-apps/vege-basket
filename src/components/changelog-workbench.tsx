@@ -48,10 +48,12 @@ function getExcerpt(content: string) {
 
 export function ChangelogWorkbench({
   createRequest = 0,
+  onBack,
   onCanManageChange,
   onEditorModeChange,
 }: {
   createRequest?: number
+  onBack?: () => void
   onCanManageChange?: (canManage: boolean) => void
   onEditorModeChange?: (open: boolean) => void
 }) {
@@ -209,6 +211,13 @@ export function ChangelogWorkbench({
 
   return (
     <section className="changelog-workbench">
+      {onBack ? (
+        <div className="changelog-editor-header">
+          <Button className="ghost-button" type="button" variant="outline" onClick={onBack}>
+            <ArrowLeft size={16} /> 返回测试工作台
+          </Button>
+        </div>
+      ) : null}
       {loading ? (
         <Card className="panel changelog-state-panel"><p className="empty-state">正在加载更新日志...</p></Card>
       ) : error ? (
