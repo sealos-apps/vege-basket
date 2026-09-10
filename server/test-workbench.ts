@@ -1,3 +1,4 @@
+import { lockResourceManager, lockOrganizationResourceManager, type ManagedResource } from './resource-management.ts'
 import crypto from 'node:crypto'
 import bcrypt from 'bcryptjs'
 import express, { Router } from 'express'
@@ -588,6 +589,36 @@ async function requireSpaceOwner(
   return true
 }
 
+async function withSpaceManager(
+  response: express.Response,
+  spaceId: number | null,
+  userId: number,
+  action: (client: PoolClient, access: ManagedResource) => Promise<void>,
+) {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const access = spaceId ? await lockResourceManager(client, 'test-space', spaceId, userId) : null
+    if (!access) {
+      await client.query('rollback')
+      response.status(404).json({ error: 'Managed test space not found' })
+      return false
+    }
+    await action(client, access)
+    if (response.headersSent) {
+      await client.query('rollback')
+      return false
+    }
+    await client.query('commit')
+    return true
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 async function getDirectSpaceAccess(spaceId: number, userId: number, client?: PoolClient) {
   const run = client
     ? (sql: string, params: unknown[]) => client.query<TestSpaceAccessRow>(sql, params)
@@ -694,6 +725,7 @@ async function getTestSpaceSettings(userId: number) {
   const [spaces, members, invitations, organizations] = await Promise.all([
     query<{
       access_level: TestSpaceAccess
+      can_manage: boolean
       created_at: Date
       id: string
       name: string
@@ -705,7 +737,8 @@ async function getTestSpaceSettings(userId: number) {
       `
       select s.id, s.owner_user_id, s.name, s.version_label, s.organization_id, s.created_at,
         organization.name as organization_name,
-        coalesce(mine.access_level, 'viewer') as access_level
+        coalesce(mine.access_level, 'viewer') as access_level,
+        (s.owner_user_id = $1 or ${managedOrganizationReadScopeSql('s.organization_id')}) as can_manage
       from test_spaces s
       left join test_space_memberships mine
         on mine.test_space_id = s.id and mine.user_id = $1 and mine.status = 'active'
@@ -768,9 +801,10 @@ async function getTestSpaceSettings(userId: number) {
       `,
       [userId],
     ),
-    query<{ id: string; name: string }>(
+    query<{ id: string; name: string; can_manage: boolean }>(
       `
-      select organization.id, organization.name
+      select organization.id, organization.name,
+        ${managedOrganizationReadScopeSql('organization.id')} as can_manage
       from organization_memberships membership
       join organizations organization on organization.id = membership.organization_id
       where membership.user_id = $1 and membership.status = 'active'
@@ -800,6 +834,7 @@ async function getTestSpaceSettings(userId: number) {
     organizations: organizations.rows.map((row) => ({
       id: Number(row.id),
       name: decryptText(row.name),
+      canManageResources: row.can_manage,
     })).sort((left, right) => left.name.localeCompare(right.name, 'zh-CN')),
     spaces: spaces.rows.map((row) => ({
       createdAt: row.created_at.toISOString(),
@@ -810,6 +845,10 @@ async function getTestSpaceSettings(userId: number) {
       organizationName: row.organization_name ? decryptText(row.organization_name) : undefined,
       ownerUserId: Number(row.owner_user_id),
       accessLevel: row.access_level,
+      canManageSettings: row.can_manage,
+      canManageMembers: row.can_manage,
+      canDelete: row.can_manage,
+      canChangeOrganization: row.can_manage,
       versionLabel: row.version_label ? decryptText(row.version_label) : undefined,
     })),
     invitations: invitations.rows.map((row) => ({
@@ -1526,6 +1565,7 @@ async function getTestWorkbench(userId: number) {
   ] = await Promise.all([
     query<{
       access_level: TestSpaceAccess
+      can_manage: boolean
       created_at: Date
       id: string
       name: string
@@ -1535,7 +1575,8 @@ async function getTestWorkbench(userId: number) {
     }>(
       `
       select ts.id, ts.owner_user_id, ts.name, ts.version_label, ts.organization_id, ts.created_at,
-        coalesce(tsm.access_level, 'viewer') as access_level
+        coalesce(tsm.access_level, 'viewer') as access_level,
+        (ts.owner_user_id = $1 or ${managedOrganizationReadScopeSql('ts.organization_id')}) as can_manage
       from test_spaces ts
       left join test_space_memberships tsm
         on tsm.test_space_id = ts.id and tsm.user_id = $1 and tsm.status = 'active'
@@ -2165,6 +2206,10 @@ async function getTestWorkbench(userId: number) {
       name: decryptText(row.name),
       organizationId: row.organization_id ? Number(row.organization_id) : undefined,
       ownerUserId: Number(row.owner_user_id),
+      canManageSettings: row.can_manage,
+      canManageMembers: row.can_manage,
+      canDelete: row.can_manage,
+      canChangeOrganization: row.can_manage,
       versionLabel: row.version_label ? decryptText(row.version_label) : undefined,
     })),
     testEnvironments: Array.from(testEnvironmentsById.values()),
@@ -2286,13 +2331,22 @@ router.patch('/test-spaces/:spaceId', asyncRoute(async (request, response) => {
     response.status(400).json({ error: 'Valid test space, name, and organization are required' })
     return
   }
-  if (!(await requireSpaceOwner(response, spaceId, session.userId))) return
+  if (!spaceId) {
+    response.status(400).json({ error: 'Valid test space is required' })
+    return
+  }
   const client = await pool.connect()
   try {
     await client.query('begin')
+    const access = await lockResourceManager(client, 'test-space', spaceId, session.userId, organization?.valid ? organization.value : undefined)
+    if (!access) {
+      await client.query('rollback')
+      response.status(404).json({ error: 'Managed test space not found' })
+      return
+    }
     const existing = await client.query<{ organization_id: string | null }>(
       'select organization_id from test_spaces where id = $1 and owner_user_id = $2 for update',
-      [spaceId, session.userId],
+      [spaceId, access.ownerUserId],
     )
     if (!existing.rows[0]) {
       await client.query('rollback')
@@ -2305,6 +2359,11 @@ router.patch('/test-spaces/:spaceId', asyncRoute(async (request, response) => {
     const nextOrganizationId = organization?.valid ? organization.value : currentOrganizationId
     const organizationChanged = nextOrganizationId !== currentOrganizationId
     if (organizationChanged && nextOrganizationId !== null) {
+      if (access.ownerUserId !== session.userId && !(await lockOrganizationResourceManager(client, nextOrganizationId, session.userId))) {
+        await client.query('rollback')
+        response.status(403).json({ error: 'Target organization management access is required' })
+        return
+      }
       if (!(await lockActiveOrganizationMembership(client, nextOrganizationId, session.userId))) {
         await client.query('rollback')
         response.status(404).json({ error: 'Organization not found' })
@@ -2326,7 +2385,7 @@ router.patch('/test-spaces/:spaceId', asyncRoute(async (request, response) => {
       `update test_spaces
        set name = $1, version_label = $2, version_label_lookup = $3, organization_id = $4, updated_at = now()
        where id = $5 and owner_user_id = $6`,
-      [encryptText(name), versionLabel ? encryptText(versionLabel) : null, versionLookup, nextOrganizationId, spaceId, session.userId],
+      [encryptText(name), versionLabel ? encryptText(versionLabel) : null, versionLookup, nextOrganizationId, spaceId, access.ownerUserId],
     )
     if (organizationChanged) {
       // Environment assignments are organization-scoped. The composite Bug FK
@@ -2336,7 +2395,7 @@ router.patch('/test-spaces/:spaceId', asyncRoute(async (request, response) => {
         [spaceId],
       )
     }
-    if (organizationChanged && nextOrganizationId !== null) {
+    if (organizationChanged) {
       await client.query(
         `update test_space_invite_links set revoked_at = now()
          where test_space_id = $1 and revoked_at is null`,
@@ -2430,13 +2489,22 @@ router.delete('/test-spaces/:spaceId', asyncRoute(async (request, response) => {
     response.status(400).json({ error: 'Test space name confirmation is required' })
     return
   }
-  if (!(await requireSpaceOwner(response, spaceId, session.userId))) return
+  if (!spaceId) {
+    response.status(400).json({ error: 'Valid test space is required' })
+    return
+  }
   const client = await pool.connect()
   try {
     await client.query('begin')
+    const access = await lockResourceManager(client, 'test-space', spaceId, session.userId)
+    if (!access) {
+      await client.query('rollback')
+      response.status(404).json({ error: 'Managed test space not found' })
+      return
+    }
     const existing = await client.query<{ name: string }>(
       'select name from test_spaces where id = $1 and owner_user_id = $2 for update',
-      [spaceId, session.userId],
+      [spaceId, access.ownerUserId],
     )
     if (!existing.rows[0]) {
       await client.query('rollback')
@@ -2448,7 +2516,7 @@ router.delete('/test-spaces/:spaceId', asyncRoute(async (request, response) => {
       response.status(409).json({ error: 'Test space name confirmation does not match' })
       return
     }
-    await client.query('delete from test_spaces where id = $1 and owner_user_id = $2', [spaceId, session.userId])
+    await client.query('delete from test_spaces where id = $1 and owner_user_id = $2', [spaceId, access.ownerUserId])
     await client.query('commit')
   } catch (error) {
     await client.query('rollback')
@@ -2463,7 +2531,10 @@ router.post('/test-spaces/:spaceId/invitations', asyncRoute(async (request, resp
   const session = await requireActiveRole(request, response, 'tester')
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
-  if (!(await requireSpaceOwner(response, spaceId, session.userId))) return
+  if (!spaceId) {
+    response.status(400).json({ error: 'Valid test space is required' })
+    return
+  }
   const username = text(request.body.username, 160).toLowerCase()
   const accessLevel = request.body.accessLevel === 'viewer' ? 'viewer' : 'editor'
   if (!username) {
@@ -2485,20 +2556,27 @@ router.post('/test-spaces/:spaceId/invitations', asyncRoute(async (request, resp
     return
   }
   const targetUserId = Number(user.rows[0].id)
-  if (targetUserId === session.userId) {
-    response.status(409).json({ error: 'Test space owner already has access' })
-    return
-  }
   const client = await pool.connect()
   try {
     await client.query('begin')
+    const access = await lockResourceManager(client, 'test-space', spaceId, session.userId)
+    if (!access) {
+      await client.query('rollback')
+      response.status(404).json({ error: 'Managed test space not found' })
+      return
+    }
     const space = await client.query<{ organization_id: string | null }>(
       'select organization_id from test_spaces where id = $1 and owner_user_id = $2 for update',
-      [spaceId, session.userId],
+      [spaceId, access.ownerUserId],
     )
     if (!space.rows[0]) {
       await client.query('rollback')
       response.status(404).json({ error: 'Test space not found' })
+      return
+    }
+    if (targetUserId === access.ownerUserId) {
+      await client.query('rollback')
+      response.status(409).json({ error: 'Test space owner already has access' })
       return
     }
     const organizationId = space.rows[0].organization_id
@@ -2545,6 +2623,50 @@ router.post('/test-spaces/:spaceId/invitations', asyncRoute(async (request, resp
   response.status(201).json(await getTestSpaceSettings(session.userId))
 }))
 
+router.post('/test-spaces/:spaceId/members', asyncRoute(async (request, response) => {
+  const session = await requireActiveRole(request, response, 'tester')
+  if (!session) return
+  const spaceId = positiveId(request.params.spaceId)
+  const username = text(request.body.username, 160).toLowerCase()
+  const accessLevel = request.body.accessLevel
+  if (!spaceId || !username || !['editor', 'viewer'].includes(accessLevel)) {
+    response.status(400).json({ error: 'Valid test space, username and member access are required' })
+    return
+  }
+  if (!await withSpaceManager(response, spaceId, session.userId, async (client, access) => {
+    const target = await client.query<{ id: string }>(
+      `select u.id from users u
+       join user_roles role on role.user_id = u.id and role.role in ('tester', 'organization_admin')
+       where u.email = $1 for share of u, role`,
+      [username],
+    )
+    const targetUserId = Number(target.rows[0]?.id)
+    if (!targetUserId) {
+      response.status(404).json({ error: 'Tester account not found' })
+      return
+    }
+    if (targetUserId === access.ownerUserId) {
+      response.status(409).json({ error: 'Test space owner already has access' })
+      return
+    }
+    if (access.organizationId && !await lockActiveOrganizationMembership(client, access.organizationId, targetUserId)) {
+      response.status(400).json({ error: 'Only active organization members can join this test space' })
+      return
+    }
+    await client.query(
+      `insert into test_space_memberships
+         (test_space_id, user_id, access_level, status, invited_by_user_id, accepted_at, declined_at)
+       values ($1, $2, $3, 'active', $4, now(), null)
+       on conflict (test_space_id, user_id) do update
+         set access_level = excluded.access_level, status = 'active',
+             invited_by_user_id = excluded.invited_by_user_id, accepted_at = now(), declined_at = null
+       where test_space_memberships.status <> 'active' and test_space_memberships.access_level <> 'owner'`,
+      [spaceId, targetUserId, accessLevel, session.userId],
+    )
+  })) return
+  response.status(201).json(await getTestSpaceSettings(session.userId))
+}))
+
 router.patch('/test-spaces/:spaceId/members/:userId', asyncRoute(async (request, response) => {
   const session = await requireActiveRole(request, response, 'tester')
   if (!session) return
@@ -2555,20 +2677,21 @@ router.patch('/test-spaces/:spaceId/members/:userId', asyncRoute(async (request,
     response.status(400).json({ error: 'Valid test space and user are required' })
     return
   }
-  if (!(await requireSpaceOwner(response, spaceId, session.userId))) return
-  const updated = await query(
-    `
-    update test_space_memberships
-    set access_level = $1
-    where test_space_id = $2 and user_id = $3 and access_level <> 'owner'
-    returning user_id
-    `,
-    [accessLevel, spaceId, userId],
-  )
-  if (!updated.rows[0]) {
-    response.status(404).json({ error: 'Test space member not found' })
-    return
-  }
+  if (!await withSpaceManager(response, spaceId, session.userId, async (client) => {
+    const updated = await client.query(
+      `
+      update test_space_memberships
+      set access_level = $1
+      where test_space_id = $2 and user_id = $3 and access_level <> 'owner'
+      returning user_id
+      `,
+      [accessLevel, spaceId, userId],
+    )
+    if (!updated.rows[0]) {
+      response.status(404).json({ error: 'Test space member not found' })
+      return
+    }
+  })) return
   response.json(await getTestSpaceSettings(session.userId))
 }))
 
@@ -2581,19 +2704,20 @@ router.delete('/test-spaces/:spaceId/members/:userId', asyncRoute(async (request
     response.status(400).json({ error: 'Valid test space and user are required' })
     return
   }
-  if (!(await requireSpaceOwner(response, spaceId, session.userId))) return
-  const removed = await query(
-    `
-    delete from test_space_memberships
-    where test_space_id = $1 and user_id = $2 and access_level <> 'owner'
-    returning user_id
-    `,
-    [spaceId, userId],
-  )
-  if (!removed.rows[0]) {
-    response.status(404).json({ error: 'Test space member not found' })
-    return
-  }
+  if (!await withSpaceManager(response, spaceId, session.userId, async (client) => {
+    const removed = await client.query(
+      `
+      delete from test_space_memberships
+      where test_space_id = $1 and user_id = $2 and access_level <> 'owner'
+      returning user_id
+      `,
+      [spaceId, userId],
+    )
+    if (!removed.rows[0]) {
+      response.status(404).json({ error: 'Test space member not found' })
+      return
+    }
+  })) return
   response.json(await getTestSpaceSettings(session.userId))
 }))
 
@@ -2649,7 +2773,10 @@ router.post('/test-spaces/:spaceId/invite-link', asyncRoute(async (request, resp
   const session = await requireActiveRole(request, response, 'tester')
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
-  if (!(await requireSpaceOwner(response, spaceId, session.userId))) return
+  if (!spaceId) {
+    response.status(400).json({ error: 'Valid test space is required' })
+    return
+  }
   const password = invitePassword(request.body.password)
   const passwordHash = password ? await bcrypt.hash(password, 12) : ''
   const expiresInMinutes = inviteExpiresInMinutes(request.body.expiresInMinutes)
@@ -2657,9 +2784,15 @@ router.post('/test-spaces/:spaceId/invite-link', asyncRoute(async (request, resp
   const client = await pool.connect()
   try {
     await client.query('begin')
+    const access = await lockResourceManager(client, 'test-space', spaceId, session.userId)
+    if (!access) {
+      await client.query('rollback')
+      response.status(404).json({ error: 'Managed test space not found' })
+      return
+    }
     const space = await client.query<{ organization_id: string | null }>(
       'select organization_id from test_spaces where id = $1 and owner_user_id = $2 for update',
-      [spaceId, session.userId],
+      [spaceId, access.ownerUserId],
     )
     if (!space.rows[0]) {
       await client.query('rollback')
@@ -2677,7 +2810,7 @@ router.post('/test-spaces/:spaceId/invite-link', asyncRoute(async (request, resp
       values ($1, $2, $3, $4, $5, now() + ($6::integer * interval '1 minute'))
       returning token, expires_at
       `,
-      [spaceId, session.userId, crypto.randomBytes(24).toString('base64url'), passwordHash, accessLevel, expiresInMinutes],
+      [spaceId, access.ownerUserId, crypto.randomBytes(24).toString('base64url'), passwordHash, accessLevel, expiresInMinutes],
     )
     await client.query('commit')
     response.status(201).json({
@@ -2699,11 +2832,12 @@ router.delete('/test-spaces/:spaceId/invite-link', asyncRoute(async (request, re
   const session = await requireActiveRole(request, response, 'tester')
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
-  if (!(await requireSpaceOwner(response, spaceId, session.userId))) return
-  await query(
-    `update test_space_invite_links set revoked_at = now() where test_space_id = $1 and revoked_at is null`,
-    [spaceId],
-  )
+  if (!await withSpaceManager(response, spaceId, session.userId, async (client) => {
+    await client.query(
+      `update test_space_invite_links set revoked_at = now() where test_space_id = $1 and revoked_at is null`,
+      [spaceId],
+    )
+  })) return
   response.json({ ok: true })
 }))
 

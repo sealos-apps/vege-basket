@@ -123,6 +123,7 @@ import {
   importTestCases,
   importTestSpaceData,
   inviteTestSpaceMember,
+  addTestSpaceMember,
   previewTestCaseImport,
   removeTestPlanCase,
   removeTestSpaceMember,
@@ -3382,7 +3383,7 @@ function TestSpaceCreateDialog({ busy, onOpenChange, onSubmit, open, organizatio
           </Label>
           <Label>
             归属组织
-            <Select value={organizationValue} onValueChange={setOrganizationValue}>
+            <Select value={organizationValue} onValueChange={(value) => { if (value) setOrganizationValue(value) }}>
               <SelectTrigger aria-label="测试空间归属组织"><SelectValue placeholder="选择归属组织" /></SelectTrigger>
               <SelectContent>
                 {organizations.map((organization) => (
@@ -3518,6 +3519,9 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
   const [dataImportError, setDataImportError] = useState('')
   const selectedSpace = settings.spaces.find((space) => space.id === selectedSpaceId)
   const isOwner = selectedSpace?.accessLevel === 'owner'
+  const canManageSettings = selectedSpace?.canManageSettings ?? isOwner
+  const canManageMembers = selectedSpace?.canManageMembers ?? isOwner
+  const canDelete = selectedSpace?.canDelete ?? isOwner
 
   useEffect(() => {
     if (!open) return
@@ -3554,6 +3558,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
     try {
       const result = await operation()
       setSettings(result)
+      setSelectedSpaceId((current) => result.spaces.some((space) => space.id === current) ? current : result.spaces[0]?.id)
       onSuccess?.(result)
       await onWorkbenchChange()
       return true
@@ -3627,7 +3632,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
                 {settings.spaces.map((space) => (
                   <button key={space.id} type="button" className={space.id === selectedSpaceId ? 'active' : ''} onClick={() => setSelectedSpaceId(space.id)}>
                     <strong>{space.name}</strong>
-                    <small>{space.accessLevel === 'owner' ? '所有者' : space.accessLevel === 'editor' ? '可编辑' : '只读'} · {space.members.filter((member) => member.status === 'active').length} 位成员 · {space.organizationName ?? '无组织'}</small>
+                    <small>{space.accessLevel === 'owner' ? '所有者' : space.canManageSettings ? '组织管理' : space.accessLevel === 'editor' ? '可编辑' : '只读'} · {space.members.filter((member) => member.status === 'active').length} 位成员 · {space.organizationName ?? '无组织'}</small>
                   </button>
                 ))}
                 {settings.spaces.length === 0 ? <p className="test-list-empty">还没有已加入的测试空间。</p> : null}
@@ -3637,7 +3642,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
             <section className="test-space-admin-detail">
               {selectedSpace ? (
                 <>
-                  {isOwner ? (
+                  {canManageSettings ? (
                     <form className="test-space-settings-row" onSubmit={(event) => {
                       event.preventDefault()
                       void mutateSettings(() => updateTestSpace(selectedSpace.id, {
@@ -3649,11 +3654,11 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
                       <Label>空间名称<Input maxLength={80} value={renameValue} onChange={(event) => setRenameValue(event.target.value)} /></Label>
                       <Label>版本号<Input maxLength={80} value={versionLabel} onChange={(event) => setVersionLabel(event.target.value)} /></Label>
                       <Label>归属组织
-                        <Select value={organizationValue} onValueChange={setOrganizationValue}>
+                        <Select value={organizationValue} onValueChange={(value) => { if (value) setOrganizationValue(value) }}>
                           <SelectTrigger aria-label="测试空间归属组织"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="none">不归属组织</SelectItem>
-                            {settings.organizations.map((organization) => (
+                            {settings.organizations.filter((organization) => isOwner || organization.canManageResources).map((organization) => (
                               <SelectItem key={organization.id} value={String(organization.id)}>{organization.name}</SelectItem>
                             ))}
                             {selectedSpace.organizationId && !settings.organizations.some((organization) => organization.id === selectedSpace.organizationId) ? (
@@ -3687,12 +3692,12 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
                         <strong>{selectedSpace.members.length}</strong>
                       </div>
                     </div>
-                    {isOwner ? <form
+                    {canManageMembers ? <form
                       className="test-space-member-add-row"
                       onSubmit={async (event) => {
                         event.preventDefault()
                         if (!inviteUsername.trim()) return
-                        const saved = await mutateSettings(() => inviteTestSpaceMember(selectedSpace.id, inviteUsername.trim(), memberAccess))
+                        const saved = await mutateSettings(() => addTestSpaceMember(selectedSpace.id, inviteUsername.trim(), memberAccess))
                         if (saved) setInviteUsername('')
                       }}
                     >
@@ -3701,18 +3706,22 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
                         <SelectTrigger aria-label="成员权限"><SelectValue /></SelectTrigger>
                         <SelectContent><SelectItem value="editor">可编辑</SelectItem><SelectItem value="viewer">只读</SelectItem></SelectContent>
                       </Select>
-                      <Button size="icon" variant="outline" aria-label="邀请空间成员" title="邀请空间成员" disabled={busy || !inviteUsername.trim()}><UserPlus /></Button>
+                      <Button variant="outline" aria-label="直接添加空间成员" title="直接添加空间成员，无需对方确认" disabled={busy || !inviteUsername.trim()}><UserPlus /> 直接添加</Button>
                     </form> : null}
+                    {canManageMembers ? <Button type="button" variant="ghost" disabled={busy || !inviteUsername.trim()} onClick={async () => {
+                      const saved = await mutateSettings(() => inviteTestSpaceMember(selectedSpace.id, inviteUsername.trim(), memberAccess))
+                      if (saved) setInviteUsername('')
+                    }}>发送邀请，等待对方确认</Button> : null}
                     <div className="test-space-member-list">
                       {selectedSpace.members.map((member) => (
                         <article key={member.userId}>
                           <div><strong>{member.displayName}</strong><small>{member.username} · {member.status === 'pending' ? '待接受' : '已加入'}</small></div>
                           {member.accessLevel === 'owner' ? <Badge variant="outline">所有者</Badge> : (
-                            isOwner ? <Select value={member.accessLevel} onValueChange={(value) => void mutateSettings(() => updateTestSpaceMember(selectedSpace.id, member.userId, value as 'editor' | 'viewer'))} disabled={busy}>
+                            canManageMembers ? <Select value={member.accessLevel} onValueChange={(value) => void mutateSettings(() => updateTestSpaceMember(selectedSpace.id, member.userId, value as 'editor' | 'viewer'))} disabled={busy}>
                               <SelectTrigger aria-label={`${member.displayName}的空间权限`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="editor">可编辑</SelectItem><SelectItem value="viewer">只读</SelectItem></SelectContent>
                             </Select> : <Badge variant="outline">{member.accessLevel === 'editor' ? '可编辑' : '只读'}</Badge>
                           )}
-                          {member.accessLevel === 'owner' || !isOwner ? <span /> : (
+                          {member.accessLevel === 'owner' || !canManageMembers ? <span /> : (
                             <Button size="icon" variant="ghost" aria-label={`移除成员${member.displayName}`} title="移除成员" disabled={busy} onClick={() => void mutateSettings(() => removeTestSpaceMember(selectedSpace.id, member.userId))}><Trash /></Button>
                           )}
                         </article>
@@ -3720,7 +3729,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
                     </div>
                   </section>
 
-                  {isOwner ? <section className="test-space-invite-link-section">
+                  {canManageMembers ? <section className="test-space-invite-link-section">
                     <div className="test-space-admin-section-heading"><div><span>邀请链接</span><strong>{inviteLinkAccess === 'editor' ? '可编辑' : '只读'}</strong></div></div>
                     <p>{selectedSpace.organizationId ? '复制给组织成员，对方登录并切换到测试工程师身份后即可加入。' : '复制给测试工程师，对方登录并切换到测试工程师身份后即可加入。'}</p>
                     <div className="test-space-invite-link-controls">
@@ -3738,7 +3747,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
                     {inviteLinkStatus ? <small>{inviteLinkStatus}</small> : null}
                   </section> : null}
 
-                  {isOwner ? <form
+                  {canDelete ? <form
                     className="test-space-danger-zone"
                     onSubmit={async (event) => {
                       event.preventDefault()

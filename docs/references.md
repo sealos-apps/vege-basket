@@ -164,8 +164,8 @@ families are:
 | Roles | `POST /api/auth/active-role`, `GET /api/admin/users`, `PATCH /api/admin/users/:userId/roles` |
 | Organizations | `/api/organizations/*`, system-admin organization creation, owner/admin organization rename, week-start setting and confirmed deletion, direct member admission, expiring `/api/organization-invite-links/*` browser links, legacy Feishu invitations, resource attachment, organization-admin project governance, test-environment `POST/PATCH/DELETE /api/organizations/:organizationId/test-environments(/:environmentId)`, direct organization-member admission to organization projects without invite notifications, milestones including inline `PATCH .../milestones/:milestoneId/status`, task overview, weekly reports, weekly summaries, and the dedicated package-market catalog/policy settings Tab |
 | Personal weekly reports | paginated `GET /api/weekly-reports/:organizationId`, `GET /api/weekly-reports/:organizationId/:weekStart`, the shared four-section editor/AI template, cursor-position source insertion, draft save, AI generation, and submit routes under `/api/weekly-reports/*` |
-| Test workbench | `GET /api/test-workbench`, owner-managed `/api/test-spaces/*` including optional organization assignment on create/update, direct-member owner-or-Bug-creator `PATCH /api/test-spaces/:spaceId/version`, creator-owned test-subject deletion, editor-managed case folders, tester-managed cases including creator-only `DELETE /api/test-spaces/:spaceId/cases/:caseId`, CSV case preview/import, creator-managed plan details/cases/deletion, executions, creator-only `DELETE /api/test-spaces/:spaceId/bugs/:bugId`, environment-bound Bugs, comments, and author-owned comment edits/deletions |
-| Test-space collaboration | `GET /api/test-spaces/settings`, username invitations, member access updates, pending invitation acceptance, and expiring `/api/test-space-invite-links/*` share links |
+| Test workbench | `GET /api/test-workbench`, owner-or-organization-manager administered `/api/test-spaces/*` including optional organization assignment on create/update, direct-member owner-or-Bug-creator `PATCH /api/test-spaces/:spaceId/version`, creator-owned test-subject deletion, editor-managed case folders, tester-managed cases including creator-only `DELETE /api/test-spaces/:spaceId/cases/:caseId`, CSV case preview/import, creator-managed plan details/cases/deletion, executions, creator-only `DELETE /api/test-spaces/:spaceId/bugs/:bugId`, environment-bound Bugs, comments, and author-owned comment edits/deletions |
+| Test-space collaboration | `GET /api/test-spaces/settings`, `POST /api/test-spaces/:spaceId/members` direct admission, username invitations, member access updates, pending invitation acceptance, and expiring `/api/test-space-invite-links/*` share links |
 | Assigned bugs | `GET/PATCH /api/test-bugs/*/assigned`, `POST /api/test-bugs/:bugId/assigned/transfer`, `POST /api/test-bugs/:bugId/assigned/reject` (mandatory reason, records an immutable `reject` comment and notifies the reporting tester by personal Feishu message), organization-admin assignment of unassigned Bugs with a direct Feishu notification to the new assignee, assigned-bug comments, and author-owned assigned-comment edits/deletions for the active developer role |
 
 Authentication and authorization rules are defined in `server/index.ts`; route presence
@@ -260,19 +260,32 @@ must remain bound to the authorized project ID.
   If they also have active `owner` or `admin` membership in an organization, they receive
   access to all attached projects and project records, test spaces and test records, and
   Bugs and comments. That dual authorization may update attached project lifecycle status,
-  health notes, and milestones. Project deletion, membership, integrations, ordinary project
-  content, test-space, plan, case, and Bug mutation still require the corresponding original
-  resource permission.
+  health notes, and milestones, and manage project settings, membership, invite links,
+  deletion and ownership transfer. It may also manage test-space settings, membership,
+  invite links, deletion and organization assignment. Integrations, ordinary project content,
+  test data import, plan, case and Bug mutation retain their original resource permissions.
+  Resource management DTOs expose `canManageSettings`, `canManageMembers`, `canDelete`,
+  plus project `canTransferOwnership` or test-space `canChangeOrganization`; actual owner
+  IDs and direct membership roles remain unchanged.
 - Projects and test spaces remain personal while `organization_id` is null. Test-space
   creation and owner updates accept a nullable `organizationId` selected from the owner's
   active organization memberships. Moving a test space into or between organizations is
-  allowed only when every pending or active space member already has active membership in
-  the target organization; moving it to no organization retains its members and data.
+  allowed only when every pending or active space member, including the owner, already has
+  active membership in the target organization. An administrator must manage both source
+  and target organizations; the owner's existing assignment permissions remain available.
+  Moving to no organization retains members and data. Changing organization removes
+  environment assignments and revokes old invite links; a manager without remaining access
+  loses visibility immediately.
 - Test-space access: `owner`, `editor`, `viewer`.
 - Any account with the active tester role may create a test space and becomes its owner.
   Owners may rename it, change its organization assignment, delete it, invite tester accounts, change editor/viewer
   access, remove members, and create expiring invite links with an optional bcrypt-hashed
-  password. Pending invitations have no data access until accepted. Deletion requires the
+  password. Organization managers have the same administrative capabilities for attached
+  spaces. Both may directly add an existing tester or organization-admin account using
+  `{ username, accessLevel: 'editor' | 'viewer' }`; organization spaces require active
+  organization membership. Direct admission activates pending/declined membership without
+  confirmation. Repeated addition preserves an existing active member's access, and no
+  member operation replaces the owner. Pending invitations have no data access until accepted. Deletion requires the
   decrypted space name as confirmation and cascades to every subject, case, plan, bug,
   comment, membership, and invite link in the space.
 - A test-space version label is required when creating a new space and is unique within its
@@ -540,3 +553,21 @@ Package-item batch failures additionally return `code`, `requestId`, and `detail
 `read_package_timeline`; database failures may include safe `databaseCode`, `constraint`,
 `table`, `column`, and redacted `databaseDetail` fields. Responses never include a stack,
 raw SQL, credentials, encryption material, or unknown exception messages.
+
+
+### Organization resource management migration
+
+`server/migrations/20260910_organization_resource_management.sql` adds
+`project_transfer_requests.previous_owner_user_id` and backfills historical requests from
+`requested_by_user_id`. New requests record the initiator and actual previous owner
+separately. Existing owner-initiated personal-project transfers via a shared organization
+remain supported. Administrators can initiate transfers only for projects attached to a
+managed organization, including transfer to themselves; the recipient must be another
+active organization member and must confirm acceptance. The old owner becomes a regular
+project member. A changed owner/organization or revoked administrator authority invalidates
+an administrator request at acceptance.
+
+Rolling back application code does not undo completed transfers or member changes. Before
+running an older version, revoke pending administrator-initiated transfers in an authorized
+maintenance window: old code interprets the initiator as the previous owner. Keep the added
+column and the complete encryption key ring.

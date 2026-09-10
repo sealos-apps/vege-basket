@@ -618,6 +618,13 @@ alter table project_transfer_requests
 alter table project_transfer_requests
   add column if not exists responded_at timestamptz;
 
+alter table project_transfer_requests
+  add column if not exists previous_owner_user_id bigint references users(id) on delete cascade;
+
+update project_transfer_requests
+set previous_owner_user_id = requested_by_user_id
+where previous_owner_user_id is null;
+
 create table if not exists project_transfer_callback_events (
   event_id text primary key,
   transfer_request_id bigint not null references project_transfer_requests(id) on delete cascade,

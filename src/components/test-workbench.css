@@ -3228,7 +3228,7 @@
 
 .test-space-member-add-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 128px 36px;
+  grid-template-columns: minmax(160px, 1fr) 128px max-content;
   gap: 8px;
   align-items: center;
 }

@@ -494,6 +494,10 @@ export type Project = {
   ownerName: string
   ownerUserId: number
   organizationId?: number | null
+  canManageSettings?: boolean
+  canManageMembers?: boolean
+  canDelete?: boolean
+  canTransferOwnership?: boolean
   canManageOrganizationTodos?: boolean
   canUpdateOrganizationTodoFields?: boolean
   readOnly?: boolean

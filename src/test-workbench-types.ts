@@ -17,6 +17,10 @@ export type BugStatus =
   | 'rejected'
 
 export type TestSpace = {
+  canManageSettings?: boolean
+  canManageMembers?: boolean
+  canDelete?: boolean
+  canChangeOrganization?: boolean
   accessLevel: 'owner' | 'editor' | 'viewer'
   createdAt: string
   id: number
@@ -38,6 +42,10 @@ export type TestSpaceMember = {
 }
 
 export type ManagedTestSpace = {
+  canManageSettings?: boolean
+  canManageMembers?: boolean
+  canDelete?: boolean
+  canChangeOrganization?: boolean
   accessLevel: 'owner' | 'editor' | 'viewer'
   createdAt: string
   id: number
@@ -50,6 +58,7 @@ export type ManagedTestSpace = {
 }
 
 export type TestSpaceOrganizationOption = {
+  canManageResources?: boolean
   id: number
   name: string
 }

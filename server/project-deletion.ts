@@ -1,3 +1,4 @@
+import { lockResourceManager } from './resource-management.ts'
 import type { PoolClient } from 'pg'
 
 export async function deleteOwnedProjectWithAiCleanup(
@@ -7,15 +8,8 @@ export async function deleteOwnedProjectWithAiCleanup(
 ) {
   await client.query('begin')
   try {
-    await client.query(
-      `select pg_advisory_xact_lock(hashtextextended($1, 0))`,
-      [`ai-project:${projectId}`],
-    )
-    const project = await client.query<{ id: string }>(
-      `select id from projects where id = $1 and user_id = $2`,
-      [projectId, userId],
-    )
-    if (!project.rows[0]) {
+    const access = await lockResourceManager(client, 'project', projectId, userId)
+    if (!access) {
       await client.query('commit')
       return false
     }
@@ -37,7 +31,7 @@ export async function deleteOwnedProjectWithAiCleanup(
     )
     const lockedProject = await client.query<{ id: string }>(
       `select id from projects where id = $1 and user_id = $2 for update`,
-      [projectId, userId],
+      [projectId, access.ownerUserId],
     )
     if (!lockedProject.rows[0]) {
       await client.query('commit')
@@ -45,7 +39,7 @@ export async function deleteOwnedProjectWithAiCleanup(
     }
     const deleted = await client.query<{ id: string }>(
       `delete from projects where id = $1 and user_id = $2 returning id`,
-      [projectId, userId],
+      [projectId, access.ownerUserId],
     )
     await client.query('commit')
     return Boolean(deleted.rows[0])

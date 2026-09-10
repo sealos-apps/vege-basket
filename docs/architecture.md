@@ -118,8 +118,23 @@ projects, test spaces, Bugs, comments, and related records attached to that orga
 That dual authorization also permits project-governance mutations for lifecycle status,
 health, and milestones. It may also edit and delete todos in projects attached to that
 organization; todo completion and acceptance transitions retain their reviewer rules.
-Other project mutations continue to use direct project access; test-space and Bug mutations
-continue to require membership, creator ownership, or Bug assignment checks. Todo public-link
+Resource administration is another explicit exception: organization managers may edit
+attached project settings, manage members and invite links, delete projects and initiate
+ownership transfers. They may manage attached test-space settings, members, deletion and
+organization assignment. `server/resource-management.ts` authorizes these operations
+inside their transactions, preserving the real owner and all business-content permissions.
+It locks organization rows before project advisory locks and resource rows, then checks
+that the resource's organization has not changed. Space moves lock both organizations in
+numeric order. Client DTOs expose separate management capabilities; they never upgrade
+`accessRole`, `accessLevel` or general content write access.
+
+Project transfers record `requested_by_user_id` separately from `previous_owner_user_id`.
+The recipient still accepts or declines within 72 hours. Acceptance rechecks the actual
+previous owner, shared organization membership and, for administrator-initiated requests,
+the initiator's current management authority and unchanged project organization. HTTP
+responses and legacy Feishu callbacks share these rules. Other project mutations continue
+to use direct project access; test records and Bugs continue to require membership,
+creator ownership or Bug assignment checks. Todo public-link
 creation and revocation are another explicit exception: managed organization administrators may
 share todos in projects attached to their organization without receiving general project mutation
 access.

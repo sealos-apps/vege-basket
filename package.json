@@ -12,7 +12,8 @@
     "test": "node --import tsx --test server/*.test.ts",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:resource-management": "node --import tsx server/resource-management.integration.ts"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

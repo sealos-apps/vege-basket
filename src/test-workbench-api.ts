@@ -82,6 +82,13 @@ export function transferTestBugToSpace(spaceId: number, bugId: number, targetSpa
   })
 }
 
+export function addTestSpaceMember(spaceId: number, username: string, accessLevel: 'editor' | 'viewer') {
+  return request<TestSpaceSettings>(`/api/test-spaces/${spaceId}/members`, {
+    method: 'POST',
+    body: JSON.stringify({ username, accessLevel }),
+  })
+}
+
 export function inviteTestSpaceMember(
   spaceId: number,
   username: string,

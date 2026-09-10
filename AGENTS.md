@@ -29,8 +29,14 @@ historical product context; current code and these operational docs take precede
   role may assume any business persona. In organizations where the account also has active
   `owner` or `admin` membership, it may govern attached project lifecycle status, health,
   and milestones, and receives organization-scoped read access to projects, test spaces,
-  and Bugs. Other resource mutations still require the original project membership,
-  test-space access, creator, or Bug-assignee permission. System-administrator access comes
+  and Bugs. It may also manage attached project settings, members, deletion and ownership
+  transfer, and test-space settings, members, deletion and organization assignment.
+  Keep these as explicit server-generated management capabilities, never synthetic owner
+  access. Organization/resource mutations lock organizations in numeric order before
+  project advisory locks and resource rows, and revalidate the organization after locking.
+  A transfer stores the actual previous owner separately from its initiator and rechecks
+  the initiator's authority when accepted. Other resource mutations still require the
+  original project membership, test-space access, creator, or Bug-assignee permission. System-administrator access comes
   only from `VEGES_ADMIN_USERNAMES`, not from an occupational role.
 - Keep document editors on the existing Markdown string contract. When registering
   `CodeBlockLowlight`, disable StarterKit's plain code block, preserve fenced-language

@@ -1,3 +1,4 @@
+import { lockTransferProject, canCompleteProjectTransfer } from './project-transfer.ts'
 import crypto from 'node:crypto'
 import type express from 'express'
 import { Router } from 'express'
@@ -246,6 +247,7 @@ async function lockGovernedProject(
       on membership.organization_id = p.organization_id
      and membership.user_id = $3
      and membership.status = 'active'
+     and membership.access_role in ('owner', 'admin')
     join user_roles role
       on role.user_id = $3 and role.role = 'organization_admin'
     where p.organization_id = $1 and p.id = $2
@@ -3022,6 +3024,11 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           response.json({ toast: { type: 'success', content: '项目转移申请已经处理' } })
           return
         }
+        if (!await lockTransferProject(client, transferId)) {
+          await client.query('rollback')
+          response.status(409).json({ error: 'Project transfer changed or no longer exists' })
+          return
+        }
         const transfer = await client.query<{
           expires_at: Date
           organization_id: string
@@ -3031,6 +3038,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           requested_by_display_name: string | null
           requested_by_email: string
           requested_by_user_id: string
+          previous_owner_user_id: string
           status: string
           target_open_id: string
           target_user_id: string
@@ -3038,6 +3046,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         }>(
           `
           select transfer.project_id, transfer.organization_id, transfer.requested_by_user_id,
+                 coalesce(transfer.previous_owner_user_id, transfer.requested_by_user_id) as previous_owner_user_id,
                  transfer.target_user_id, transfer.target_open_id, transfer.token_hash,
                  transfer.status, transfer.expires_at,
                  project.name as project_name,
@@ -3047,7 +3056,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           from project_transfer_requests transfer
           join projects project on project.id = transfer.project_id
           join organizations organization on organization.id = transfer.organization_id
-          join users requester on requester.id = transfer.requested_by_user_id
+          join users requester on requester.id = coalesce(transfer.previous_owner_user_id, transfer.requested_by_user_id)
           where transfer.id = $1
           for update of transfer, project
           `,
@@ -3103,6 +3112,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         const projectId = Number(row.project_id)
         const organizationId = Number(row.organization_id)
         const requestedByUserId = Number(row.requested_by_user_id)
+        const previousOwnerUserId = Number(row.previous_owner_user_id)
         const targetUserId = Number(row.target_user_id)
         await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`ai-project:${projectId}`])
         const activeOwners = await client.query<{ user_id: string }>(
@@ -3111,9 +3121,11 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
              and user_id in ($2::bigint, $3::bigint)
              and status = 'active'
            for share`,
-          [organizationId, requestedByUserId, targetUserId],
+          [organizationId, previousOwnerUserId, targetUserId],
         )
-        if (activeOwners.rows.length !== 2) {
+        if (activeOwners.rows.length !== 2 || !await canCompleteProjectTransfer(client, {
+          projectId, organizationId, requestedByUserId, previousOwnerUserId,
+        })) {
           await client.query(
             `update project_transfer_requests
              set status = 'revoked', last_error = $2, responded_at = now()
@@ -3129,7 +3141,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
             `update projects
              set user_id = $1, updated_at = now()
              where id = $2 and user_id = $3`,
-            [targetUserId, projectId, requestedByUserId],
+            [targetUserId, projectId, previousOwnerUserId],
           )
           if ((updated.rowCount ?? 0) === 0) {
             await client.query(
@@ -3170,7 +3182,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
             [
               projectId,
               targetUserId,
-              requestedByUserId,
+              previousOwnerUserId,
               encryptText(normalizedEmail(row.requested_by_email)),
               blindIndex(normalizedEmail(row.requested_by_email)),
             ],
@@ -3195,7 +3207,8 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           'project',
           String(projectId),
           JSON.stringify({
-            from: requestedByUserId,
+            from: previousOwnerUserId,
+            requestedBy: requestedByUserId,
             to: targetUserId,
             tenantKey,
           }),
