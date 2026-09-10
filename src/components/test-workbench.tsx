@@ -3571,7 +3571,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
   }
 
   async function copyInviteLink() {
-    if (!selectedSpace || !isOwner) return
+    if (!selectedSpace || !canManageMembers) return
     setBusy(true)
     setInviteLinkStatus('')
     try {
