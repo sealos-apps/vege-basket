@@ -26,7 +26,9 @@ historical product context; current code and these operational docs take precede
   response shapes.
 - Keep occupational roles separate from resource permissions. Test and Bug workbenches
   require the active `tester` or `developer` persona. An assigned `organization_admin`
-  role may assume any business persona. In organizations where the account also has active
+  role may assume any business persona. Test-space administration routes also accept
+  that assigned role without changing the active persona, while retaining resource authorization.
+  The organization-management module is the unified project and test-space administration entry. In organizations where the account also has active
   `owner` or `admin` membership, it may govern attached project lifecycle status, health,
   and milestones, and receives organization-scoped read access to projects, test spaces,
   and Bugs. It may also manage attached project settings, members, deletion and ownership

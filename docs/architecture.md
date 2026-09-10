@@ -128,6 +128,14 @@ that the resource's organization has not changed. Space moves lock both organiza
 numeric order. Client DTOs expose separate management capabilities; they never upgrade
 `accessRole`, `accessLevel` or general content write access.
 
+Organization management exposes complete project and test-space administration in its
+Projects and Test Spaces tabs, including creation, editing, renaming, members, deletion,
+project ownership transfer and space organization assignment. Test-space administration
+accepts the assigned organization-admin role without changing the active persona; the
+workbench, import, case, plan and Bug routes still require their original active persona.
+The role check only admits the request: transactional resource authorization still decides
+whether the caller may manage the particular space.
+
 Project transfers record `requested_by_user_id` separately from `previous_owner_user_id`.
 The recipient still accepts or declines within 72 hours. Acceptance rechecks the actual
 previous owner, shared organization membership and, for administrator-initiated requests,

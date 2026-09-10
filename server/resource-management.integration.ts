@@ -91,6 +91,22 @@ try {
   assert.equal(visible.accessRole,'member')
   assert.equal(visible.canManageSettings,true)
   assert.equal(visible.readOnly,true)
+  // Organization management must work without switching the business persona.
+  await db.query("update sessions set active_role='developer' where user_id=2")
+  await call(2, '/test-spaces/settings')
+  await call(2, '/test-workbench', 'GET', undefined, 403)
+  await call(2, `/test-spaces/${space}/subjects`, 'POST', {name:'禁止业务写入'}, 403)
+  await db.query("update sessions set active_role='developer' where user_id=5")
+  await call(5, '/test-spaces/settings', 'GET', undefined, 403)
+  await db.query("update sessions set active_role='tester' where user_id=5")
+  const organization = await call<{ canManageTestSpaces: boolean; projects: Array<{id:number; description:string; tags:string[]; canManageSettings:boolean; canTransferOwnership:boolean}> }>(2, '/organizations/1')
+  assert.equal(organization.canManageTestSpaces, true)
+  const organizationProject = organization.projects.find((item) => item.id === project)!
+  assert.equal(organizationProject.canManageSettings, true)
+  assert.equal(organizationProject.canTransferOwnership, true)
+  assert.equal(typeof organizationProject.description, 'string')
+  assert.ok(Array.isArray(organizationProject.tags))
+  await call(2, '/test-spaces', 'POST', {name:'组织页新建空间', versionLabel:'v-create', organizationId:1}, 201)
   for (const user of [4,5,6,7]) await call(user,`/projects/${project}`,'PATCH',{name:'越权'},404)
   await call(2,`/projects/${personal}`,'PATCH',{name:'越权个人项目'},404)
   await call(2,`/projects/${project}`,'PATCH',{name:'管理员重命名',description:'管理员编辑',tags:['验收']})
@@ -176,6 +192,7 @@ try {
   await call(2,`/projects/${transferProject}`,'DELETE')
   await call(2,`/test-spaces/${space}`,'DELETE',{confirmationName:'错误确认'},409)
   await call(2,`/test-spaces/${space}`,'DELETE',{confirmationName:'管理员测试空间'})
+  assert.equal((await db.query('select active_role from sessions where user_id=2')).rows[0].active_role, 'developer')
   // Leave demonstrable records only when the operator explicitly requests browser QA.
   if (process.env.VEGES_KEEP_TEST_RUNTIME === 'true') {
     const demoProject = await createProject()

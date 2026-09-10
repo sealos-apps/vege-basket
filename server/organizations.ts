@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import type express from 'express'
 import { Router } from 'express'
 import type { PoolClient } from 'pg'
-import { blindIndex, decryptText, encryptText } from './crypto.ts'
+import { blindIndex, decryptJson, decryptText, encryptText } from './crypto.ts'
 import { pool, query } from './db.ts'
 import {
   canManageOrganization,
@@ -487,6 +487,9 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       [organizationId],
     ),
     query<{
+      description_encrypted: string | null
+      tags: string[]
+      tags_encrypted: string | null
       health_note_encrypted: string | null
       health_status: string
       id: string
@@ -500,7 +503,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       updated_at: Date
     }>(
       `
-      select p.id, p.name, p.status, p.health_status, p.health_note_encrypted,
+      select p.id, p.name, p.description_encrypted, p.tags, p.tags_encrypted, p.status, p.health_status, p.health_note_encrypted,
         p.updated_at, p.user_id as owner_user_id, owner.email as owner_email,
         owner.display_name as owner_display_name,
         count(distinct t.id) as todo_count,
@@ -916,6 +919,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
     })),
     canManage,
     canManageProjects,
+    canManageTestSpaces: canManageProjects,
     canManageTestEnvironments: canManageTestEnvironments(membership.access_role, assignedRoles),
     canManageWeeklyReports,
     canWriteWeeklyReport: membership.weekly_report_required,
@@ -942,6 +946,12 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
     ownerUserId: Number(row.owner_user_id),
     packageMarketPolicy,
     projects: projects.rows.map((project) => ({
+      description: project.description_encrypted ? decryptText(project.description_encrypted) : '',
+      tags: project.tags_encrypted ? decryptJson<string[]>(project.tags_encrypted, project.tags ?? []) : project.tags ?? [],
+      canManageSettings: canManageProjects,
+      canManageMembers: canManageProjects,
+      canDelete: canManageProjects,
+      canTransferOwnership: canManageProjects,
       healthNote: project.health_note_encrypted ? decryptText(project.health_note_encrypted) : '',
       healthStatus: normalizeOrganizationProjectHealthStatus(project.health_status) ?? 'on_track',
       id: Number(project.id),

@@ -107,6 +107,7 @@ import {
 import { Textarea } from './ui/textarea'
 import { UserName } from './user-name'
 import { OrganizationPackageMarketPanel } from './organization-package-market-panel'
+import { OrganizationProjectActions, OrganizationTestSpaces } from './organization-resource-actions'
 import './organization-workbench.css'
 
 type OrganizationTab = 'overview' | 'projects' | 'testSpaces' | 'testEnvironments' | 'members' | 'reports' | 'packageMarket'
@@ -499,6 +500,11 @@ export function OrganizationWorkbench({
     } finally {
       setBusy(false)
     }
+  }
+
+  async function refreshResources() {
+    if (!selectedOrganizationId) return
+    setDetail(await fetchOrganization(selectedOrganizationId))
   }
 
   async function submitOrganization(event: FormEvent) {
@@ -1106,6 +1112,7 @@ export function OrganizationWorkbench({
                   detail={detail}
                   key={project.id}
                   onMutate={mutate}
+                  onRefresh={refreshResources}
                   project={project}
                 />
               ))}
@@ -1135,18 +1142,7 @@ export function OrganizationWorkbench({
 
         {tab === 'testSpaces' ? (
           <section className="organization-section organization-resource-panel">
-            <header><h3>组织测试空间</h3><span>{detail.testSpaces.length}</span></header>
-            <div className="organization-list">
-              {detail.testSpaces.map((space) => (
-                <div className="organization-resource-row" key={space.id}>
-                  <div><strong>{space.name}</strong><span>{space.ownerName}</span></div>
-                  <div className="organization-resource-counts">
-                    <span>{space.planCount} 计划</span><span>{space.bugCount} Bug</span>
-                  </div>
-                </div>
-              ))}
-              {detail.testSpaces.length === 0 ? <EmptyRow text="暂无组织测试空间" /> : null}
-            </div>
+            <OrganizationTestSpaces key={detail.id} detail={detail} onRefresh={refreshResources} />
             {detail.attachableTestSpaces.length > 0 ? (
               <div className="organization-attach-list">
                 {detail.attachableTestSpaces.map((space) => (
@@ -1771,12 +1767,14 @@ function OrganizationProjectRow({
   canManage,
   detail,
   onMutate,
+  onRefresh,
   project,
 }: {
   busy: boolean
   canManage: boolean
   detail: OrganizationDetail
   onMutate: (operation: () => Promise<OrganizationDetail>) => Promise<boolean>
+  onRefresh: () => Promise<void>
   project: OrganizationProject
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -1862,6 +1860,7 @@ function OrganizationProjectRow({
               project={project}
               onMutate={onMutate}
             />
+            <OrganizationProjectActions project={project} detail={detail} onRefresh={onRefresh} disabled={busy} />
           </div>
         ) : null}
       </div>

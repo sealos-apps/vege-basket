@@ -39,6 +39,12 @@ export type OrganizationMember = {
 }
 
 export type OrganizationProject = {
+  description: string
+  tags: string[]
+  canManageSettings: boolean
+  canManageMembers: boolean
+  canDelete: boolean
+  canTransferOwnership: boolean
   healthNote: string
   healthStatus: OrganizationProjectHealthStatus
   id: number
@@ -186,6 +192,7 @@ export type OrganizationDetail = {
   attachableTestSpaces: Array<{ id: number; name: string }>
   canManage: boolean
   canManageProjects: boolean
+  canManageTestSpaces: boolean
   canManageTestEnvironments: boolean
   canManageWeeklyReports: boolean
   canWriteWeeklyReport: boolean

@@ -133,6 +133,27 @@ export async function requireActiveRole(
   return session
 }
 
+/** Management screens do not change the session's business persona.
+ * Resource handlers still perform their own ownership/organization authorization.
+ */
+export async function requireTestSpaceManagementSession(request: express.Request, response: express.Response) {
+  const session = await getAuthenticatedRoleSession(request)
+  if (!session) {
+    response.status(401).json({ error: 'Unauthorized' })
+    return null
+  }
+  const assigned = await query<{ allowed: boolean }>(
+    `select exists(select 1 from user_roles where user_id = $1
+      and (role = 'organization_admin' or (role = 'tester' and $2::text = 'tester'))) as allowed`,
+    [session.userId, session.activeRole],
+  )
+  if (!assigned.rows[0]?.allowed) {
+    response.status(403).json({ error: 'Test-space management role is required' })
+    return null
+  }
+  return session
+}
+
 export const roleRouter = Router()
 
 roleRouter.post('/auth/active-role', async (request, response, next) => {

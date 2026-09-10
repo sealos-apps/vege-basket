@@ -264,6 +264,9 @@ must remain bound to the authorized project ID.
   deletion and ownership transfer. It may also manage test-space settings, membership,
   invite links, deletion and organization assignment. Integrations, ordinary project content,
   test data import, plan, case and Bug mutation retain their original resource permissions.
+  The organization-management Projects and Test Spaces tabs provide these operations in place.
+  Test-space administration accepts an assigned organization administrator in either business
+  persona; it does not switch the session persona or unlock test-workbench/content routes.
   Resource management DTOs expose `canManageSettings`, `canManageMembers`, `canDelete`,
   plus project `canTransferOwnership` or test-space `canChangeOrganization`; actual owner
   IDs and direct membership roles remain unchanged.

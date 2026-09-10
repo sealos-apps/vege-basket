@@ -3109,3 +3109,18 @@
     transition: none;
   }
 }
+
+
+.organization-test-space-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+.organization-resource-form { display: grid; gap: 18px; }
+.organization-resource-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.organization-resource-dialog { width: min(680px, calc(100vw - 32px)); }
+.organization-resource-member-form { display: grid; grid-template-columns: minmax(0, 1fr) 140px auto; align-items: end; gap: 12px; }
+.organization-resource-member-form + [role='status'] { margin-top: 12px; }
+.organization-resource-actions [data-slot='select-trigger'] { min-width: 100px; }
+@media (max-width: 640px) {
+  .organization-resource-member-form { grid-template-columns: minmax(0, 1fr); }
+  .organization-test-space-row { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+  .organization-test-space-row > .organization-resource-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .organization-resource-actions { flex-wrap: wrap; }
+}

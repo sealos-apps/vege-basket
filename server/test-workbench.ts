@@ -10,7 +10,7 @@ import {
   managedOrganizationReadScopeSql,
   testSpaceMembershipPresentSql,
 } from './organization-scope.ts'
-import { getAuthenticatedRoleSession, requireActiveRole } from './roles.ts'
+import { getAuthenticatedRoleSession, requireActiveRole, requireTestSpaceManagementSession } from './roles.ts'
 import {
   addBugShareComment,
   createBugShareLink,
@@ -2238,7 +2238,7 @@ router.get('/test-workbench', asyncRoute(async (request, response) => {
 }))
 
 router.get('/test-spaces/settings', asyncRoute(async (request, response) => {
-  const session = await requireActiveRole(request, response, 'tester')
+  const session = await requireTestSpaceManagementSession(request, response)
   if (!session) return
   response.json(await getTestSpaceSettings(session.userId))
 }))
@@ -2266,7 +2266,7 @@ router.post('/test-spaces/:spaceId/data-import', asyncRoute(async (request, resp
 }))
 
 router.post('/test-spaces', asyncRoute(async (request, response) => {
-  const session = await requireActiveRole(request, response, 'tester')
+  const session = await requireTestSpaceManagementSession(request, response)
   if (!session) return
   const name = text(request.body.name, 80)
   const versionLabel = text(request.body.versionLabel, 80)
@@ -2318,7 +2318,7 @@ router.post('/test-spaces', asyncRoute(async (request, response) => {
 }))
 
 router.patch('/test-spaces/:spaceId', asyncRoute(async (request, response) => {
-  const session = await requireActiveRole(request, response, 'tester')
+  const session = await requireTestSpaceManagementSession(request, response)
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
   const name = text(request.body.name, 80)
@@ -2481,7 +2481,7 @@ router.patch('/test-spaces/:spaceId/version', asyncRoute(async (request, respons
 }))
 
 router.delete('/test-spaces/:spaceId', asyncRoute(async (request, response) => {
-  const session = await requireActiveRole(request, response, 'tester')
+  const session = await requireTestSpaceManagementSession(request, response)
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
   const confirmationName = text(request.body.confirmationName, 80)
@@ -2528,7 +2528,7 @@ router.delete('/test-spaces/:spaceId', asyncRoute(async (request, response) => {
 }))
 
 router.post('/test-spaces/:spaceId/invitations', asyncRoute(async (request, response) => {
-  const session = await requireActiveRole(request, response, 'tester')
+  const session = await requireTestSpaceManagementSession(request, response)
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
   if (!spaceId) {
@@ -2624,7 +2624,7 @@ router.post('/test-spaces/:spaceId/invitations', asyncRoute(async (request, resp
 }))
 
 router.post('/test-spaces/:spaceId/members', asyncRoute(async (request, response) => {
-  const session = await requireActiveRole(request, response, 'tester')
+  const session = await requireTestSpaceManagementSession(request, response)
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
   const username = text(request.body.username, 160).toLowerCase()
@@ -2668,7 +2668,7 @@ router.post('/test-spaces/:spaceId/members', asyncRoute(async (request, response
 }))
 
 router.patch('/test-spaces/:spaceId/members/:userId', asyncRoute(async (request, response) => {
-  const session = await requireActiveRole(request, response, 'tester')
+  const session = await requireTestSpaceManagementSession(request, response)
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
   const userId = positiveId(request.params.userId)
@@ -2696,7 +2696,7 @@ router.patch('/test-spaces/:spaceId/members/:userId', asyncRoute(async (request,
 }))
 
 router.delete('/test-spaces/:spaceId/members/:userId', asyncRoute(async (request, response) => {
-  const session = await requireActiveRole(request, response, 'tester')
+  const session = await requireTestSpaceManagementSession(request, response)
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
   const userId = positiveId(request.params.userId)
@@ -2770,7 +2770,7 @@ router.post('/test-space-invitations/:spaceId/decline', asyncRoute(async (reques
 }))
 
 router.post('/test-spaces/:spaceId/invite-link', asyncRoute(async (request, response) => {
-  const session = await requireActiveRole(request, response, 'tester')
+  const session = await requireTestSpaceManagementSession(request, response)
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
   if (!spaceId) {
@@ -2829,7 +2829,7 @@ router.post('/test-spaces/:spaceId/invite-link', asyncRoute(async (request, resp
 }))
 
 router.delete('/test-spaces/:spaceId/invite-link', asyncRoute(async (request, response) => {
-  const session = await requireActiveRole(request, response, 'tester')
+  const session = await requireTestSpaceManagementSession(request, response)
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
   if (!await withSpaceManager(response, spaceId, session.userId, async (client) => {
