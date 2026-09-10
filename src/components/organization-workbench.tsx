@@ -1,3 +1,4 @@
+import { OrganizationTestEnvironmentPanel } from './organization-test-environments'
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -12,7 +13,6 @@ import {
   FolderSimple,
   GearSix,
   Heartbeat,
-  LinkSimple,
   MagnifyingGlass,
   PencilSimple,
   PaperPlaneTilt,
@@ -27,13 +27,11 @@ import {
 import {
   attachProjectToOrganization,
   attachTestSpaceToOrganization,
-  createOrganizationTestEnvironment,
   createProject,
   createOrganizationInviteLink,
   createOrganizationProjectMilestone,
   createOrganization,
   deleteOrganization,
-  deleteOrganizationTestEnvironment,
   fetchOrganization,
   fetchOrganizationPackageMarketCatalog,
   fetchOrganizations,
@@ -46,11 +44,9 @@ import {
   remindWeeklyReportMembers,
   saveOrganizationWeeklyReport,
   updateOrganization,
-  updateOrganizationTestEnvironment,
   updateOrganizationPackageMarketPolicy,
   updateOrganizationWeeklyReportRules,
   updateOrganizationMemberRole,
-  updateOrganizationProjectGovernance,
   updateOrganizationProjectMilestone,
   updateOrganizationProjectMilestoneStatus,
   type AuthUser,
@@ -65,7 +61,6 @@ import type {
   OrganizationProjectMilestoneStatus,
   OrganizationProjectStatus,
   OrganizationTask,
-  OrganizationTestEnvironment,
   OrganizationPackageMarketCatalogRule,
   WeeklyReportCollection,
   WeeklyReportRules,
@@ -110,7 +105,7 @@ import { OrganizationPackageMarketPanel } from './organization-package-market-pa
 import { OrganizationProjectActions, OrganizationTestSpaces } from './organization-resource-actions'
 import './organization-workbench.css'
 
-type OrganizationTab = 'overview' | 'projects' | 'testSpaces' | 'testEnvironments' | 'members' | 'reports' | 'packageMarket'
+type OrganizationTab = 'overview' | 'projects' | 'testSpaces' | 'members' | 'reports' | 'packageMarket'
 
 const organizationTabs: Array<{
   icon: typeof Buildings
@@ -119,8 +114,7 @@ const organizationTabs: Array<{
 }> = [
   { icon: Buildings, id: 'overview', label: '概览' },
   { icon: FolderSimple, id: 'projects', label: '项目管理' },
-  { icon: Flask, id: 'testSpaces', label: '测试空间管理' },
-  { icon: Target, id: 'testEnvironments', label: '测试环境' },
+  { icon: Flask, id: 'testSpaces', label: '测试空间' },
   { icon: Users, id: 'members', label: '成员' },
   { icon: Sparkle, id: 'reports', label: '周报' },
   { icon: PackageIcon, id: 'packageMarket', label: '安装包市场' },
@@ -320,6 +314,7 @@ export function OrganizationWorkbench({
   const [detail, setDetail] = useState<OrganizationDetail | null>(null)
   const [canCreate, setCanCreate] = useState(false)
   const [tab, setTab] = useState<OrganizationTab>('overview')
+  const [testResourceTab, setTestResourceTab] = useState<'spaces' | 'environments'>('spaces')
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -1140,34 +1135,12 @@ export function OrganizationWorkbench({
           </section>
         ) : null}
 
-        {tab === 'testSpaces' ? (
-          <section className="organization-section organization-resource-panel">
-            <OrganizationTestSpaces key={detail.id} detail={detail} onRefresh={refreshResources} />
-            {detail.attachableTestSpaces.length > 0 ? (
-              <div className="organization-attach-list">
-                {detail.attachableTestSpaces.map((space) => (
-                  <Button
-                    disabled={busy}
-                    key={space.id}
-                    type="button"
-                    variant="outline"
-                    onClick={() => void mutate(() => attachTestSpaceToOrganization(detail.id, space.id))}
-                  >
-                    <Plus size={15} /> {space.name}
-                  </Button>
-                ))}
-              </div>
-            ) : null}
-          </section>
-        ) : null}
-
-        {tab === 'testEnvironments' ? (
-          <OrganizationTestEnvironmentPanel
-            busy={busy}
-            detail={detail}
-            onMutate={mutate}
-          />
-        ) : null}
+        {tab === 'testSpaces' ? <>
+          {testResourceTab === 'spaces' ? <section className="organization-section organization-resource-panel">
+            <OrganizationTestSpaces key={detail.id} detail={detail} onRefresh={refreshResources} heading={<TestResourceTabs value={testResourceTab} onChange={setTestResourceTab} detail={detail} />} />
+            {detail.attachableTestSpaces.length > 0 ? <div className="organization-attach-list">{detail.attachableTestSpaces.map(space=><Button disabled={busy} key={space.id} variant="outline" onClick={()=>void mutate(()=>attachTestSpaceToOrganization(detail.id,space.id))}><Plus size={15}/>{space.name}</Button>)}</div>:null}
+          </section> : <OrganizationTestEnvironmentPanel busy={busy} detail={detail} onMutate={mutate} heading={<TestResourceTabs value={testResourceTab} onChange={setTestResourceTab} detail={detail} />} />}
+        </> : null}
 
         {tab === 'members' ? (
           <section className="organization-section organization-members-section">
@@ -1592,174 +1565,8 @@ export function OrganizationWorkbench({
   )
 }
 
-function OrganizationTestEnvironmentPanel({ busy, detail, onMutate }: {
-  busy: boolean
-  detail: OrganizationDetail
-  onMutate: (operation: () => Promise<OrganizationDetail>) => Promise<boolean>
-}) {
-  const [editorOpen, setEditorOpen] = useState(false)
-  const [editingEnvironment, setEditingEnvironment] = useState<OrganizationTestEnvironment>()
-  const [deleteTarget, setDeleteTarget] = useState<OrganizationTestEnvironment>()
-  const environments = detail.testEnvironments ?? []
-
-  function openCreate() {
-    setEditingEnvironment(undefined)
-    setEditorOpen(true)
-  }
-
-  function openEdit(environment: OrganizationTestEnvironment) {
-    setEditingEnvironment(environment)
-    setEditorOpen(true)
-  }
-
-  return (
-    <section className="organization-section organization-resource-panel organization-test-environments-panel">
-      <header>
-        <div className="organization-section-heading">
-          <h3>测试环境</h3>
-          <span>{environments.length}</span>
-        </div>
-        {detail.canManageTestEnvironments ? (
-          <Button disabled={busy} type="button" onClick={openCreate}><Plus size={16} /> 新建环境</Button>
-        ) : null}
-      </header>
-      {detail.canManageTestEnvironments ? (
-        <p className="organization-test-environments-intro">维护名称、访问地址和可使用该环境的测试空间。</p>
-      ) : <p className="organization-test-environments-intro">当前账号没有维护权限；可在有权限的测试空间中使用已分配环境。</p>}
-      <div className="organization-test-environment-list">
-        {environments.map((environment) => {
-          const assignedSpaces = detail.testSpaces.filter((space) => environment.testSpaceIds.includes(space.id))
-          return (
-            <article className="organization-test-environment-row" key={environment.id}>
-              <div className="organization-test-environment-main">
-                <strong>{environment.name}</strong>
-                <a href={environment.accessUrl} rel="noreferrer" target="_blank">{environment.accessUrl}<LinkSimple size={14} aria-hidden /></a>
-                <span>{assignedSpaces.length ? `已分配：${assignedSpaces.map((space) => space.name).join('、')}` : '尚未分配测试空间'}</span>
-              </div>
-              {detail.canManageTestEnvironments ? (
-                <div className="organization-test-environment-actions">
-                  <Button aria-label={`编辑测试环境 ${environment.name}`} disabled={busy} size="icon" title="编辑测试环境" type="button" variant="ghost" onClick={() => openEdit(environment)}><PencilSimple size={16} /></Button>
-                  <Button aria-label={`删除测试环境 ${environment.name}`} disabled={busy} size="icon" title="删除测试环境" type="button" variant="ghost" onClick={() => setDeleteTarget(environment)}><Trash size={16} /></Button>
-                </div>
-              ) : null}
-            </article>
-          )
-        })}
-        {environments.length === 0 ? <EmptyRow text="还没有测试环境配置" /> : null}
-      </div>
-      <TestEnvironmentEditorDialog
-        busy={busy}
-        environment={editingEnvironment}
-        open={editorOpen}
-        spaces={detail.testSpaces}
-        onOpenChange={(open) => {
-          setEditorOpen(open)
-          if (!open) setEditingEnvironment(undefined)
-        }}
-        onSave={(payload) => onMutate(() => editingEnvironment
-          ? updateOrganizationTestEnvironment(detail.id, editingEnvironment.id, payload)
-          : createOrganizationTestEnvironment(detail.id, payload))}
-      />
-      <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => { if (!open) setDeleteTarget(undefined) }}>
-        <DialogContent className="organization-test-environment-dialog">
-          <DialogHeader>
-            <DialogTitle>删除测试环境</DialogTitle>
-            <DialogDescription>
-              删除“{deleteTarget?.name}”后，新建 Bug 将不能再选择该环境；已有 Bug 会保留创建时的环境信息。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button disabled={busy} type="button" variant="outline" onClick={() => setDeleteTarget(undefined)}>取消</Button>
-            <Button
-              disabled={busy || !deleteTarget}
-              type="button"
-              variant="destructive"
-              onClick={async () => {
-                if (!deleteTarget) return
-                const saved = await onMutate(() => deleteOrganizationTestEnvironment(detail.id, deleteTarget.id))
-                if (saved) setDeleteTarget(undefined)
-              }}
-            ><Trash size={16} /> 删除环境</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </section>
-  )
-}
-
-function TestEnvironmentEditorDialog({ busy, environment, onOpenChange, onSave, open, spaces }: {
-  busy: boolean
-  environment?: OrganizationTestEnvironment
-  onOpenChange: (open: boolean) => void
-  onSave: (payload: { accessUrl: string; name: string; testSpaceIds: number[] }) => Promise<boolean>
-  open: boolean
-  spaces: OrganizationDetail['testSpaces']
-}) {
-  const [name, setName] = useState('')
-  const [accessUrl, setAccessUrl] = useState('')
-  const [testSpaceIds, setTestSpaceIds] = useState<number[]>([])
-
-  useEffect(() => {
-    if (!open) return
-    setName(environment?.name ?? '')
-    setAccessUrl(environment?.accessUrl ?? '')
-    setTestSpaceIds(environment?.testSpaceIds ?? [])
-  }, [environment?.accessUrl, environment?.id, environment?.name, environment?.testSpaceIds, open])
-
-  function toggleSpace(spaceId: number, checked: boolean) {
-    setTestSpaceIds((current) => checked
-      ? Array.from(new Set([...current, spaceId]))
-      : current.filter((id) => id !== spaceId))
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent fixedHeader className="organization-test-environment-dialog">
-        <DialogHeader>
-          <DialogTitle>{environment ? '编辑测试环境' : '新建测试环境'}</DialogTitle>
-          <DialogDescription>配置可访问地址，并选择可在 Bug 中下拉使用的测试空间。</DialogDescription>
-        </DialogHeader>
-        <form className="organization-test-environment-form" onSubmit={async (event) => {
-          event.preventDefault()
-          const saved = await onSave({
-            accessUrl: accessUrl.trim(),
-            name: name.trim(),
-            testSpaceIds,
-          })
-          if (saved) onOpenChange(false)
-        }}>
-          <Label>
-            环境名称
-            <Input autoFocus maxLength={120} placeholder="例如：预发布环境" value={name} onChange={(event) => setName(event.target.value)} />
-          </Label>
-          <Label>
-            访问地址
-            <Input inputMode="url" maxLength={2048} placeholder="例如：https://staging.example.com" type="url" value={accessUrl} onChange={(event) => setAccessUrl(event.target.value)} />
-          </Label>
-          <fieldset className="organization-test-environment-spaces">
-            <legend>分配测试空间</legend>
-            <p>只有分配到的空间会在 Bug 表单中显示此环境。</p>
-            <div>
-              {spaces.map((space) => (
-                <label key={space.id}>
-                  <Checkbox checked={testSpaceIds.includes(space.id)} onCheckedChange={(checked) => toggleSpace(space.id, checked === true)} />
-                  <span>
-                    <strong>{space.name}</strong>
-                    <small>{space.versionLabel ? `版本 ${space.versionLabel}` : space.ownerName}</small>
-                  </span>
-                </label>
-              ))}
-              {spaces.length === 0 ? <EmptyRow text="请先将测试空间归属到当前组织" /> : null}
-            </div>
-          </fieldset>
-          <DialogFooter>
-            <Button disabled={busy} type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-            <Button disabled={busy || !name.trim() || !accessUrl.trim()}>{environment ? '保存环境' : '创建环境'}</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
+function TestResourceTabs({value,onChange,detail}:{value:'spaces'|'environments';onChange:(value:'spaces'|'environments')=>void;detail:OrganizationDetail}) {
+  return <div className="organization-test-resource-tabs" role="tablist" aria-label="测试空间资源">{([{id:'spaces',label:'组织测试空间',count:detail.testSpaces.length},{id:'environments',label:'测试环境',count:detail.testEnvironments.length}] as const).map(item=><button type="button" key={item.id} role="tab" aria-selected={value===item.id} onClick={()=>onChange(item.id)}>{item.label}<span>{item.count}</span></button>)}</div>
 }
 
 function OrganizationProjectRow({
@@ -1778,7 +1585,6 @@ function OrganizationProjectRow({
   project: OrganizationProject
 }) {
   const [expanded, setExpanded] = useState(false)
-  const [governanceOpen, setGovernanceOpen] = useState(false)
   const [milestoneOpen, setMilestoneOpen] = useState(false)
   const [editingMilestone, setEditingMilestone] = useState<OrganizationProjectMilestone | null>(null)
   const nextMilestone = nextProjectMilestone(project)
@@ -1843,17 +1649,6 @@ function OrganizationProjectRow({
         </button>
         {canManage ? (
           <div className="organization-project-row-actions">
-            <Button
-              aria-label={`管理${project.name}的项目状态`}
-              disabled={busy}
-              size="icon"
-              title="项目治理设置"
-              type="button"
-              variant="ghost"
-              onClick={() => setGovernanceOpen(true)}
-            >
-              <PencilSimple size={17} />
-            </Button>
             <ProjectMemberDialog
               busy={busy}
               detail={detail}
@@ -1969,13 +1764,6 @@ function OrganizationProjectRow({
         </div>
       </div>
 
-      <ProjectGovernanceDialog
-        busy={busy}
-        open={governanceOpen}
-        project={project}
-        onOpenChange={setGovernanceOpen}
-        onSave={(payload) => onMutate(() => updateOrganizationProjectGovernance(detail.id, project.id, payload))}
-      />
       <ProjectMilestoneDialog
         busy={busy}
         editing={editingMilestone}
@@ -2158,94 +1946,6 @@ function ProjectMemberDialog({
             </div>
           </section>
         </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function ProjectGovernanceDialog({
-  busy,
-  onOpenChange,
-  onSave,
-  open,
-  project,
-}: {
-  busy: boolean
-  onOpenChange: (open: boolean) => void
-  onSave: (payload: {
-    healthNote: string
-    healthStatus: OrganizationProjectHealthStatus
-    status: OrganizationProjectStatus
-  }) => Promise<boolean>
-  open: boolean
-  project: OrganizationProject
-}) {
-  const [status, setStatus] = useState(project.status)
-  const [healthStatus, setHealthStatus] = useState(project.healthStatus)
-  const [healthNote, setHealthNote] = useState(project.healthNote)
-
-  useEffect(() => {
-    if (!open) return
-    setStatus(project.status)
-    setHealthStatus(project.healthStatus)
-    setHealthNote(project.healthNote)
-  }, [open, project.healthNote, project.healthStatus, project.status])
-
-  async function submit(event: FormEvent) {
-    event.preventDefault()
-    const saved = await onSave({ healthNote: healthNote.trim(), healthStatus, status })
-    if (saved) onOpenChange(false)
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(nextOpen) => !busy && onOpenChange(nextOpen)}>
-      <DialogContent className="organization-governance-dialog">
-        <DialogHeader>
-          <DialogTitle>{project.name} · 项目治理</DialogTitle>
-          <DialogDescription>生命周期描述项目阶段，健康度反映当前计划是否可控。</DialogDescription>
-        </DialogHeader>
-        <form className="organization-governance-form" onSubmit={submit}>
-          <div className="organization-governance-fields">
-            <Label>
-              生命周期状态
-              <Select value={status} onValueChange={(value) => setStatus(value as OrganizationProjectStatus)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active">进行中</SelectItem>
-                  <SelectItem value="paused">暂停</SelectItem>
-                  <SelectItem value="completed">已完成</SelectItem>
-                  <SelectItem value="archived">已归档</SelectItem>
-                </SelectContent>
-              </Select>
-            </Label>
-            <Label>
-              项目健康度
-              <Select value={healthStatus} onValueChange={(value) => setHealthStatus(value as OrganizationProjectHealthStatus)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="on_track">正常</SelectItem>
-                  <SelectItem value="at_risk">有风险</SelectItem>
-                  <SelectItem value="off_track">已失控</SelectItem>
-                </SelectContent>
-              </Select>
-            </Label>
-          </div>
-          <Label>
-            健康度说明{healthStatus === 'on_track' ? '（可选）' : ''}
-            <Textarea
-              maxLength={1_000}
-              placeholder={healthStatus === 'on_track' ? '记录当前判断依据' : '说明风险、影响和需要的决策'}
-              value={healthNote}
-              onChange={(event) => setHealthNote(event.target.value)}
-            />
-          </Label>
-          <DialogFooter>
-            <DialogClose asChild><Button disabled={busy} type="button" variant="outline">取消</Button></DialogClose>
-            <Button disabled={busy || (healthStatus !== 'on_track' && !healthNote.trim())} type="submit">
-              保存治理状态
-            </Button>
-          </DialogFooter>
-        </form>
       </DialogContent>
     </Dialog>
   )

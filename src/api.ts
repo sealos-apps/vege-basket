@@ -724,6 +724,9 @@ export function updateOrganizationProjectGovernance(
   organizationId: number,
   projectId: number,
   payload: Partial<{
+    name: string
+    description: string
+    tags: string[]
     healthNote: string
     healthStatus: OrganizationProjectHealthStatus
     status: OrganizationProjectStatus
@@ -789,7 +792,7 @@ export function attachTestSpaceToOrganization(organizationId: number, spaceId: n
 export type OrganizationTestEnvironmentPayload = {
   accessUrl: string
   name: string
-  testSpaceIds: number[]
+  testSpaceIds?: number[]
 }
 
 export function createOrganizationTestEnvironment(

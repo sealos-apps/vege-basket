@@ -1,3 +1,5 @@
+import { requestTestSpaceOwnership, respondTestSpaceOwnership, TestSpaceTransferError } from './test-space-transfer.ts'
+import { shareOrganizationTestEnvironments } from './test-environment-sharing.ts'
 import { lockResourceManager, lockOrganizationResourceManager, type ManagedResource } from './resource-management.ts'
 import crypto from 'node:crypto'
 import bcrypt from 'bcryptjs'
@@ -830,7 +832,16 @@ async function getTestSpaceSettings(userId: number) {
     ])
   }
 
+  const transfers = await query<{id:string;test_space_id:string;name:string;requester:string;created_at:Date;expires_at:Date}>(
+    `select transfer.id,transfer.test_space_id,space.name,coalesce(nullif(requester.display_name,''),requester.email) as requester,transfer.created_at,transfer.expires_at
+     from test_space_transfer_requests transfer join test_spaces space on space.id=transfer.test_space_id
+     join users requester on requester.id=transfer.requested_by_user_id
+     join test_space_memberships member on member.test_space_id=space.id and member.user_id=$1 and member.status='active'
+     where transfer.target_user_id=$1 and transfer.status='pending' and transfer.expires_at>clock_timestamp()
+     and space.owner_user_id=transfer.previous_owner_user_id and space.organization_id is not distinct from transfer.organization_id
+     order by transfer.created_at desc`,[userId])
   return {
+    ownershipTransfers: transfers.rows.map(row=>({id:Number(row.id),spaceId:Number(row.test_space_id),spaceName:decryptText(row.name),requestedByName:row.requester,createdAt:row.created_at.toISOString(),expiresAt:row.expires_at.toISOString()})),
     organizations: organizations.rows.map((row) => ({
       id: Number(row.id),
       name: decryptText(row.name),
@@ -849,6 +860,7 @@ async function getTestSpaceSettings(userId: number) {
       canManageMembers: row.can_manage,
       canDelete: row.can_manage,
       canChangeOrganization: row.can_manage,
+      canTransferOwnership: row.can_manage,
       versionLabel: row.version_label ? decryptText(row.version_label) : undefined,
     })),
     invitations: invitations.rows.map((row) => ({
@@ -2210,6 +2222,7 @@ async function getTestWorkbench(userId: number) {
       canManageMembers: row.can_manage,
       canDelete: row.can_manage,
       canChangeOrganization: row.can_manage,
+      canTransferOwnership: row.can_manage,
       versionLabel: row.version_label ? decryptText(row.version_label) : undefined,
     })),
     testEnvironments: Array.from(testEnvironmentsById.values()),
@@ -2241,6 +2254,26 @@ router.get('/test-spaces/settings', asyncRoute(async (request, response) => {
   const session = await requireTestSpaceManagementSession(request, response)
   if (!session) return
   response.json(await getTestSpaceSettings(session.userId))
+}))
+
+router.post('/test-spaces/:spaceId/transfer', asyncRoute(async (request,response)=>{
+  const session=await requireTestSpaceManagementSession(request,response)
+  if(!session)return
+  const spaceId=positiveId(request.params.spaceId), targetId=positiveId(request.body?.targetUserId)
+  if(!spaceId||!targetId){response.status(400).json({error:'请选择有效的接收人。'});return}
+  const client=await pool.connect()
+  try{await client.query('begin');const transferId=await requestTestSpaceOwnership(client,spaceId,session.userId,targetId);await client.query('commit');response.status(201).json({transferId})}
+  catch(error){await client.query('rollback');if(error instanceof TestSpaceTransferError){response.status(error.status).json({error:error.message});return}throw error}finally{client.release()}
+}))
+router.post('/test-space-transfers/:transferId/respond', asyncRoute(async(request,response)=>{
+  const session=await requireTestSpaceManagementSession(request,response)
+  if(!session)return
+  const transferId=positiveId(request.params.transferId),action=request.body?.action
+  if(!transferId||!['accept','decline'].includes(action)){response.status(400).json({error:'无效的转移操作。'});return}
+  const client=await pool.connect()
+  try{await client.query('begin');await respondTestSpaceOwnership(client,transferId,session.userId,action);await client.query('commit')}
+  catch(error){await client.query('rollback');if(error instanceof TestSpaceTransferError){response.status(error.status).json({error:error.message});return}throw error}finally{client.release()}
+  response.json({settings:await getTestSpaceSettings(session.userId),workbench:await getTestWorkbench(session.userId)})
 }))
 
 router.post('/test-spaces/:spaceId/data-import', asyncRoute(async (request, response) => {
@@ -2303,6 +2336,7 @@ router.post('/test-spaces', asyncRoute(async (request, response) => {
       `,
       [spaceId, session.userId],
     )
+    await shareOrganizationTestEnvironments(client, organization.value, spaceId)
     await client.query('commit')
   } catch (error) {
     await client.query('rollback')
@@ -2402,6 +2436,7 @@ router.patch('/test-spaces/:spaceId', asyncRoute(async (request, response) => {
         [spaceId],
       )
     }
+    if (organizationChanged && nextOrganizationId !== null) await shareOrganizationTestEnvironments(client, nextOrganizationId, spaceId)
     await client.query('commit')
   } catch (error) {
     await client.query('rollback')

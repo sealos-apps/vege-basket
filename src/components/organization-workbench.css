@@ -3124,3 +3124,15 @@
   .organization-test-space-row > .organization-resource-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .organization-resource-actions { flex-wrap: wrap; }
 }
+
+.organization-test-resource-tabs { display: flex; gap: 24px; align-items: center; }
+.organization-test-resource-tabs button { display: flex; gap: 8px; align-items: center; padding: 12px 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted-foreground); font-size: 13px; cursor: pointer; white-space: nowrap; }
+.organization-test-resource-tabs button[aria-selected=true] { color: var(--foreground); border-bottom-color: var(--primary); }
+.organization-test-resource-tabs button span { font-size: 11px; color: var(--muted-foreground); }
+@media(max-width:700px) { .organization-test-resource-tabs { gap: 18px; } }
+.organization-project-edit-dialog { width: min(624px, calc(100vw - 28px)); max-height: calc(100dvh - 32px); grid-template-rows: auto minmax(0, 1fr); }
+.organization-project-edit-dialog > [data-slot=dialog-body], .organization-resource-dialog > [data-slot=dialog-body] { min-height: 0; overflow-y: auto; }
+.organization-resource-dialog { max-height: calc(100dvh - 32px); grid-template-rows: auto minmax(0, 1fr); }
+.organization-project-edit-dialog textarea { min-height: 72px; }
+.organization-project-edit-status { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media(max-width:700px) { .organization-project-edit-status { grid-template-columns: 1fr; } }

@@ -1,9 +1,23 @@
-import { useEffect, useState, type FormEvent } from 'react'
-import { DotsThree, PencilSimple, Plus, Trash, Users, UserSwitch } from '@phosphor-icons/react'
-import { removeProject, requestProjectTransfer, updateProject } from '../api'
-import type { OrganizationDetail, OrganizationProject } from '../organization-types'
+import { useEffect, useState, type ReactNode, type FormEvent } from 'react'
 import {
-  addTestSpaceMember,
+  DotsThree,
+  PencilSimple,
+  Plus,
+  Trash,
+  Users,
+  UserSwitch,
+} from '@phosphor-icons/react'
+import {
+  removeProject,
+  requestProjectTransfer,
+  updateOrganizationProjectGovernance,
+} from '../api'
+import type {
+  OrganizationDetail,
+  OrganizationProject,
+} from '../organization-types'
+import {
+  requestTestSpaceTransfer,
   createTestSpace,
   deleteTestSpace,
   fetchTestSpaceSettings,
@@ -11,7 +25,10 @@ import {
   updateTestSpace,
   updateTestSpaceMember,
 } from '../test-workbench-api'
-import type { ManagedTestSpace, TestSpaceSettings } from '../test-workbench-types'
+import type {
+  ManagedTestSpace,
+  TestSpaceSettings,
+} from '../test-workbench-types'
 import { Button } from './ui/button'
 import {
   Dialog,
@@ -45,10 +62,9 @@ function message(error: unknown) {
   return error instanceof Error ? error.message : '操作失败，请重试。'
 }
 type Refresh = () => Promise<void>
-type ProjectAction = 'edit' | 'rename' | 'transfer' | 'delete'
+type ProjectAction = 'edit' | 'transfer' | 'delete'
 const projectTitles = {
   edit: '编辑项目',
-  rename: '重命名项目',
   transfer: '转移项目所有权',
   delete: '删除项目',
 }
@@ -67,6 +83,17 @@ export function OrganizationProjectActions({
   const [action, setAction] = useState<ProjectAction | null>(null)
   return (
     <>
+      {project.canManageSettings ? (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          onClick={() => setAction('edit')}
+        >
+          <PencilSimple />
+          编辑项目
+        </Button>
+      ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -81,14 +108,6 @@ export function OrganizationProjectActions({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuGroup>
-            {project.canManageSettings ? (
-              <>
-                <DropdownMenuItem onSelect={() => setAction('edit')}>
-                  <PencilSimple /> 编辑项目
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setAction('rename')}>重命名</DropdownMenuItem>
-              </>
-            ) : null}
             {project.canTransferOwnership ? (
               <DropdownMenuItem onSelect={() => setAction('transfer')}>
                 <UserSwitch /> 所有权转移
@@ -97,7 +116,10 @@ export function OrganizationProjectActions({
             {project.canDelete ? (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onSelect={() => setAction('delete')}>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => setAction('delete')}
+                >
                   <Trash /> 删除项目
                 </DropdownMenuItem>
               </>
@@ -135,12 +157,17 @@ function ProjectActionDialog({
   const [name, setName] = useState(project.name)
   const [description, setDescription] = useState(project.description)
   const [tags, setTags] = useState(project.tags.join('，'))
+  const [status, setStatus] = useState(project.status)
+  const [healthStatus, setHealthStatus] = useState(project.healthStatus)
+  const [healthNote, setHealthNote] = useState(project.healthNote)
   const [target, setTarget] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [sent, setSent] = useState(false)
-  const candidates = detail.members.filter((member) => member.id !== project.ownerUserId)
+  const candidates = detail.members.filter(
+    (member) => member.id !== project.ownerUserId,
+  )
   async function submit(event: FormEvent) {
     event.preventDefault()
     setBusy(true)
@@ -153,16 +180,14 @@ function ProjectActionDialog({
           targetUserId: Number(target),
         })
       else
-        await updateProject(
-          project.id,
-          action === 'rename'
-            ? { name: name.trim() }
-            : {
-                name: name.trim(),
-                description,
-                tags: tags.split(/[\s,，、]+/u).filter(Boolean),
-              },
-        )
+        await updateOrganizationProjectGovernance(detail.id, project.id, {
+          name: name.trim(),
+          description,
+          tags: tags.split(/[\s,，、]+/u).filter(Boolean),
+          status,
+          healthStatus,
+          healthNote: healthNote.trim(),
+        })
       if (action === 'transfer') setSent(true)
       await onRefresh()
       if (action !== 'transfer') onClose()
@@ -179,7 +204,7 @@ function ProjectActionDialog({
         if (!open && !busy) onClose()
       }}
     >
-      <DialogContent>
+      <DialogContent fixedHeader className="organization-project-edit-dialog">
         <DialogHeader>
           <DialogTitle>{projectTitles[action]}</DialogTitle>
           <DialogDescription>
@@ -188,7 +213,10 @@ function ProjectActionDialog({
               : `在 ${detail.name} 内管理「${project.name}」。`}
           </DialogDescription>
         </DialogHeader>
-        <form className="organization-resource-form" onSubmit={(event) => void submit(event)}>
+        <form
+          className="organization-resource-form"
+          onSubmit={(event) => void submit(event)}
+        >
           {error ? (
             <p role="alert" className="organization-error">
               {error}
@@ -200,7 +228,7 @@ function ProjectActionDialog({
             </p>
           ) : (
             <>
-              {action === 'edit' || action === 'rename' ? (
+              {action === 'edit' ? (
                 <Label>
                   项目名称
                   <Input
@@ -230,6 +258,75 @@ function ProjectActionDialog({
                   </Label>
                 </>
               ) : null}
+              {action === 'edit' ? (
+                <>
+                  <div className="organization-project-edit-status">
+                    <Label>
+                      生命周期状态
+                      <Select
+                        value={status}
+                        onValueChange={(value) => {
+                          if (value) setStatus(value as typeof status)
+                        }}
+                      >
+                        <SelectTrigger aria-label="生命周期状态">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {Object.entries({
+                              active: '进行中',
+                              paused: '暂停',
+                              completed: '已完成',
+                              archived: '已归档',
+                            }).map(([value, label]) => (
+                              <SelectItem key={value} value={value}>
+                                {label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </Label>
+                    <Label>
+                      项目健康度
+                      <Select
+                        value={healthStatus}
+                        onValueChange={(value) => {
+                          if (value)
+                            setHealthStatus(value as typeof healthStatus)
+                        }}
+                      >
+                        <SelectTrigger aria-label="项目健康度">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {Object.entries({
+                              on_track: '正常',
+                              at_risk: '有风险',
+                              off_track: '已失控',
+                            }).map(([value, label]) => (
+                              <SelectItem key={value} value={value}>
+                                {label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </Label>
+                  </div>
+                  <Label>
+                    健康度说明{healthStatus === 'on_track' ? '（可选）' : ''}
+                    <Textarea
+                      maxLength={1000}
+                      required={healthStatus !== 'on_track'}
+                      value={healthNote}
+                      onChange={(event) => setHealthNote(event.target.value)}
+                    />
+                  </Label>
+                </>
+              ) : null}
               {action === 'transfer' ? (
                 <Label>
                   新所有者
@@ -252,7 +349,9 @@ function ProjectActionDialog({
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                  {candidates.length === 0 ? <small>组织内没有其他可接收成员。</small> : null}
+                  {candidates.length === 0 ? (
+                    <small>组织内没有其他可接收成员。</small>
+                  ) : null}
                 </Label>
               ) : null}
               {action === 'delete' ? (
@@ -271,7 +370,12 @@ function ProjectActionDialog({
             </>
           )}
           <DialogFooter>
-            <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={onClose}
+            >
               {sent ? '关闭' : '取消'}
             </Button>
             {!sent ? (
@@ -284,7 +388,8 @@ function ProjectActionDialog({
                     ? confirmation !== project.name
                     : action === 'transfer'
                       ? !target
-                      : !name.trim())
+                      : !name.trim() ||
+                        (healthStatus !== 'on_track' && !healthNote.trim()))
                 }
               >
                 {busy
@@ -303,30 +408,38 @@ function ProjectActionDialog({
   )
 }
 
-type SpaceAction = 'create' | 'edit' | 'rename' | 'members' | 'organization' | 'delete'
+type SpaceAction = 'create' | 'edit' | 'members' | 'transfer' | 'delete'
 const spaceTitles = {
   create: '新建测试空间',
   edit: '编辑测试空间',
-  rename: '重命名测试空间',
   members: '测试空间成员管理',
-  organization: '调整测试空间归属组织',
+  transfer: '测试空间所有权转移',
   delete: '删除测试空间',
 }
 
 export function OrganizationTestSpaces({
+  heading,
   detail,
   onRefresh,
 }: {
+  heading?: ReactNode
   detail: OrganizationDetail
   onRefresh: Refresh
 }) {
-  const [selection, setSelection] = useState<{ id?: number; action: SpaceAction } | null>(null)
+  const [selection, setSelection] = useState<{
+    id?: number
+    action: SpaceAction
+  } | null>(null)
   return (
     <>
       <header>
         <div className="organization-section-heading">
-          <h3>组织测试空间</h3>
-          <span>{detail.testSpaces.length}</span>
+          {heading ?? (
+            <>
+              <h3>组织测试空间</h3>
+              <span>{detail.testSpaces.length}</span>
+            </>
+          )}
         </div>
         {detail.canManageTestSpaces ? (
           <Button onClick={() => setSelection({ action: 'create' })}>
@@ -336,7 +449,10 @@ export function OrganizationTestSpaces({
       </header>
       <div className="organization-list">
         {detail.testSpaces.map((space) => (
-          <div className="organization-resource-row organization-test-space-row" key={space.id}>
+          <div
+            className="organization-resource-row organization-test-space-row"
+            key={space.id}
+          >
             <div>
               <strong>{space.name}</strong>
               <span>
@@ -359,32 +475,38 @@ export function OrganizationTestSpaces({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setSelection({ id: space.id, action: 'members' })}
+                  onClick={() =>
+                    setSelection({ id: space.id, action: 'members' })
+                  }
                 >
                   <Users /> 成员管理
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" aria-label={`管理测试空间 ${space.name}`}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`管理测试空间 ${space.name}`}
+                    >
                       <DotsThree />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuGroup>
                       <DropdownMenuItem
-                        onSelect={() => setSelection({ id: space.id, action: 'rename' })}
+                        onSelect={() =>
+                          setSelection({ id: space.id, action: 'transfer' })
+                        }
                       >
-                        重命名
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onSelect={() => setSelection({ id: space.id, action: 'organization' })}
-                      >
-                        调整归属组织
+                        <UserSwitch />
+                        所有权转移
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         variant="destructive"
-                        onSelect={() => setSelection({ id: space.id, action: 'delete' })}
+                        onSelect={() =>
+                          setSelection({ id: space.id, action: 'delete' })
+                        }
                       >
                         <Trash /> 删除测试空间
                       </DropdownMenuItem>
@@ -429,7 +551,10 @@ function SpaceActionDialog({
   const [settings, setSettings] = useState<TestSpaceSettings | null>(null)
   const [name, setName] = useState('')
   const [version, setVersion] = useState('')
-  const [organization, setOrganization] = useState(String(detail.id))
+  const [target, setTarget] = useState('')
+  const [acknowledged, setAcknowledged] = useState(false)
+  const [sent, setSent] = useState(false)
+  const [removing, setRemoving] = useState<number | null>(null)
   const [username, setUsername] = useState('')
   const [access, setAccess] = useState<'editor' | 'viewer'>('editor')
   const [confirmation, setConfirmation] = useState('')
@@ -452,7 +577,8 @@ function SpaceActionDialog({
         if (current) {
           setName(current.name)
           setVersion(current.versionLabel ?? '')
-        } else if (spaceId) setError('测试空间已移出当前组织，或你已失去管理权限。')
+        } else if (spaceId)
+          setError('测试空间已移出当前组织，或你已失去管理权限。')
       })
       .catch((failure) => {
         if (active) setError(message(failure))
@@ -473,8 +599,8 @@ function SpaceActionDialog({
               ? space.canManageMembers
               : action === 'delete'
                 ? space.canDelete
-                : action === 'organization'
-                  ? space.canChangeOrganization
+                : action === 'transfer'
+                  ? space.canTransferOwnership
                   : space.canManageSettings),
         )
   async function mutate(operation: () => Promise<unknown>, close = false) {
@@ -499,21 +625,29 @@ function SpaceActionDialog({
     event.preventDefault()
     if (!canAct) return
     if (action === 'create')
-      await mutate(() => createTestSpace(name.trim(), version.trim(), detail.id), true)
+      await mutate(
+        () => createTestSpace(name.trim(), version.trim(), detail.id),
+        true,
+      )
     else if (space) {
-      if (action === 'delete') await mutate(() => deleteTestSpace(space.id, confirmation), true)
-      else
+      if (action === 'delete')
+        await mutate(() => deleteTestSpace(space.id, confirmation), true)
+      else if (action === 'transfer') {
+        if (
+          acknowledged &&
+          target &&
+          (await mutate(() =>
+            requestTestSpaceTransfer(space.id, Number(target)),
+          ))
+        )
+          setSent(true)
+      } else
         await mutate(
           () =>
             updateTestSpace(space.id, {
-              name: action === 'organization' ? space.name : name.trim(),
-              versionLabel: action === 'edit' ? version.trim() : space.versionLabel,
-              organizationId:
-                action === 'organization'
-                  ? organization === 'none'
-                    ? undefined
-                    : Number(organization)
-                  : space.organizationId,
+              name: name.trim(),
+              versionLabel: version.trim(),
+              organizationId: space.organizationId,
             }),
           true,
         )
@@ -544,25 +678,56 @@ function SpaceActionDialog({
           <p role="status">正在加载…</p>
         ) : action === 'members' && space ? (
           <>
+            <p>仅管理已加入当前空间的成员，所有者权限不可直接修改。</p>
             <form
               className="organization-resource-member-form"
               onSubmit={async (event) => {
                 event.preventDefault()
-                if (!canAct || !username.trim()) return
-                if (await mutate(() => addTestSpaceMember(space.id, username.trim(), access))) {
-                  setUsername('')
-                  setNotice('成员已加入，无需对方确认。')
-                }
+                if (
+                  canAct &&
+                  username &&
+                  (await mutate(() =>
+                    updateTestSpaceMember(space.id, Number(username), access),
+                  ))
+                )
+                  setNotice('成员权限已保存。')
               }}
             >
               <Label>
-                成员用户名
-                <Input
-                  required
+                空间成员
+                <Select
                   value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  placeholder="输入组织内测试工程师或管理员用户名"
-                />
+                  onValueChange={(value) => {
+                    if (value) {
+                      setUsername(value)
+                      setAccess(
+                        space.members.find((m) => String(m.userId) === value)
+                          ?.accessLevel === 'viewer'
+                          ? 'viewer'
+                          : 'editor',
+                      )
+                      setRemoving(null)
+                    }
+                  }}
+                >
+                  <SelectTrigger aria-label="选择当前空间成员">
+                    <SelectValue placeholder="选择当前空间的成员" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {space.members
+                        .filter(
+                          (m) =>
+                            m.status === 'active' && m.accessLevel !== 'owner',
+                        )
+                        .map((m) => (
+                          <SelectItem key={m.userId} value={String(m.userId)}>
+                            {m.displayName}（{m.username}）
+                          </SelectItem>
+                        ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
               </Label>
               <Label>
                 成员权限
@@ -570,56 +735,97 @@ function SpaceActionDialog({
                   value={access}
                   onChange={setAccess}
                   disabled={busy}
-                  label="新成员权限"
+                  label="成员访问权限"
                 />
               </Label>
-              <Button disabled={busy || !canAct || !username.trim()} type="submit">
-                <Plus /> 直接添加
+              <Button disabled={busy || !canAct || !username} type="submit">
+                保存权限
               </Button>
             </form>
             {notice ? <p role="status">{notice}</p> : null}
             <div className="organization-list">
-              {space.members.map((member) => (
-                <div key={member.userId} className="organization-resource-row">
-                  <div>
-                    <strong>{member.displayName}</strong>
-                    <span>
-                      {member.username} ·{' '}
-                      {member.status === 'pending'
-                        ? '待接受'
-                        : member.status === 'active'
-                          ? '已加入'
-                          : '已拒绝'}
-                    </span>
-                  </div>
-                  {member.accessLevel === 'owner' ? (
-                    <span>所有者</span>
-                  ) : (
-                    <div className="organization-resource-actions">
-                      <AccessSelect
-                        value={member.accessLevel}
-                        label={`${member.displayName}的空间权限`}
-                        disabled={busy || !canAct}
-                        onChange={(value) =>
-                          void mutate(() => updateTestSpaceMember(space.id, member.userId, value))
-                        }
-                      />
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        disabled={busy || !canAct}
-                        aria-label={`移除成员 ${member.displayName}`}
-                        onClick={() =>
-                          void mutate(() => removeTestSpaceMember(space.id, member.userId))
-                        }
-                      >
-                        <Trash />
-                      </Button>
+              {space.members
+                .filter((member) => member.status === 'active')
+                .map((member) => (
+                  <div
+                    key={member.userId}
+                    className="organization-resource-row"
+                  >
+                    <div>
+                      <strong>{member.displayName}</strong>
+                      <span>
+                        {member.username} ·{' '}
+                        {member.status === 'pending'
+                          ? '待接受'
+                          : member.status === 'active'
+                            ? '已加入'
+                            : '已拒绝'}
+                      </span>
                     </div>
-                  )}
-                </div>
-              ))}
+                    {member.accessLevel === 'owner' ? (
+                      <span>所有者</span>
+                    ) : (
+                      <div className="organization-resource-actions">
+                        <span>
+                          {member.accessLevel === 'editor' ? '可编辑' : '只读'}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy || !canAct}
+                          onClick={() => {
+                            setUsername(String(member.userId))
+                            setAccess(
+                              member.accessLevel === 'viewer'
+                                ? 'viewer'
+                                : 'editor',
+                            )
+                          }}
+                        >
+                          管理
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          disabled={busy || !canAct}
+                          aria-label={`移除成员 ${member.displayName}`}
+                          onClick={() => setRemoving(member.userId)}
+                        >
+                          <Trash />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
             </div>
+            {removing ? (
+              <div role="alert">
+                <p>确认移除此成员？移除后将无法访问当前空间。</p>
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => setRemoving(null)}
+                >
+                  取消
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={async () => {
+                    if (
+                      await mutate(() =>
+                        removeTestSpaceMember(space.id, removing),
+                      )
+                    ) {
+                      setRemoving(null)
+                      setUsername('')
+                    }
+                  }}
+                >
+                  确认移除
+                </Button>
+              </div>
+            ) : null}
             <DialogFooter>
               <Button variant="outline" disabled={busy} onClick={onClose}>
                 关闭
@@ -627,11 +833,14 @@ function SpaceActionDialog({
             </DialogFooter>
           </>
         ) : (
-          <form className="organization-resource-form" onSubmit={(event) => void submit(event)}>
+          <form
+            className="organization-resource-form"
+            onSubmit={(event) => void submit(event)}
+          >
             {!canAct && !error ? (
               <p role="alert">你已失去此操作的管理权限，请关闭后刷新列表。</p>
             ) : null}
-            {action === 'create' || action === 'edit' || action === 'rename' ? (
+            {action === 'create' || action === 'edit' ? (
               <Label>
                 空间名称
                 <Input
@@ -654,41 +863,64 @@ function SpaceActionDialog({
                 <small>同一组织内版本号不能重复。</small>
               </Label>
             ) : null}
-            {action === 'organization' ? (
-              <>
-                <Label>
-                  归属组织
-                  <Select
-                    value={organization}
-                    onValueChange={(value) => {
-                      if (value) setOrganization(value)
-                    }}
-                  >
-                    <SelectTrigger aria-label="测试空间归属组织">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="none">不归属组织</SelectItem>
-                        {settings?.organizations
-                          .filter((item) => item.canManageResources || item.id === detail.id)
-                          .map((item) => (
-                            <SelectItem key={item.id} value={String(item.id)}>
-                              {item.name}
-                            </SelectItem>
-                          ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Label>
-                <p>
-                  移入其他组织前，所有者及全部已加入、待接受成员都须加入目标组织。移出后，此空间会从当前组织列表移除。
+            {action === 'transfer' ? (
+              sent ? (
+                <p role="status">
+                  转移申请已发送，请接收人在测试工作台的通知中心确认，申请 72
+                  小时内有效。
                 </p>
-              </>
+              ) : (
+                <>
+                  <Label>
+                    新所有者
+                    <Select
+                      value={target}
+                      onValueChange={(value) => {
+                        if (value) setTarget(value)
+                      }}
+                    >
+                      <SelectTrigger aria-label="空间新所有者">
+                        <SelectValue placeholder="选择当前空间成员" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {space?.members
+                            .filter(
+                              (m) =>
+                                m.status === 'active' &&
+                                m.userId !== space.ownerUserId,
+                            )
+                            .map((m) => (
+                              <SelectItem
+                                key={m.userId}
+                                value={String(m.userId)}
+                              >
+                                {m.displayName}（{m.username}）
+                              </SelectItem>
+                            ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Label>
+                  <p>
+                    接收人确认后生效，原所有者保留可编辑权限，组织归属与空间数据不变。
+                  </p>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={acknowledged}
+                      onChange={(e) => setAcknowledged(e.target.checked)}
+                    />{' '}
+                    我已确认接收人及所有权变更影响
+                  </label>
+                </>
+              )
             ) : null}
             {action === 'delete' ? (
               <>
-                <p>将永久删除空间内的测试对象、用例、计划、Bug 和评论，无法撤销。</p>
+                <p>
+                  将永久删除空间内的测试对象、用例、计划、Bug 和评论，无法撤销。
+                </p>
                 <Label>
                   输入空间名称确认
                   <Input
@@ -700,8 +932,13 @@ function SpaceActionDialog({
               </>
             ) : null}
             <DialogFooter>
-              <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
-                取消
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={onClose}
+              >
+                {sent ? '关闭' : '取消'}
               </Button>
               <Button
                 type="submit"
@@ -711,19 +948,24 @@ function SpaceActionDialog({
                   !canAct ||
                   (action === 'delete'
                     ? confirmation !== space?.name
-                    : action === 'organization'
-                      ? organization === String(detail.id)
+                    : action === 'transfer'
+                      ? !target || !acknowledged || sent
                       : !name.trim() ||
-                        ((action === 'create' || action === 'edit') && !version.trim()))
+                        ((action === 'create' || action === 'edit') &&
+                          !version.trim()))
                 }
               >
                 {busy
                   ? '处理中…'
                   : action === 'create'
                     ? '创建测试空间'
-                    : action === 'delete'
-                      ? '确认删除'
-                      : '保存修改'}
+                    : action === 'transfer'
+                      ? sent
+                        ? '已发送'
+                        : '发送转移申请'
+                      : action === 'delete'
+                        ? '确认删除'
+                        : '保存修改'}
               </Button>
             </DialogFooter>
           </form>

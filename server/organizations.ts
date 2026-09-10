@@ -1,9 +1,10 @@
+import { shareOrganizationTestEnvironments } from './test-environment-sharing.ts'
 import { lockTransferProject, canCompleteProjectTransfer } from './project-transfer.ts'
 import crypto from 'node:crypto'
 import type express from 'express'
 import { Router } from 'express'
 import type { PoolClient } from 'pg'
-import { blindIndex, decryptJson, decryptText, encryptText } from './crypto.ts'
+import { blindIndex, decryptJson, decryptText, encryptJson, encryptText } from './crypto.ts'
 import { pool, query } from './db.ts'
 import {
   canManageOrganization,
@@ -1905,13 +1906,6 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     response.json(await getOrganizationDetail(organizationId!, session.userId))
   }))
 
-  function parseTestEnvironmentSpaceIds(value: unknown) {
-    if (value === undefined) return []
-    if (!Array.isArray(value) || value.length > 1_000) return null
-    const ids = Array.from(new Set(value.map(positiveId)))
-    return ids.every((id): id is number => id !== null) ? ids : null
-  }
-
   async function respondWithOrganizationDetail(
     response: express.Response,
     organizationId: number,
@@ -1933,26 +1927,15 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     if (!(await requireTestEnvironmentManager(response, organizationId, session.userId))) return
     const name = normalizeTestEnvironmentName(request.body?.name)
     const accessUrl = normalizeTestEnvironmentAccessUrl(request.body?.accessUrl)
-    const testSpaceIds = parseTestEnvironmentSpaceIds(request.body?.testSpaceIds)
-    if (!name || !accessUrl || !testSpaceIds) {
-      response.status(400).json({ error: 'Environment name, access URL, and spaces must be valid' })
+    if (!name || !accessUrl) {
+      response.status(400).json({ error: 'Environment name and access URL must be valid' })
       return
     }
     try {
       await transaction(async (client) => {
         const organization = await lockManagedOrganization(client, organizationId!, session.userId)
         if (!organization) throw Object.assign(new Error('Organization access changed, reload and try again'), { status: 409 })
-        if (testSpaceIds.length > 0) {
-          const spaces = await client.query<{ id: string }>(
-            `select id from test_spaces
-             where organization_id = $1 and id = any($2::bigint[])
-             order by id for update`,
-            [organizationId, testSpaceIds],
-          )
-          if (spaces.rows.length !== testSpaceIds.length) {
-            throw Object.assign(new Error('All assigned test spaces must belong to this organization'), { status: 409 })
-          }
-        }
+
         const inserted = await client.query<{ id: string }>(
           `insert into test_environments
              (organization_id, name, name_lookup, access_url, created_by_user_id)
@@ -1961,13 +1944,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           [organizationId, encryptText(name), blindIndex(name), encryptText(accessUrl), session.userId],
         )
         const environmentId = Number(inserted.rows[0].id)
-        for (const spaceId of testSpaceIds) {
-          await client.query(
-            `insert into test_environment_spaces (test_environment_id, test_space_id)
-             values ($1, $2)`,
-            [environmentId, spaceId],
-          )
-        }
+        await shareOrganizationTestEnvironments(client, organizationId!)
         await writeAudit(
           client,
           organizationId!,
@@ -1975,7 +1952,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           'test_environment.created',
           'test_environment',
           String(environmentId),
-          JSON.stringify({ name, accessUrl, testSpaceIds }),
+          JSON.stringify({ name, accessUrl, sharedWithOrganization: true }),
         )
       })
     } catch (error) {
@@ -2000,9 +1977,8 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     if (!(await requireTestEnvironmentManager(response, organizationId, session.userId)) || !environmentId) return
     const name = normalizeTestEnvironmentName(request.body?.name)
     const accessUrl = normalizeTestEnvironmentAccessUrl(request.body?.accessUrl)
-    const testSpaceIds = parseTestEnvironmentSpaceIds(request.body?.testSpaceIds)
-    if (!name || !accessUrl || !testSpaceIds) {
-      response.status(400).json({ error: 'Environment name, access URL, and spaces must be valid' })
+    if (!name || !accessUrl) {
+      response.status(400).json({ error: 'Environment name and access URL must be valid' })
       return
     }
     try {
@@ -2014,44 +1990,15 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           [environmentId, organizationId],
         )
         if (!existing.rows[0]) throw Object.assign(new Error('Test environment not found'), { status: 404 })
-        if (testSpaceIds.length > 0) {
-          const spaces = await client.query<{ id: string }>(
-            `select id from test_spaces
-             where organization_id = $1 and id = any($2::bigint[])
-             order by id for update`,
-            [organizationId, testSpaceIds],
-          )
-          if (spaces.rows.length !== testSpaceIds.length) {
-            throw Object.assign(new Error('All assigned test spaces must belong to this organization'), { status: 409 })
-          }
-        }
+
         await client.query(
           `update test_environments
            set name = $1, name_lookup = $2, access_url = $3, updated_at = now()
            where id = $4 and organization_id = $5`,
           [encryptText(name), blindIndex(name), encryptText(accessUrl), environmentId, organizationId],
         )
-        if (testSpaceIds.length > 0) {
-          await client.query(
-            `delete from test_environment_spaces
-             where test_environment_id = $1
-               and not (test_space_id = any($2::bigint[]))`,
-            [environmentId, testSpaceIds],
-          )
-        } else {
-          await client.query(
-            'delete from test_environment_spaces where test_environment_id = $1',
-            [environmentId],
-          )
-        }
-        for (const spaceId of testSpaceIds) {
-          await client.query(
-            `insert into test_environment_spaces (test_environment_id, test_space_id)
-             values ($1, $2)
-             on conflict (test_environment_id, test_space_id) do nothing`,
-            [environmentId, spaceId],
-          )
-        }
+
+        await shareOrganizationTestEnvironments(client, organizationId!)
         await writeAudit(
           client,
           organizationId!,
@@ -2059,7 +2006,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           'test_environment.updated',
           'test_environment',
           String(environmentId),
-          JSON.stringify({ name, accessUrl, testSpaceIds }),
+          JSON.stringify({ name, accessUrl, sharedWithOrganization: true }),
         )
       })
     } catch (error) {
@@ -2364,6 +2311,19 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     const projectId = positiveId(request.params.projectId)
     if (!(await requireOrganizationProjectManager(response, organizationId, session.userId)) || !projectId) return
 
+    const hasName = Object.hasOwn(request.body ?? {}, 'name')
+    const hasDescription = Object.hasOwn(request.body ?? {}, 'description')
+    const hasTags = Object.hasOwn(request.body ?? {}, 'tags')
+    const name = hasName ? boundedText(request.body.name, 80) : null
+    const description = hasDescription ? boundedText(request.body.description, 20_000) : null
+    const tags = hasTags && Array.isArray(request.body.tags)
+      && request.body.tags.length <= 30
+      && request.body.tags.every((tag: unknown) => typeof tag === 'string' && tag.trim().length > 0 && tag.length <= 80)
+      ? [...new Set((request.body.tags as string[]).map(tag => tag.trim()))] : null
+    if ((hasName && !name) || (hasDescription && description === null) || (hasTags && !tags)) {
+      response.status(400).json({ error: 'Valid project name, description and tags are required' })
+      return
+    }
     const hasStatus = Object.hasOwn(request.body ?? {}, 'status')
     const hasHealthStatus = Object.hasOwn(request.body ?? {}, 'healthStatus')
     const hasHealthNote = Object.hasOwn(request.body ?? {}, 'healthNote')
@@ -2373,7 +2333,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       : null
     const healthNote = hasHealthNote ? boundedText(request.body.healthNote, 1_000) : null
     if (
-      (!hasStatus && !hasHealthStatus && !hasHealthNote) ||
+      (!hasStatus && !hasHealthStatus && !hasHealthNote && !hasName && !hasDescription && !hasTags) ||
       (hasStatus && !status) ||
       (hasHealthStatus && !healthStatus) ||
       (hasHealthNote && healthNote === null)
@@ -2385,6 +2345,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     const client = await pool.connect()
     try {
       await client.query('begin')
+      await client.query('select id from organizations where id = $1 for share', [organizationId])
       await lockProjectMutation(client, projectId)
       const project = await lockGovernedProject(client, organizationId!, projectId, session.userId)
       if (!project) {
@@ -2403,6 +2364,10 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
 
       const updates: string[] = []
       const values: unknown[] = []
+      if (hasName) { values.push(encryptText(name!)); updates.push(`name = $${values.length}`) }
+      if (hasDescription) { values.push(description ? encryptText(description) : null); updates.push(`description_encrypted = $${values.length}`) }
+      if (hasTags) { values.push(encryptJson(tags)); updates.push(`tags_encrypted = $${values.length}`, "tags = '{}'" ) }
+
       if (hasStatus) {
         values.push(status)
         updates.push(`status = $${values.length}`)
@@ -2784,6 +2749,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     const client = await pool.connect()
     try {
       await client.query('begin')
+      await client.query('select id from organizations where id = $1 for share', [organizationId])
       const ownedSpace = await client.query<{ id: string }>(
         `select id from test_spaces
          where id = $1 and owner_user_id = $2 and organization_id is null
@@ -2833,6 +2799,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         [spaceId],
       )
       await writeAudit(client, organizationId!, session.userId, 'test_space.attached', 'test_space', String(spaceId))
+      await shareOrganizationTestEnvironments(client, organizationId!, spaceId)
       await client.query('commit')
     } catch (error) {
       await client.query('rollback')

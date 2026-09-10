@@ -21,6 +21,7 @@ export type TestSpace = {
   canManageMembers?: boolean
   canDelete?: boolean
   canChangeOrganization?: boolean
+  canTransferOwnership?: boolean
   accessLevel: 'owner' | 'editor' | 'viewer'
   createdAt: string
   id: number
@@ -46,6 +47,7 @@ export type ManagedTestSpace = {
   canManageMembers?: boolean
   canDelete?: boolean
   canChangeOrganization?: boolean
+  canTransferOwnership?: boolean
   accessLevel: 'owner' | 'editor' | 'viewer'
   createdAt: string
   id: number
@@ -71,7 +73,10 @@ export type TestSpaceInvitation = {
   spaceName: string
 }
 
+export type TestSpaceOwnershipTransfer = { id:number; spaceId:number; spaceName:string; requestedByName:string; createdAt:string; expiresAt:string }
+
 export type TestSpaceSettings = {
+  ownershipTransfers?: TestSpaceOwnershipTransfer[]
   invitations: TestSpaceInvitation[]
   organizations: TestSpaceOrganizationOption[]
   spaces: ManagedTestSpace[]

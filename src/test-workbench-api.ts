@@ -508,3 +508,6 @@ export function deleteAssignedTestBugComment(organizationId: OrganizationContext
     method: 'DELETE',
   })
 }
+
+export function requestTestSpaceTransfer(spaceId:number,targetUserId:number){return request<{transferId:number}>(`/api/test-spaces/${spaceId}/transfer`,{method:'POST',body:JSON.stringify({targetUserId})})}
+export function respondTestSpaceTransfer(transferId:number,action:'accept'|'decline'){return request<{settings:TestSpaceSettings;workbench:TestWorkbenchData}>(`/api/test-space-transfers/${transferId}/respond`,{method:'POST',body:JSON.stringify({action})})}

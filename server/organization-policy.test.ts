@@ -238,7 +238,7 @@ test('organization package market policy replaces the legacy association model',
   assert.match(organizationWorkbenchSource, /OrganizationPackageMarketPanel/u)
 })
 
-test('organization test-environment routes validate manager access, organization spaces, and transactions', () => {
+test('organization test-environment routes validate manager access and derive shared environments in transactions', () => {
   const routeStart = organizationsSource.indexOf("router.post('/organizations/:organizationId/test-environments'")
   const routeEnd = organizationsSource.indexOf("router.post('/organizations/:organizationId/projects/:projectId'", routeStart)
   const routeSource = organizationsSource.slice(routeStart, routeEnd)
@@ -247,12 +247,11 @@ test('organization test-environment routes validate manager access, organization
   assert.match(routeSource, /requireTestEnvironmentManager/u)
   assert.match(routeSource, /normalizeTestEnvironmentName/u)
   assert.match(routeSource, /normalizeTestEnvironmentAccessUrl/u)
-  assert.match(routeSource, /organization_id = \$1 and id = any\(\$2::bigint\[\]\)/u)
+  assert.match(routeSource, /shareOrganizationTestEnvironments\(client, organizationId!/u)
   assert.match(routeSource, /await transaction\(async \(client\)/u)
   assert.match(routeSource, /encryptText\(name\)/u)
   assert.match(routeSource, /encryptText\(accessUrl\)/u)
-  assert.match(routeSource, /test_environment_spaces/u)
-  assert.match(routeSource, /on conflict \(test_environment_id, test_space_id\) do nothing/u)
+  assert.doesNotMatch(routeSource, /request.body\?\.testSpaceIds/u)
   assert.match(organizationsSource, /m\.access_role in \('owner', 'admin'\)/u)
 })
 

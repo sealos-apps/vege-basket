@@ -1,3 +1,5 @@
+import { OrganizationTestEnvironmentPanel } from './organization-test-environments'
+import type { OrganizationDetail } from '../organization-types'
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type DragEvent, type FormEvent, type ReactNode } from 'react'
 import {
   ArrowCounterClockwise,
@@ -82,6 +84,7 @@ import {
   type BugFilterJoin,
 } from './bug-filter'
 import {
+  fetchOrganization,
   fetchPackageMarketDetail,
   fetchPackageMarketCiVersions,
   fetchPackageMarketReleaseVersions,
@@ -97,6 +100,7 @@ import {
 import {
   addAssignedTestBugComment,
   addTestBugComment,
+  respondTestSpaceTransfer,
   acceptTestSpaceInvitation,
   acceptTestSpaceInviteLink,
   createTestBug,
@@ -160,6 +164,7 @@ import type {
   TestSpaceDataImportResult,
   TestSpaceImportCategory,
   TestSpaceImportSource,
+  TestSpaceOwnershipTransfer,
   TestSpaceInvitation,
   TestSpaceSettings,
   TestSubject,
@@ -535,6 +540,10 @@ export function TestWorkbench({
   const [bugFilterConditions, setBugFilterConditions] = useState<BugFilterCondition[]>([])
   const [bugSearchQuery, setBugSearchQuery] = useState('')
   const [spaceSwitcherOpen, setSpaceSwitcherOpen] = useState(false)
+  const [environmentManagerOpen,setEnvironmentManagerOpen]=useState(false)
+  const [environmentDetail,setEnvironmentDetail]=useState<OrganizationDetail|null>(null)
+  const [environmentError,setEnvironmentError]=useState('')
+  const [environmentBusy,setEnvironmentBusy]=useState(false)
   const [spaceAdministrationOpen, setSpaceAdministrationOpen] = useState(false)
   const [spaceCreateOpen, setSpaceCreateOpen] = useState(false)
   const [spaceSettings, setSpaceSettings] = useState<TestSpaceSettings>(emptyTestSpaceSettings)
@@ -863,7 +872,7 @@ export function TestWorkbench({
     !readNotificationKeySet.has(getTestWorkbenchNotificationKey(notification)),
   ).length
   const notificationUnreadCount =
-    spaceSettings.invitations.length +
+    (spaceSettings.ownershipTransfers?.length ?? 0) + spaceSettings.invitations.length +
     returnedBugUnreadCount +
     rejectedBugUnreadCount +
     bugCommentUnreadCount +
@@ -1003,6 +1012,20 @@ export function TestWorkbench({
     }
   }
 
+  async function handleOwnershipTransfer(id:number,action:'accept'|'decline'){
+    setBusy(true);setError('')
+    try{const result=await respondTestSpaceTransfer(id,action);setSpaceSettings(result.settings);setData(result.workbench)}
+    catch(error){setError(error instanceof Error?error.message:'转移处理失败。')}
+    finally{setBusy(false)}
+  }
+  async function openEnvironmentManager(){
+    const organizationId=data.spaces.find(s=>s.id===spaceId)?.organizationId
+    if(!organizationId)return
+    setEnvironmentManagerOpen(true);setEnvironmentDetail(null);setEnvironmentError('');setEnvironmentBusy(true)
+    try{setEnvironmentDetail(await fetchOrganization(organizationId))}
+    catch(error){setEnvironmentError(error instanceof Error?error.message:'环境加载失败。')}
+    finally{setEnvironmentBusy(false)}
+  }
   async function handleAcceptInvitation(invitationSpaceId: number) {
     setBusy(true)
     setError('')
@@ -1133,6 +1156,7 @@ export function TestWorkbench({
                 <GearSix aria-hidden />
                 管理测试空间
               </DropdownMenuItem>
+              {data.spaces.find(s=>s.id===spaceId)?.organizationId ? <DropdownMenuItem onSelect={()=>{setSpaceSwitcherOpen(false);void openEnvironmentManager()}}><GearSix aria-hidden/>管理测试环境</DropdownMenuItem>:null}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -1229,6 +1253,8 @@ export function TestWorkbench({
                 busy={busy}
                 data={data}
                 bugCommentNotifications={bugCommentNotifications}
+                ownershipTransfers={spaceSettings.ownershipTransfers ?? []}
+                onRespondOwnershipTransfer={(id,action)=>void handleOwnershipTransfer(id,action)}
                 invitations={spaceSettings.invitations}
                 planAssignmentNotifications={planAssignmentNotifications}
                 readNotificationKeys={readNotificationKeySet}
@@ -1390,6 +1416,12 @@ export function TestWorkbench({
           setBugFilterJoin(next.join)
         }}
       />
+      <Dialog open={environmentManagerOpen} onOpenChange={open=>{if(!environmentBusy)setEnvironmentManagerOpen(open)}}><DialogContent className="organization-resource-dialog" fixedHeader><DialogHeader><DialogTitle>管理测试环境</DialogTitle><DialogDescription>当前组织统一配置，所有测试空间共享。</DialogDescription></DialogHeader>
+        {environmentError?<p role="alert">{environmentError}</p>:null}
+        {!environmentDetail&&environmentBusy?<p role="status">正在加载…</p>:null}
+        {environmentDetail && !environmentDetail.canManageTestEnvironments ? <div className="organization-list">{data.testEnvironments.filter(environment=>environment.testSpaceIds.some(id=>data.spaces.some(space=>space.id===id&&space.organizationId===environmentDetail.id))).map(environment=><div key={environment.id} className="organization-resource-row"><strong>{environment.name}</strong><a href={environment.accessUrl} target="_blank" rel="noreferrer">{environment.accessUrl}</a></div>)}</div>:null}
+        {environmentDetail?.canManageTestEnvironments?<OrganizationTestEnvironmentPanel busy={environmentBusy} detail={environmentDetail} onMutate={async operation=>{setEnvironmentBusy(true);setEnvironmentError('');try{setEnvironmentDetail(await operation());await refreshWorkbench();return true}catch(error){setEnvironmentError(error instanceof Error?error.message:'环境保存失败。');return false}finally{setEnvironmentBusy(false)}}}/>:null}
+      </DialogContent></Dialog>
       <TestSpaceCreateDialog
         busy={busy}
         organizations={spaceSettings.organizations}
@@ -1613,6 +1645,8 @@ function NotificationsView({
   bugCommentNotifications,
   busy,
   data,
+  ownershipTransfers,
+  onRespondOwnershipTransfer,
   invitations,
   onAcceptInvitation,
   onDeclineInvitation,
@@ -1628,6 +1662,8 @@ function NotificationsView({
   bugCommentNotifications: BugCommentNotification[]
   busy: boolean
   data: TestWorkbenchData
+  ownershipTransfers: TestSpaceOwnershipTransfer[]
+  onRespondOwnershipTransfer: (id:number,action:'accept'|'decline')=>void
   invitations: TestSpaceInvitation[]
   onAcceptInvitation: (invitation: TestSpaceInvitation) => void
   onDeclineInvitation: (invitation: TestSpaceInvitation) => void
@@ -1641,6 +1677,7 @@ function NotificationsView({
   seenBugCommentIds: Set<number>
 }) {
   const notificationItems = [
+    ...ownershipTransfers.map(transfer=>({createdAt:transfer.createdAt,transfer,key:`ownership-transfer-${transfer.id}`,kind:'ownership_transfer' as const,sortAt:Date.parse(transfer.createdAt)})),
     ...invitations.map((invitation) => ({
       createdAt: invitation.createdAt,
       invitation,
@@ -1701,7 +1738,7 @@ function NotificationsView({
     return rightTime - leftTime
   })
   const unreadCount = notificationItems.filter((item) => {
-    if (item.kind === 'invitation') return true
+    if (item.kind === 'invitation' || item.kind === 'ownership_transfer') return true
     if (item.kind === 'bug_comment') return !seenBugCommentIds.has(item.comment.id)
     return !readNotificationKeys.has(item.notificationKey)
   }).length
@@ -1721,7 +1758,7 @@ function NotificationsView({
           <header>
             <div>
               <strong>待处理通知</strong>
-              <small>测试空间邀请、测试计划指派、Bug 返回和协作回复会按时间倒序排列。</small>
+              <small>测试空间邀请、所有权转移、测试计划指派、Bug 返回和协作回复按时间排列。</small>
             </div>
             <div className="test-notification-counts" aria-label="通知已读状态统计">
               {unreadCount > 0 ? <Badge className="test-notification-unread-badge">{unreadCount} 未读</Badge> : null}
@@ -1730,6 +1767,7 @@ function NotificationsView({
           </header>
           <div className="test-notification-list">
             {notificationItems.map((item) => {
+              if (item.kind === 'ownership_transfer') return <article key={item.key} className="test-notification-card unread"><div className="test-notification-copy"><span className="test-notification-kind unread">所有权转移</span><div><strong>{item.transfer.spaceName}</strong><p>{item.transfer.requestedByName} 申请将测试空间所有权转移给你。接受后你将成为所有者，原所有者保留可编辑权限。</p><small>有效期至 {formatTimestamp(item.transfer.expiresAt)}</small></div></div><div><Button variant="outline" disabled={busy} onClick={()=>onRespondOwnershipTransfer(item.transfer.id,'decline')}>拒绝</Button><Button disabled={busy} onClick={()=>onRespondOwnershipTransfer(item.transfer.id,'accept')}>接受所有权</Button></div></article>
               if (item.kind === 'invitation') {
                 const invitation = item.invitation
                 return (

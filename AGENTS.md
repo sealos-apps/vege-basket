@@ -32,7 +32,12 @@ historical product context; current code and these operational docs take precede
   `owner` or `admin` membership, it may govern attached project lifecycle status, health,
   and milestones, and receives organization-scoped read access to projects, test spaces,
   and Bugs. It may also manage attached project settings, members, deletion and ownership
-  transfer, and test-space settings, members, deletion and organization assignment.
+  transfer, and test-space settings, members, deletion, ownership transfer and organization assignment.
+  Organization test-space UI has spaces/environments child tabs, with environments configured once
+  per organization. Derive environment bindings for all organization spaces; bulk sync requires an
+  exclusive organization lock, while a space mutation synchronizes only its locked space. Space
+  ownership acceptance rechecks initiator authority, unchanged owner/organization, active recipient
+  membership and tester/admin role before atomically changing owner and member access.
   Keep these as explicit server-generated management capabilities, never synthetic owner
   access. Organization/resource mutations lock organizations in numeric order before
   project advisory locks and resource rows, and revalidate the organization after locking.

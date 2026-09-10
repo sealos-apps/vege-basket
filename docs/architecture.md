@@ -129,12 +129,25 @@ numeric order. Client DTOs expose separate management capabilities; they never u
 `accessRole`, `accessLevel` or general content write access.
 
 Organization management exposes complete project and test-space administration in its
-Projects and Test Spaces tabs, including creation, editing, renaming, members, deletion,
-project ownership transfer and space organization assignment. Test-space administration
+Projects and Test Spaces tabs. Project editing saves name, description, tags, lifecycle and
+health in one transaction. Test Spaces contains Organization Test Spaces and Test Environments
+child tabs; environment configuration is shared once per organization. Space member management
+selects existing active members; the space menu offers ownership transfer and deletion. Test-space administration
 accepts the assigned organization-admin role without changing the active persona; the
 workbench, import, case, plan and Bug routes still require their original active persona.
 The role check only admits the request: transactional resource authorization still decides
 whether the caller may manage the particular space.
+
+Test-space ownership transfers use `test_space_transfer_requests`, with separate initiator,
+previous owner and recipient IDs. Acceptance locks the organization and space before the request,
+rechecks authority and membership, then changes owner and member access atomically. Requests
+expire after 72 hours and are visible only to the recipient through test-space settings/notifications.
+
+Organization environment assignments are derived for all spaces in that organization. Space
+mutations synchronize only their locked space; bulk environment updates hold the organization
+exclusive lock. This prevents a concurrent move from restoring an old organization's binding.
+The composite Bug foreign key remains authoritative; removing a binding clears the live environment
+ID while retaining the encrypted snapshot. Startup backfill locks organizations in numeric order.
 
 Project transfers record `requested_by_user_id` separately from `previous_owner_user_id`.
 The recipient still accepts or declines within 72 hours. Acceptance rechecks the actual

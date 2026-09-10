@@ -338,3 +338,14 @@ encrypted record, and the workflow that triggered rollback.
 - Unexpected users can complete Feishu OAuth: narrow the company custom application's
   availability scope before re-enabling sign-in; Veges does not maintain a second tenant
   or email-domain allowlist.
+
+## Shared test environments and test-space transfer rollout
+
+The forward-only migration `server/migrations/20260910_test_space_transfer_shared_environments.sql`
+is mirrored by normal startup schema application. It creates ownership requests and expands
+existing environment assignments to all spaces of their organization, preserving the Bug snapshot
+and composite foreign key. Back up the authorized development database before startup. Existing
+restricted assignments become organization-wide intentionally; old clients cannot restrict them
+through `testSpaceIds`. Startup backfill takes organization locks, so perform production rollout
+only in an explicitly approved maintenance window. No separate manual migration is needed after
+successful normal startup. Application rollback does not undo expanded assignments.

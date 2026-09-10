@@ -276,8 +276,8 @@ must remain bound to the authorized project ID.
   allowed only when every pending or active space member, including the owner, already has
   active membership in the target organization. An administrator must manage both source
   and target organizations; the owner's existing assignment permissions remain available.
-  Moving to no organization retains members and data. Changing organization removes
-  environment assignments and revokes old invite links; a manager without remaining access
+  Moving to no organization retains members and data. Changing organization replaces
+  environment assignments with the target organization’s shared configuration and revokes old invite links; a manager without remaining access
   loses visibility immediately.
 - Test-space access: `owner`, `editor`, `viewer`.
 - Any account with the active tester role may create a test space and becomes its owner.
@@ -297,9 +297,10 @@ must remain bound to the authorized project ID.
   the version-only route; neither permission grants broader settings access. Bug version edits
   use a dropdown of existing versions from the current organization.
 - Test environments are organization resources with an encrypted name and absolute HTTP(S)
-  access URL. They can be assigned to multiple test spaces in the same organization. Only
+  access URL. They are shared automatically by every current and future test space in the same organization. Only
   an account with `organization_admin` plus active organization `owner` or `admin` access
-  may create, edit, delete, or change assignments. A Bug accepts only an environment assigned
+  may create, edit or delete them. `testSpaceIds` in responses describes derived bindings; legacy
+  request `testSpaceIds` does not restrict sharing. A Bug accepts only an environment assigned
   to its own space, stores the current name/URL as its encrypted legacy-compatible snapshot,
   and retains that snapshot when the configuration is later removed.
 - Test-case status: `draft`, `active`, `archived` remains accepted for compatibility,
@@ -574,3 +575,12 @@ Rolling back application code does not undo completed transfers or member change
 running an older version, revoke pending administrator-initiated transfers in an authorized
 maintenance window: old code interprets the initiator as the previous owner. Keep the added
 column and the complete encryption key ring.
+
+### Organization resource editing and test-space ownership
+
+`PATCH /api/organizations/:organizationId/projects/:projectId/governance` accepts optional
+`name`, `description`, `tags` together with `status`, `healthStatus`, `healthNote`, atomically.
+`POST /api/test-spaces/:spaceId/transfer` accepts `{ targetUserId }` and returns `{ transferId }`.
+`POST /api/test-space-transfers/:transferId/respond` accepts `{ action: 'accept' | 'decline' }`
+and returns `{ settings, workbench }`. `GET /api/test-spaces/settings` includes recipient-only
+`ownershipTransfers`; managed space DTOs expose `canTransferOwnership` separately from access level.
