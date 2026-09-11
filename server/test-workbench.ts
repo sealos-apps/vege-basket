@@ -4,6 +4,7 @@ import express, { Router } from 'express'
 import type { PoolClient } from 'pg'
 import { blindIndex, decryptJson, decryptText, encryptJson, encryptText } from './crypto.ts'
 import { pool, query } from './db.ts'
+import { bugCaseDirectoryJoinSql, serializeBugCaseDirectory, type BugCaseDirectoryRow } from './bug-case-directory.ts'
 import { getDepartedUserIds } from './user-lifecycle.ts'
 import {
   managedOrganizationReadScopeSql,
@@ -991,7 +992,9 @@ async function importTestSpaceData(
         [options.targetTestCaseId, targetSpaceId],
       )).rows[0]
       : undefined
-    if (options.targetTestCaseId && !targetCase) throw importFailure('目标用例不存在或不属于目标测试空间', 400)
+    if (sources.some((source) => source.categories.includes('bugs')) && !targetCase) {
+      throw importFailure('目标用例不存在或不属于目标测试空间', 400)
+    }
     for (const source of sources) {
       const sourceSpace = spacesById.get(source.spaceId)
       if (!sourceSpace) {
@@ -999,6 +1002,9 @@ async function importTestSpaceData(
       }
       if (!sourceSpace.organization_id || sourceSpace.organization_id !== targetSpace.organization_id) {
         throw importFailure('Bug 只能迁移到同一归属组织的测试空间', 400)
+      }
+      if (options.allowBugCreatorTransfer && !(await getDirectSpaceAccess(source.spaceId, userId, client))) {
+        throw importFailure('来源测试空间不存在', 404)
       }
       const sourceBug = options.allowBugCreatorTransfer && source.categories.length === 1 && source.categories[0] === 'bugs'
         ? await client.query<{ reporter_user_id: string | null }>(
@@ -1526,8 +1532,8 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
   const scopePlanCases = scope?.spaceId && scope?.subjectId
     ? ` and p.test_space_id = ${scope.spaceId} and p.test_subject_id = ${scope.subjectId}`
     : ''
-  const scopeBugs = scope?.spaceId && scope?.subjectId
-    ? ` and b.test_space_id = ${scope.spaceId} and b.test_subject_id = ${scope.subjectId}`
+  const scopeBugs = scope?.spaceId
+    ? ` and b.test_space_id = ${scope.spaceId}`
     : ''
 
   const [
@@ -1741,7 +1747,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       test_case_id: string | null
       test_case_title: string | null
       test_case_folder_id: string | null
-      test_case_folder_name: string | null
+      test_case_directory_path: BugCaseDirectoryRow
       test_space_id: string
       test_space_name: string
       test_subject_id: string
@@ -1760,7 +1766,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
         subject.name as test_subject_name,
         linked_case.title as test_case_title,
         linked_case.folder_id as test_case_folder_id,
-        case_folder.name as test_case_folder_name,
+        case_directory.path as test_case_directory_path,
         plan.name as test_plan_name,
         environment.name as test_environment_name,
         environment.access_url as test_environment_access_url,
@@ -1771,7 +1777,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       join test_spaces space on space.id = b.test_space_id
       join test_subjects subject on subject.id = b.test_subject_id
       left join test_cases linked_case on linked_case.id = b.test_case_id and linked_case.test_space_id = b.test_space_id
-      left join test_case_folders case_folder on case_folder.id = linked_case.folder_id
+      ${bugCaseDirectoryJoinSql}
       left join test_plans plan on plan.id = b.test_plan_id
       left join test_environments environment on environment.id = b.test_environment_id
       left join test_space_memberships m
@@ -2097,7 +2103,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       testCaseId: row.test_case_id ? Number(row.test_case_id) : undefined,
       testCaseTitle: row.test_case_title ? decryptText(row.test_case_title) : undefined,
       testCaseFolderId: row.test_case_folder_id ? Number(row.test_case_folder_id) : undefined,
-      testCaseFolderName: row.test_case_folder_name ? decryptText(row.test_case_folder_name) : undefined,
+      ...serializeBugCaseDirectory(row.test_case_directory_path),
       testPlanId: row.test_plan_id ? Number(row.test_plan_id) : undefined,
       testPlanName: row.test_plan_name ? decryptText(row.test_plan_name) : undefined,
       testSpaceId: Number(row.test_space_id),
@@ -2113,13 +2119,6 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
           id: Number(space.id),
           name: decryptText(space.name),
           versionLabel: space.version_label ? decryptText(space.version_label) : undefined,
-          cases: cases.rows.filter((testCase) => testCase.test_space_id === space.id).map((testCase) => ({
-            id: Number(testCase.id),
-            title: decryptText(testCase.title),
-            folderName: folders.rows.find((folder) => folder.id === testCase.folder_id)?.name
-              ? decryptText(folders.rows.find((folder) => folder.id === testCase.folder_id)!.name)
-              : undefined,
-          })),
         })),
       updatedAt: row.updated_at.toISOString(),
     })),
@@ -3762,6 +3761,9 @@ router.post('/test-spaces/:spaceId/bugs', asyncRoute(async (request, response) =
   let assignedNotification: TestBugAssignedEvent | null = null
   try {
     await transaction(async (client) => {
+      await lockTestCaseSpace(client, spaceId!)
+      const access = await getDirectSpaceAccess(spaceId!, session.userId, client)
+      if (access !== 'owner' && access !== 'editor') throw importFailure('需要测试空间的编辑权限。', 403)
       const testCase = await client.query<{ test_subject_id: string }>(
         `select test_subject_id from test_cases where id = $1 and test_space_id = $2 for share`,
         [caseId, spaceId],
@@ -4001,6 +4003,9 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
   let statusNotification: TestBugStatusChangedEvent | null = null
   try {
     await transaction(async (client) => {
+      await lockTestCaseSpace(client, spaceId!)
+      const access = await getDirectSpaceAccess(spaceId!, session.userId, client)
+      if (access !== 'owner' && access !== 'editor') throw importFailure('需要测试空间的编辑权限。', 403)
       const locked = await client.query<{
         test_case_id: string | null
         test_plan_id: string | null
@@ -4307,7 +4312,7 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
     test_case_id: string | null
     test_case_title: string | null
     test_case_folder_id: string | null
-    test_case_folder_name: string | null
+    test_case_directory_path: BugCaseDirectoryRow
     actual_result: string
     assignee_display_name: string | null
     assignee_email: string | null
@@ -4339,7 +4344,7 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
     select b.id, b.test_space_id, b.test_subject_id, b.test_plan_id, b.test_case_id,
       linked_case.title as test_case_title,
       linked_case.folder_id as test_case_folder_id,
-      case_folder.name as test_case_folder_name,
+      case_directory.path as test_case_directory_path,
       b.reporter_user_id, b.assignee_user_id, b.title, b.severity, b.priority,
       b.status, b.environment, b.reproduction_steps, b.expected_result, b.actual_result,
       b.created_at, b.updated_at,
@@ -4355,7 +4360,7 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
     join test_spaces space on space.id = b.test_space_id
     join test_subjects subject on subject.id = b.test_subject_id
     left join test_cases linked_case on linked_case.id = b.test_case_id and linked_case.test_space_id = b.test_space_id
-    left join test_case_folders case_folder on case_folder.id = linked_case.folder_id
+    ${bugCaseDirectoryJoinSql}
     left join test_plans plan on plan.id = b.test_plan_id
     left join users reporter on reporter.id = b.reporter_user_id
     left join users assignee on assignee.id = b.assignee_user_id
@@ -4607,7 +4612,7 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
       testCaseId: row.test_case_id ? Number(row.test_case_id) : undefined,
       testCaseTitle: row.test_case_title ? decryptText(row.test_case_title) : undefined,
       testCaseFolderId: row.test_case_folder_id ? Number(row.test_case_folder_id) : undefined,
-      testCaseFolderName: row.test_case_folder_name ? decryptText(row.test_case_folder_name) : undefined,
+      ...serializeBugCaseDirectory(row.test_case_directory_path),
       priority: row.priority,
       reporterName: row.reporter_display_name || row.reporter_email || undefined,
       reporterUserId: row.reporter_user_id ? Number(row.reporter_user_id) : undefined,

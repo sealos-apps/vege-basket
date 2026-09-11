@@ -280,13 +280,20 @@ const severityLabel: Record<BugSeverity, string> = {
 }
 
 function bugFolderOptions(bugs: TestBug[]): BugFilterOption[] {
+  const folders = new Map<string, BugFilterOption>()
+  for (const bug of bugs) {
+    const path = bug.testCaseDirectoryPath ?? []
+    path.forEach((folder, index) => {
+      folders.set(String(folder.id), {
+        label: `${bug.testSubjectName || ''} / ${path.slice(0, index + 1).map((item) => item.name).join(' / ')}`,
+        value: String(folder.id),
+      })
+    })
+  }
   return [
     { label: '未分类', value: 'uncategorized' },
     { label: '待补关联', value: 'unlinked' },
-    ...uniqueBugFilterOptions(bugs, (bug) => bug.testCaseFolderId ? {
-      label: `${bug.testSubjectName || ''} / ${bug.testCaseFolderName || ''}`,
-      value: String(bug.testCaseFolderId),
-    } : undefined),
+    ...Array.from(folders.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN')),
   ]
 }
 
@@ -589,7 +596,7 @@ export function TestWorkbench({
   useEffect(() => {
     let cancelled = false
     const savedBeforeLoad = readTestWorkbenchViewState(currentUserId)
-    fetchTestWorkbench(savedBeforeLoad?.spaceId && savedBeforeLoad?.subjectId
+    fetchTestWorkbench(savedBeforeLoad?.tab === 'cases' && savedBeforeLoad.spaceId && savedBeforeLoad.subjectId
       ? { spaceId: savedBeforeLoad.spaceId, subjectId: savedBeforeLoad.subjectId }
       : undefined)
       .then((result) => {
@@ -664,7 +671,7 @@ export function TestWorkbench({
       if (refreshInFlightRef.current) return
       refreshInFlightRef.current = true
       Promise.all([
-        fetchTestWorkbench(spaceId && subjectId ? { spaceId, subjectId } : undefined)
+        fetchTestWorkbench(tab === 'cases' && spaceId && subjectId ? { spaceId, subjectId } : undefined)
           .then((result) => {
             if (!cancelled) setData(result)
           })
@@ -683,7 +690,18 @@ export function TestWorkbench({
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [busy, loading, spaceId, subjectId])
+  }, [busy, loading, spaceId, subjectId, tab])
+
+  useEffect(() => {
+    if (loading || (tab !== 'bugs' && tab !== 'plans')) return
+    let cancelled = false
+    fetchTestWorkbench().then((result) => {
+      if (!cancelled) setData(result)
+    }).catch((loadError: unknown) => {
+      if (!cancelled) setError(loadError instanceof Error ? loadError.message : '用例加载失败。')
+    })
+    return () => { cancelled = true }
+  }, [loading, tab, spaceId])
 
   useEffect(() => {
     setInvitePasswordDraft('')
@@ -1817,7 +1835,7 @@ function NotificationsView({
               }
               const bug = item.bug
               const spaceName = data.spaces.find((space) => space.id === bug.testSpaceId)?.name ?? '未知测试空间'
-              const subjectName = data.subjects.find((subject) => subject.id === bug.testSubjectId)?.name ?? '未关联测试对象'
+              const caseName = bug.testCaseId ? `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}` : '待补关联'
               if (item.kind === 'bug_comment') {
                 const comment = item.comment
                 const read = seenBugCommentIds.has(comment.id)
@@ -1828,7 +1846,7 @@ function NotificationsView({
                       <div>
                         <strong>BUG-{bug.id} · {bug.title}</strong>
                         <p>{comment.authorName} 添加了协作备注，需要测试侧查看。</p>
-                        <small>{spaceName} · {subjectName} · {formatTimestamp(item.createdAt)}</small>
+                        <small>{spaceName} · {caseName} · {formatTimestamp(item.createdAt)}</small>
                       </div>
                     </div>
                     <div>
@@ -1846,7 +1864,7 @@ function NotificationsView({
                       <div>
                         <strong>BUG-{bug.id} · {bug.title}</strong>
                         <p>开发工程师驳回了这个 Bug，需要测试侧处理。</p>
-                        <small>{spaceName} · {subjectName} · {formatTimestamp(item.createdAt)}</small>
+                        <small>{spaceName} · {caseName} · {formatTimestamp(item.createdAt)}</small>
                       </div>
                     </div>
                     <div>
@@ -1863,7 +1881,7 @@ function NotificationsView({
                     <div>
                       <strong>BUG-{bug.id} · {bug.title}</strong>
                       <p>{bugStatusLabel[bug.status]}，需要测试侧回看。</p>
-                      <small>{spaceName} · {subjectName} · {formatTimestamp(item.createdAt)}</small>
+                      <small>{spaceName} · {caseName} · {formatTimestamp(item.createdAt)}</small>
                     </div>
                   </div>
                   <div>
@@ -2337,19 +2355,20 @@ function BugsView({ bugs, busy, data, draftOwnerUserId, filterConditions, onAssi
       ) : null}
       <div className="test-split-view">
           <div className="test-record-list">
-            {bugs.length ? bugs.map((bug) => <button key={bug.id} className={bug.id === selectedId ? 'active' : ''} onClick={() => onSelect(bug.id)}><div><code>BUG-{bug.id}</code><Badge className={`test-bug-status ${bug.status}`} variant="outline">{bugStatusLabel[bug.status]}</Badge></div><strong>{bug.title}</strong><small>{formatTimestamp(bug.updatedAt)} · <UserName departedUserIds={data.departedUserIds} name={bug.assigneeName || '未分配'} userId={bug.assigneeUserId} />{bug.assigneeTransferSource === 'offboarding' ? '（离职转移）' : null}</small></button>) : <div className="test-list-empty">{filterConditions.length > 0 || searchQuery.trim() ? <><FunnelSimple size={24} /><span>没有符合当前条件的 Bug。</span>{filterConditions.length > 0 ? <Button type="button" variant="outline" onClick={onFilterClear}>清除筛选</Button> : null}{searchQuery.trim() ? <Button type="button" variant="outline" onClick={() => onSearchQueryChange('')}>清除搜索</Button> : null}</> : '当前测试对象还没有 Bug。'}</div>}
+            {bugs.length ? bugs.map((bug) => <button key={bug.id} className={bug.id === selectedId ? 'active' : ''} onClick={() => onSelect(bug.id)}><div><code>BUG-{bug.id}</code><Badge className={`test-bug-status ${bug.status}`} variant="outline">{bugStatusLabel[bug.status]}</Badge></div><strong>{bug.title}</strong><small>{formatTimestamp(bug.updatedAt)} · <UserName departedUserIds={data.departedUserIds} name={bug.assigneeName || '未分配'} userId={bug.assigneeUserId} />{bug.assigneeTransferSource === 'offboarding' ? '（离职转移）' : null}</small></button>) : <div className="test-list-empty">{filterConditions.length > 0 || searchQuery.trim() ? <><FunnelSimple size={24} /><span>没有符合当前条件的 Bug。</span>{filterConditions.length > 0 ? <Button type="button" variant="outline" onClick={onFilterClear}>清除筛选</Button> : null}{searchQuery.trim() ? <Button type="button" variant="outline" onClick={() => onSearchQueryChange('')}>清除搜索</Button> : null}</> : '当前测试空间还没有 Bug。'}</div>}
         </div>
         <div className="test-record-detail">
-          {selected ? <BugDetail bug={selected} busy={busy} departedUserIds={data.departedUserIds} draftOwnerUserId={draftOwnerUserId} readOnly={readOnly} users={data.users} onAssignee={onAssignee} onComment={readOnly ? undefined : onComment} onDelete={onDelete} onDeleteComment={readOnly ? undefined : onDeleteComment} onEdit={onEdit} onStatus={onStatus} onTransferSpace={onTransferSpace} onUpdateComment={readOnly ? undefined : onUpdateComment} /> : <div className="test-detail-empty"><Bug size={28} /><p>选择一个 Bug 查看和流转。</p></div>}
+          {selected ? <BugDetail bug={selected} busy={busy} cases={data.cases} departedUserIds={data.departedUserIds} draftOwnerUserId={draftOwnerUserId} readOnly={readOnly} users={data.users} onAssignee={onAssignee} onComment={readOnly ? undefined : onComment} onDelete={onDelete} onDeleteComment={readOnly ? undefined : onDeleteComment} onEdit={onEdit} onStatus={onStatus} onTransferSpace={onTransferSpace} onUpdateComment={readOnly ? undefined : onUpdateComment} /> : <div className="test-detail-empty"><Bug size={28} /><p>选择一个 Bug 查看和流转。</p></div>}
         </div>
       </div>
     </div>
   )
 }
 
-function BugDetail({ bug, busy, departedUserIds, draftOwnerUserId, onAssignee, onComment, onDelete, onDeleteComment, onEdit, onStatus, onTransferSpace, onUpdateComment, readOnly, users }: {
+function BugDetail({ bug, busy, cases, departedUserIds, draftOwnerUserId, onAssignee, onComment, onDelete, onDeleteComment, onEdit, onStatus, onTransferSpace, onUpdateComment, readOnly, users }: {
   bug: TestBug
   busy: boolean
+  cases: TestCase[]
   departedUserIds: readonly number[]
   draftOwnerUserId?: number
   onAssignee: (bug: TestBug, assigneeUserId?: number) => void
@@ -2426,21 +2445,22 @@ function BugDetail({ bug, busy, departedUserIds, draftOwnerUserId, onAssignee, o
       onUpdateComment={onUpdateComment}
     />
     <BugShareDialog bugId={bug.id} open={shareOpen} onOpenChange={setShareOpen} />
-    <BugSpaceTransferDialog bug={bug} busy={busy} open={transferSpaceOpen} onOpenChange={setTransferSpaceOpen} onSubmit={onTransferSpace} />
+    <BugSpaceTransferDialog bug={bug} busy={busy} cases={cases} open={transferSpaceOpen} onOpenChange={setTransferSpaceOpen} onSubmit={onTransferSpace} />
     <BugTimelineDialog bug={bug} departedUserIds={departedUserIds} open={timelineOpen} onOpenChange={setTimelineOpen} />
   </>
 }
 
-function BugSpaceTransferDialog({ bug, busy, onOpenChange, onSubmit, open }: {
+function BugSpaceTransferDialog({ bug, busy, cases, onOpenChange, onSubmit, open }: {
   bug: TestBug
   busy: boolean
+  cases: TestCase[]
   onOpenChange: (open: boolean) => void
   onSubmit: (bug: TestBug, targetSpaceId: number, targetTestCaseId: number) => Promise<boolean>
   open: boolean
 }) {
   const [targetSpaceId, setTargetSpaceId] = useState('')
   const [targetCaseId, setTargetCaseId] = useState('')
-  const targetCases = bug.transferSpaceCandidates?.find((space) => String(space.id) === targetSpaceId)?.cases ?? []
+  const targetCases = cases.filter((item) => String(item.testSpaceId) === targetSpaceId)
 
   useEffect(() => {
     if (open) { setTargetSpaceId(''); setTargetCaseId('') }
@@ -2476,7 +2496,7 @@ function BugSpaceTransferDialog({ bug, busy, onOpenChange, onSubmit, open }: {
         {targetSpaceId ? <Label>目标测试用例
           <Select value={targetCaseId} onValueChange={setTargetCaseId}>
             <SelectTrigger aria-label="目标测试用例"><SelectValue placeholder="选择测试用例" /></SelectTrigger>
-            <SelectContent>{targetCases.map((item) => <SelectItem key={item.id} value={String(item.id)}>CASE-{item.id} {item.title} · {item.folderName || '未分类'}</SelectItem>)}</SelectContent>
+            <SelectContent>{targetCases.map((item) => <SelectItem key={item.id} value={String(item.id)}>CASE-{item.id} {item.title}</SelectItem>)}</SelectContent>
           </Select>
           {!targetCases.length ? <span>目标空间暂无用例，请先创建用例。</span> : null}
         </Label> : null}
@@ -4488,8 +4508,11 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
   const [caseSearch, setCaseSearch] = useState('')
   const [caseFolder, setCaseFolder] = useState('all')
   const caseLocked = editing ? Boolean(seed.testCaseId) : Boolean(seed.testPlanCaseId)
+  const caseDirectoryIndex = createDirectoryIndex(folders)
+  const selectedDirectoryIds = caseDirectoryIndex.byId.has(Number(caseFolder))
+    ? caseDirectoryIndex.descendants(Number(caseFolder)) : new Set<number>()
   const selectableCases = cases.filter((item) => (
-    (caseFolder === 'all' || (caseFolder === 'uncategorized' ? !item.folderId : String(item.folderId) === caseFolder))
+    (caseFolder === 'all' || (caseFolder === 'uncategorized' ? !item.folderId : Boolean(item.folderId && selectedDirectoryIds.has(item.folderId))))
     && `CASE-${item.id} ${item.title}`.toLocaleLowerCase('zh-CN').includes(caseSearch.trim().toLocaleLowerCase('zh-CN'))
   ))
   const selectedCase = cases.find((item) => String(item.id) === testCaseId)
@@ -4559,7 +4582,7 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
                 <Label>用例目录
                   <Select value={caseFolder} onValueChange={setCaseFolder}>
                     <SelectTrigger aria-label="用例目录"><SelectValue /></SelectTrigger>
-                    <SelectContent><SelectItem value="all">全部目录</SelectItem><SelectItem value="uncategorized">未分类</SelectItem>{folders.map((folder) => <SelectItem key={folder.id} value={String(folder.id)}>{subjects.find((subject) => subject.id === folder.testSubjectId)?.name} / {folder.name}</SelectItem>)}</SelectContent>
+                    <SelectContent><SelectItem value="all">全部目录</SelectItem><SelectItem value="uncategorized">未分类</SelectItem>{folders.map((folder) => <SelectItem key={folder.id} value={String(folder.id)}>{subjects.find((subject) => subject.id === folder.testSubjectId)?.name} / {caseDirectoryIndex.path(folder.id).map((item) => item.name).join(' / ')}</SelectItem>)}</SelectContent>
                   </Select>
                 </Label>
                 <Input aria-label="搜索测试用例" placeholder="搜索用例编号或标题" value={caseSearch} onChange={(event) => setCaseSearch(event.target.value)} />

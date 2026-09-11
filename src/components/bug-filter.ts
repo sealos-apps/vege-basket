@@ -182,7 +182,9 @@ function matchesCondition(bug: TestBug, condition: BugFilterCondition) {
   if (normalized.operator === 'not_contains') {
     return !fieldValue.toLowerCase().includes(targetValue.trim().toLowerCase())
   }
-  const equalsTarget = normalized.field === 'status' && targetValue === 'new'
+  const equalsTarget = normalized.field === 'caseFolder' && /^\d+$/.test(targetValue)
+    ? fieldValue === targetValue || Boolean(bug.testCaseDirectoryPath?.some((folder) => String(folder.id) === targetValue))
+    : normalized.field === 'status' && targetValue === 'new'
     ? fieldValue === 'new' || fieldValue === 'pending_confirmation'
     : fieldValue === targetValue
   if (normalized.operator === 'equals') return equalsTarget

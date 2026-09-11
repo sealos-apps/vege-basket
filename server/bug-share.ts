@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { decryptText, encryptText } from './crypto.ts'
 import { pool, query } from './db.ts'
+import { bugCaseDirectoryJoinSql, serializeBugCaseDirectory, type BugCaseDirectoryRow } from './bug-case-directory.ts'
 import { managedOrganizationReadScopeSql } from './organization-scope.ts'
 import { hashBugShareToken } from './organization-policy.ts'
 import { normalizePublicAppUrl } from './todo-digest.ts'
@@ -55,7 +56,7 @@ export type BugShareView = {
 type ShareBugRow = {
   test_case_id: string | null
   test_case_title: string | null
-  test_case_folder_name: string | null
+  test_case_directory_path: BugCaseDirectoryRow
   actual_result: string
   assignee_display_name: string | null
   assignee_user_id: string | null
@@ -115,7 +116,8 @@ async function readView(token: string, userId?: number | null) {
   const result = await query<ShareBugRow>(
     `
     select b.id as bug_id, b.title, b.severity, b.priority, b.status, b.test_case_id,
-           linked_case.title as test_case_title, case_folder.name as test_case_folder_name,
+           linked_case.title as test_case_title,
+           case_directory.path as test_case_directory_path,
            b.environment, b.reproduction_steps, b.expected_result, b.actual_result,
            b.created_at, b.updated_at, b.assignee_user_id,
            space.organization_id,
@@ -129,7 +131,7 @@ async function readView(token: string, userId?: number | null) {
     join test_spaces space on space.id = b.test_space_id
     join test_subjects subject on subject.id = b.test_subject_id
     left join test_cases linked_case on linked_case.id = b.test_case_id and linked_case.test_space_id = b.test_space_id
-    left join test_case_folders case_folder on case_folder.id = linked_case.folder_id
+    ${bugCaseDirectoryJoinSql}
     left join test_plans plan on plan.id = b.test_plan_id
     left join projects project on project.id = plan.project_id
     left join users assignee on assignee.id = b.assignee_user_id
@@ -212,7 +214,7 @@ async function readView(token: string, userId?: number | null) {
     testSubjectName: decryptText(bug.test_subject_name),
     testCaseId: bug.test_case_id ? Number(bug.test_case_id) : undefined,
     testCaseTitle: bug.test_case_title ? decryptText(bug.test_case_title) : undefined,
-    testCaseFolderName: bug.test_case_folder_name ? decryptText(bug.test_case_folder_name) : undefined,
+    testCaseFolderName: serializeBugCaseDirectory(bug.test_case_directory_path).testCaseFolderName,
     title: decryptText(bug.title),
     updatedAt: bug.updated_at.toISOString(),
     viewer,

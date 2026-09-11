@@ -39,6 +39,7 @@ const baseBug: TestBug = {
   testCaseTitle: '保存用户',
   testCaseFolderId: 51,
   testCaseFolderName: '用户/编辑',
+  testCaseDirectoryPath: [{ id: 50, name: '用户' }, { id: 51, name: '编辑' }],
   title: '保存用户时报错',
   updatedAt: '2026-08-04T13:00:00.000Z',
 }
@@ -68,8 +69,10 @@ test('bug filters match linked test fields and people by stable ids', () => {
 test('directory filters follow current case folders and distinguish legacy Bugs from uncategorized cases', () => {
   const filter = [condition('caseFolder', 'equals', '51')]
   assert.equal(matchesBugFilterConditions(baseBug, filter, 'and'), true)
-  assert.equal(matchesBugFilterConditions({ ...baseBug, testCaseFolderId: 52 }, filter, 'and'), false)
-  const uncategorized = { ...baseBug, testCaseFolderId: undefined, testCaseFolderName: undefined }
+  assert.equal(matchesBugFilterConditions({ ...baseBug, testCaseFolderId: 52, testCaseDirectoryPath: [{ id: 52, name: '编辑' }] }, filter, 'and'), false)
+  assert.equal(matchesBugFilterConditions(baseBug, [condition('caseFolder', 'equals', '50')], 'and'), true)
+  assert.equal(matchesBugFilterConditions(baseBug, [condition('caseFolder', 'not_equals', '50')], 'and'), false)
+  const uncategorized = { ...baseBug, testCaseFolderId: undefined, testCaseFolderName: undefined, testCaseDirectoryPath: [] }
   const legacy = { ...uncategorized, testCaseId: undefined, testCaseTitle: undefined }
   assert.equal(matchesBugFilterConditions(uncategorized, [condition('caseFolder', 'equals', 'uncategorized')], 'and'), true)
   assert.equal(matchesBugFilterConditions(legacy, [condition('caseFolder', 'equals', 'uncategorized')], 'and'), false)

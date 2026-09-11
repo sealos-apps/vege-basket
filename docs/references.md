@@ -302,8 +302,8 @@ must remain bound to the authorized project ID.
   workflow.
 - Test cases use `case_type` for functional, regression, smoke, security, or performance classification. The former baseline/archiving concept has been removed. Test cases also support encrypted custom tags.
 - Test-case folders/modules are scoped to one test subject. Test-space owners and editors
-  can create, rename, and delete folders; deleting a folder clears `folder_id` on its
-  current cases and does not delete cases or immutable plan snapshots.
+  can create, rename, and delete empty folders. Move cases out before deleting their folder;
+  moving cases to the root clears `folder_id`, and their Bugs become uncategorized.
 - Test-case deletion requires test-space write access and is limited to the account that
   created the case. A case referenced by any Bug cannot be deleted (409); a subject with
   Bugs also cannot be deleted. Otherwise deletion permanently removes the source case, while existing test-plan
@@ -327,14 +327,17 @@ must remain bound to the authorized project ID.
   `POST /api/test-spaces/:spaceId/bugs` requires `testCaseId`; the server derives the subject
   from that case and checks any `testPlanCaseId` against the same canonical case.
   Bug DTOs include optional `testCaseId`, `testCaseTitle`, `testCaseFolderId`, and
-  `testCaseFolderName` (optional only for legacy unlinked Bugs or uncategorized cases).
+  `testCaseFolderName` (full path; optional for legacy unlinked Bugs or uncategorized cases).
+  `testCaseDirectoryPath` contains only that case's ancestor IDs/names, in root-to-leaf order;
+  choosing a parent directory matches all descendant cases, while equal names keep distinct IDs.
   Creator-owned detail PATCH accepts `testCaseId` to fill a missing legacy association;
   an existing association cannot change. Ordinary status/assignment updates remain possible
   for legacy Bugs. Detail edits require case binding first.
   `POST /api/test-spaces/:spaceId/bugs/:bugId/transfer-space` requires `targetSpaceId` and
   `targetTestCaseId`. Target-space ownership and same-organization checks remain in force;
-  old plan/execution links are cleared. Transfer candidates include only cases in eligible
-  owned destination spaces. Folder filtering uses current folder IDs, with `uncategorized`
+  old plan/execution links are cleared and recorded in encrypted collaboration text. Legacy
+  case binding also records previous source IDs. Transfer case selection uses the authorized
+  workbench case catalog, restricted to the selected owned destination space. Folder filtering uses current folder IDs, with `uncategorized`
   for linked cases without a folder and `unlinked` for legacy Bugs without a case.
   Returning a Bug to `pending_confirmation` replaces the former `reopened` status, and marking a
   duplicate Bug closes it instead of using a separate `duplicate` status.

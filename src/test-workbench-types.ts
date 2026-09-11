@@ -255,6 +255,7 @@ export type TestBug = {
   testCaseTitle?: string
   testCaseFolderId?: number
   testCaseFolderName?: string
+  testCaseDirectoryPath?: Array<{ id: number; name: string }>
   testPlanCaseId?: number
   testPlanId?: number
   testPlanName?: string
@@ -267,7 +268,7 @@ export type TestBug = {
   testSubjectId?: number
   testSubjectName?: string
   title: string
-  transferSpaceCandidates?: Array<{ id: number; name: string; versionLabel?: string; cases: Array<{ id: number; title: string; folderName?: string }> }>
+  transferSpaceCandidates?: Array<{ id: number; name: string; versionLabel?: string }>
   transferCandidates?: Array<{ id: number; name: string }>
   updatedAt: string
   verificationSubmissions?: TestBugVerificationSubmission[]
