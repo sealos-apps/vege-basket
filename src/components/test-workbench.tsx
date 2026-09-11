@@ -2486,7 +2486,7 @@ function BugTimelineDialog({ bug, departedUserIds, onOpenChange, open }: {
     ...bug.events.map((event) => ({ ...event, actorUserId: event.actorUserId, assigneeUserId: event.assigneeUserId })),
   ].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
   const formatSpace = (name?: string, versionLabel?: string) => (
-    `${name ?? '未知空间'} · ${versionLabel ?? '未设置版本'}`
+    name ? `${name} · ${versionLabel ?? '未设置版本'}` : '未知空间'
   )
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
