@@ -18,6 +18,9 @@ import {
   revokeBugShareLink,
 } from './bug-share.ts'
 import { parseTestCaseCsv } from './test-case-import.ts'
+import { TestCaseImportError } from './test-case-import.ts'
+import { createDirectoryIndex, directoryName, nullableDirectoryId, parseCaseMoveIds, planDirectoryImport, TestCaseDirectoryError } from '../shared/test-case-directories.ts'
+import { caseFolderSubject, createCaseDirectory, deleteEmptyCaseDirectory, insertCaseDirectory, lockTestCaseScope, lockTestCaseSpace, moveCaseDirectories, readCaseDirectories, resolveCaseDirectory, updateCaseDirectory } from './test-case-directories.ts'
 import {
   ensurePackageMarketRuleAllowed,
   getOrganizationPackageMarketPolicy,
@@ -53,6 +56,7 @@ import {
   type OrganizationContext,
 } from '../shared/organization-context.ts'
 import { containerImageReferenceKey, normalizeContainerImageReference } from '../shared/container-image-reference.ts'
+import { resolvePlanEnvironment, type PlanEnvironmentSnapshot } from './test-plan-environment.ts'
 import {
   createClusterImageVerificationScript,
   createPackageVerificationScript,
@@ -61,7 +65,6 @@ import {
 type TestSpaceAccess = 'owner' | 'editor' | 'viewer'
 type TestSpaceMembershipStatus = 'pending' | 'active' | 'declined'
 type TestSpaceAccessRow = { access_level: TestSpaceAccess }
-type TestCaseKind = 'functional' | 'baseline'
 type TestWorkbenchNotificationKind =
   | 'test_plan_assigned'
   | 'test_bug_status_changed'
@@ -396,10 +399,6 @@ function optionalDate(value: unknown) {
   return date
 }
 
-function isTestCaseKind(value: unknown): value is TestCaseKind {
-  return value === 'functional' || value === 'baseline'
-}
-
 function customTags(value: unknown) {
   if (!Array.isArray(value)) return []
   return value
@@ -412,7 +411,10 @@ function asyncRoute(
   handler: (request: express.Request, response: express.Response) => Promise<void>,
 ) {
   return (request: express.Request, response: express.Response, next: express.NextFunction) => {
-    handler(request, response).catch(next)
+    handler(request, response).catch((error: unknown) => {
+      if (error instanceof TestCaseDirectoryError || error instanceof TestCaseImportError) { response.status(error.status).json({ error: error.message }); return }
+      next(error)
+    })
   }
 }
 
@@ -472,8 +474,10 @@ async function transaction<T>(handler: (client: PoolClient) => Promise<T>) {
   }
 }
 
-async function getSpaceAccess(spaceId: number, userId: number) {
-  const result = await query<TestSpaceAccessRow>(
+async function getSpaceAccess(spaceId: number, userId: number, client?: PoolClient) {
+  const run = client ? (sql: string, values: unknown[]) => client.query<TestSpaceAccessRow>(sql, values)
+    : (sql: string, values: unknown[]) => query<TestSpaceAccessRow>(sql, values)
+  const result = await run(
     `
     select coalesce(m.access_level, 'viewer') as access_level
     from test_spaces s
@@ -485,6 +489,15 @@ async function getSpaceAccess(spaceId: number, userId: number) {
     [spaceId, userId],
   )
   return result.rows[0]?.access_level ?? null
+}
+
+// Creator-only deletion retains its existing read-access policy, including viewers.
+async function lockCreatorCaseScope(client: PoolClient, spaceId: number, subjectId: number, userId: number) {
+  await lockTestCaseSpace(client, spaceId)
+  await getDirectSpaceAccess(spaceId, userId, client)
+  if (!(await getSpaceAccess(spaceId, userId, client))) throw new TestCaseDirectoryError('测试空间访问权限已失效。', 403)
+  const subject = await client.query('select id from test_subjects where id = $1 and test_space_id = $2 for update', [subjectId, spaceId])
+  if (!subject.rows.length) throw new TestCaseDirectoryError('测试对象不存在。', 404)
 }
 
 async function userCanBeAssignedInSpace(
@@ -837,6 +850,7 @@ type ImportSubjectRow = {
 }
 
 type ImportFolderRow = {
+  parent_id: string | null
   id: string
   name: string
   name_lookup: string | null
@@ -844,7 +858,6 @@ type ImportFolderRow = {
 }
 
 type ImportCaseRow = {
-  case_kind: TestCaseKind
   case_type: string
   created_at: Date
   custom_tags: string
@@ -965,6 +978,7 @@ async function importTestSpaceData(
       `select id, name, owner_user_id, organization_id from test_spaces where id = any($1::bigint[]) or id = $2 order by id for update`,
       [sourceIds, targetSpaceId],
     )
+    await client.query('select id from test_subjects where test_space_id = any($1::bigint[]) order by id for update', [Array.from(new Set([...sourceIds, targetSpaceId]))])
     const spacesById = new Map(spaces.rows.map((space) => [Number(space.id), space]))
     const targetSpace = spacesById.get(targetSpaceId)
     if (!targetSpace || Number(targetSpace.owner_user_id) !== userId) {
@@ -1172,22 +1186,23 @@ async function importTestSpaceData(
       return targetId
     }
 
+    let copiedFolders = 0
+    const copyingFolders = new Set<string>()
     async function copyFolder(sourceSpaceId: number, sourceFolderId: number, targetSubjectId: number) {
       const key = `${sourceSpaceId}:${sourceFolderId}`
       const existingMap = folderMap.get(key)
       if (existingMap) return existingMap
       const sourceFolder = sourceFolders.get(sourceSpaceId)?.get(sourceFolderId)
       if (!sourceFolder) throw importFailure('来源用例模块不存在')
-      const existing = await client.query<{ id: string }>(
-        'select id from test_case_folders where test_space_id = $1 and test_subject_id = $2 and name_lookup = $3 limit 1',
-        [targetSpaceId, targetSubjectId, sourceFolder.name_lookup],
-      )
-      const inserted = existing.rows[0] ?? (await client.query<{ id: string }>(
-        `insert into test_case_folders (test_space_id, test_subject_id, name, name_lookup) values ($1, $2, $3, $4) returning id`,
-        [targetSpaceId, targetSubjectId, sourceFolder.name, sourceFolder.name_lookup],
-      )).rows[0]
-      const targetId = Number(inserted.id)
+      if (copyingFolders.has(key)) throw importFailure('来源目录结构存在循环', 409)
+      copyingFolders.add(key)
+      const parent = sourceFolder.parent_id ? sourceFolders.get(sourceSpaceId)?.get(Number(sourceFolder.parent_id)) : undefined
+      if (sourceFolder.parent_id && (!parent || parent.test_subject_id !== sourceFolder.test_subject_id)) throw importFailure('来源父目录不属于相同测试对象', 409)
+      const targetParentId = parent ? await copyFolder(sourceSpaceId, Number(parent.id), targetSubjectId) : null
+      const targetId = await resolveCaseDirectory(client, targetSpaceId, targetSubjectId, decryptText(sourceFolder.name), targetParentId)
+      copyingFolders.delete(key)
       folderMap.set(key, targetId)
+      copiedFolders += 1
       await client.query(
         `
         insert into test_space_data_imports
@@ -1214,14 +1229,14 @@ async function importTestSpaceData(
         `
         insert into test_cases
           (test_space_id, test_subject_id, folder_id, title, preconditions, steps, expected_result, remarks,
-           priority, case_type, case_kind, custom_tags, status, owner_user_id, version, created_by_user_id,
+           priority, case_type, custom_tags, status, owner_user_id, version, created_by_user_id,
            created_at, updated_at)
         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $14, $16, $17)
         returning id
         `,
         [targetSpaceId, targetSubjectId, targetFolderId, sourceCase.title, sourceCase.preconditions,
           sourceCase.steps, sourceCase.expected_result, sourceCase.remarks, sourceCase.priority,
-          sourceCase.case_type, sourceCase.case_kind, sourceCase.custom_tags, sourceCase.status, userId,
+          sourceCase.case_type, sourceCase.custom_tags, sourceCase.status, userId,
           sourceCase.version, sourceCase.created_at, sourceCase.updated_at],
       )
       const targetId = Number(inserted.rows[0].id)
@@ -1272,7 +1287,6 @@ async function importTestSpaceData(
     }
 
     let copiedCases = 0
-    let copiedFolders = 0
     let copiedPlans = 0
     let copiedSubjects = 0
     let movedBugs = 0
@@ -1286,14 +1300,9 @@ async function importTestSpaceData(
         if (!before) copiedSubjects += 1
       }
       for (const caseId of selectedCases) {
-        const sourceCase = sourceCases.get(source.spaceId)?.get(caseId)
-        const folderWasMapped = sourceCase?.folder_id
-          ? folderMap.has(`${source.spaceId}:${sourceCase.folder_id}`)
-          : true
         const before = caseMap.has(`${source.spaceId}:${caseId}`)
         await copyCase(source.spaceId, caseId)
         if (!before) copiedCases += 1
-        if (sourceCase?.folder_id && !folderWasMapped) copiedFolders += 1
       }
       for (const planId of selectedPlans) {
         const before = planMap.has(`${source.spaceId}:${planId}`)
@@ -1387,23 +1396,8 @@ async function importTestSpaceData(
   })
 }
 
-async function getOrCreateCaseFolder(
-  client: PoolClient,
-  spaceId: number,
-  subjectId: number,
-  modulePath: string,
-) {
-  const result = await client.query<{ id: string }>(
-    `
-    insert into test_case_folders (test_space_id, test_subject_id, name, name_lookup)
-    values ($1, $2, $3, $4)
-    on conflict (test_subject_id, name_lookup) where name_lookup is not null
-    do update set name_lookup = excluded.name_lookup
-    returning id
-    `,
-    [spaceId, subjectId, encryptText(modulePath), blindIndex(modulePath)],
-  )
-  return Number(result.rows[0].id)
+async function getOrCreateCaseFolder(client: PoolClient, spaceId: number, subjectId: number, modulePath: string) {
+  return resolveCaseDirectory(client, spaceId, subjectId, modulePath)
 }
 
 async function recordTestBugEvent(
@@ -1507,7 +1501,23 @@ function mapVerificationSubmissions(rows: readonly VerificationSubmissionRow[]) 
   return submissionsByBug
 }
 
-async function getTestWorkbench(userId: number) {
+async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subjectId?: number }) {
+  const scopeCases = scope?.spaceId && scope?.subjectId
+    ? ` and c.test_space_id = ${scope.spaceId} and c.test_subject_id = ${scope.subjectId}`
+    : ''
+  const scopeFolders = scope?.spaceId && scope?.subjectId
+    ? ` and f.test_space_id = ${scope.spaceId} and f.test_subject_id = ${scope.subjectId}`
+    : ''
+  const scopePlans = scope?.spaceId && scope?.subjectId
+    ? ` and p.test_space_id = ${scope.spaceId} and p.test_subject_id = ${scope.subjectId}`
+    : ''
+  const scopePlanCases = scope?.spaceId && scope?.subjectId
+    ? ` and p.test_space_id = ${scope.spaceId} and p.test_subject_id = ${scope.subjectId}`
+    : ''
+  const scopeBugs = scope?.spaceId && scope?.subjectId
+    ? ` and b.test_space_id = ${scope.spaceId} and b.test_subject_id = ${scope.subjectId}`
+    : ''
+
   const [
     spaces,
     testEnvironments,
@@ -1581,22 +1591,21 @@ async function getTestWorkbench(userId: number) {
       `,
       [userId],
     ),
-    query<{ created_at: Date; id: string; name: string; test_space_id: string; test_subject_id: string }>(
+    query<{ created_at: Date; id: string; name: string; parent_id: string | null; test_space_id: string; test_subject_id: string }>(
       `
       select f.*
       from test_case_folders f
       join test_spaces space on space.id = f.test_space_id
       left join test_space_memberships m
         on m.test_space_id = f.test_space_id and m.user_id = $1 and m.status = 'active'
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopeFolders}
       order by f.name, f.id
       `,
       [userId],
     ),
     query<{
       case_type: string
-      case_kind: TestCaseKind
-      created_at: Date
+          created_at: Date
       created_by_user_id: string | null
       custom_tags: string
       expected_result: string
@@ -1620,7 +1629,7 @@ async function getTestWorkbench(userId: number) {
       join test_spaces space on space.id = c.test_space_id
       left join test_space_memberships m
         on m.test_space_id = c.test_space_id and m.user_id = $1 and m.status = 'active'
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopeCases}
       order by c.updated_at desc, c.id desc
       `,
       [userId],
@@ -1630,6 +1639,8 @@ async function getTestWorkbench(userId: number) {
       created_by_user_id: string | null
       ends_on: string | null
       environment: string
+      environment_access_url: string
+      test_environment_id: string | null
       id: string
       name: string
       owner_user_id: string | null
@@ -1647,7 +1658,7 @@ async function getTestWorkbench(userId: number) {
       join test_spaces space on space.id = p.test_space_id
       left join test_space_memberships m
         on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlans}
       order by p.updated_at desc, p.id desc
       `,
       [userId],
@@ -1660,7 +1671,7 @@ async function getTestWorkbench(userId: number) {
       join test_spaces space on space.id = p.test_space_id
       left join test_space_memberships m
         on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlans}
       order by ps.test_plan_id, ps.test_subject_id
       `,
       [userId],
@@ -1687,7 +1698,7 @@ async function getTestWorkbench(userId: number) {
       join test_spaces space on space.id = p.test_space_id
       left join test_space_memberships m
         on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlanCases}
       order by pc.id
       `,
       [userId],
@@ -1746,7 +1757,7 @@ async function getTestWorkbench(userId: number) {
         on m.test_space_id = b.test_space_id and m.user_id = $1 and m.status = 'active'
       left join users reporter on reporter.id = b.reporter_user_id
       left join users assignee on assignee.id = b.assignee_user_id
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopeBugs}
       order by b.updated_at desc, b.id desc
       `,
       [userId],
@@ -2083,7 +2094,6 @@ async function getTestWorkbench(userId: number) {
     cases: cases.rows.map((row) => ({
       canDelete: canDeleteTestCase(row.created_by_user_id ? Number(row.created_by_user_id) : null, userId),
       caseType: row.case_type,
-      caseKind: row.case_kind,
       createdAt: row.created_at.toISOString(),
       customTags: decryptJson<string[]>(row.custom_tags, []),
       expectedResult: decryptText(row.expected_result),
@@ -2102,6 +2112,7 @@ async function getTestWorkbench(userId: number) {
       version: row.version,
     })),
     folders: folders.rows.map((row) => ({
+      parentId: row.parent_id ? Number(row.parent_id) : null,
       createdAt: row.created_at.toISOString(),
       id: Number(row.id),
       name: decryptText(row.name),
@@ -2146,6 +2157,7 @@ async function getTestWorkbench(userId: number) {
       createdByUserId: row.created_by_user_id ? Number(row.created_by_user_id) : undefined,
       endsOn: row.ends_on || undefined,
       environment: decryptText(row.environment),
+      environmentAccessUrl: decryptText(row.environment_access_url),
       id: Number(row.id),
       name: decryptText(row.name),
       ownerUserId: row.owner_user_id ? Number(row.owner_user_id) : undefined,
@@ -2157,6 +2169,7 @@ async function getTestWorkbench(userId: number) {
       testSubjectIds: subjectIdsByPlan.get(Number(row.id)) ?? [Number(row.test_subject_id)],
       updatedAt: row.updated_at.toISOString(),
       versionLabel: decryptText(row.version_label),
+      testEnvironmentId: row.test_environment_id ? Number(row.test_environment_id) : undefined,
     })),
     spaces: spaces.rows.map((row) => ({
       accessLevel: row.access_level,
@@ -2189,7 +2202,13 @@ async function getTestWorkbench(userId: number) {
 router.get('/test-workbench', asyncRoute(async (request, response) => {
   const session = await requireActiveRole(request, response, 'tester')
   if (!session) return
-  response.json(await getTestWorkbench(session.userId))
+  const spaceId = positiveId(request.query.spaceId)
+  const subjectId = positiveId(request.query.subjectId)
+  if ((request.query.spaceId !== undefined && !spaceId) || (request.query.subjectId !== undefined && !subjectId)) {
+    response.status(400).json({ error: 'Invalid workbench scope' })
+    return
+  }
+  response.json(await getTestWorkbench(session.userId, spaceId && subjectId ? { spaceId, subjectId } : undefined))
 }))
 
 router.get('/test-spaces/settings', asyncRoute(async (request, response) => {
@@ -2961,10 +2980,13 @@ router.delete('/test-spaces/:spaceId/subjects/:subjectId', asyncRoute(async (req
     response.status(403).json({ error: 'Only the test subject creator can delete it' })
     return
   }
-  const deleted = await query(
-    'delete from test_subjects where id = $1 and test_space_id = $2 and created_by_user_id = $3 returning id',
-    [subjectId, spaceId, session.userId],
-  )
+  const deleted = await transaction(async (client) => {
+    await lockCreatorCaseScope(client, spaceId!, subjectId, session.userId)
+    return client.query(
+      'delete from test_subjects where id = $1 and test_space_id = $2 and created_by_user_id = $3 returning id',
+      [subjectId, spaceId, session.userId],
+    )
+  })
   if (!deleted.rows[0]) {
     response.status(409).json({ error: 'Test subject ownership changed; refresh and try again' })
     return
@@ -2978,29 +3000,13 @@ router.post('/test-spaces/:spaceId/folders', asyncRoute(async (request, response
   const spaceId = positiveId(request.params.spaceId)
   if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
   const subjectId = positiveId(request.body.testSubjectId)
-  const name = text(request.body.name, 240)
-  if (!subjectId || !name) {
-    response.status(400).json({ error: 'Folder name and test subject are required' })
-    return
-  }
-  const subject = await query('select id from test_subjects where id = $1 and test_space_id = $2', [subjectId, spaceId])
-  if (!subject.rows[0]) {
-    response.status(404).json({ error: 'Test subject not found' })
-    return
-  }
-  const lookup = blindIndex(name)
-  const duplicate = await query(
-    'select id from test_case_folders where test_subject_id = $1 and name_lookup = $2',
-    [subjectId, lookup],
-  )
-  if (duplicate.rows[0]) {
-    response.status(409).json({ error: 'Case folder already exists' })
-    return
-  }
-  await query(
-    `insert into test_case_folders (test_space_id, test_subject_id, name, name_lookup) values ($1, $2, $3, $4)`,
-    [spaceId, subjectId, encryptText(name), lookup],
-  )
+  if (!subjectId) throw new TestCaseDirectoryError('测试对象 ID 无效。')
+  const name = directoryName(request.body.name)
+  const parentId = request.body.parentId === undefined ? null : nullableDirectoryId(request.body.parentId)
+  await transaction(async (client) => {
+    await lockTestCaseScope(client, spaceId!, subjectId, session.userId)
+    await createCaseDirectory(client, spaceId!, subjectId, name, parentId)
+  })
   response.status(201).json(await getTestWorkbench(session.userId))
 }))
 
@@ -3008,34 +3014,18 @@ router.patch('/test-spaces/:spaceId/folders/:folderId', asyncRoute(async (reques
   const session = await requireActiveRole(request, response, 'tester')
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
-  const folderId = positiveId(request.params.folderId)
-  if (!(await requireSpaceAccess(response, spaceId, session.userId, true)) || !folderId) return
-  const name = text(request.body.name, 240)
-  if (!name) {
-    response.status(400).json({ error: 'Folder name is required' })
-    return
-  }
-  const folder = await query<{ test_subject_id: string }>(
-    'select test_subject_id from test_case_folders where id = $1 and test_space_id = $2',
-    [folderId, spaceId],
-  )
-  if (!folder.rows[0]) {
-    response.status(404).json({ error: 'Case folder not found' })
-    return
-  }
-  const lookup = blindIndex(name)
-  const duplicate = await query(
-    'select id from test_case_folders where test_subject_id = $1 and name_lookup = $2 and id <> $3',
-    [folder.rows[0].test_subject_id, lookup, folderId],
-  )
-  if (duplicate.rows[0]) {
-    response.status(409).json({ error: 'Case folder already exists' })
-    return
-  }
-  await query(
-    'update test_case_folders set name = $1, name_lookup = $2 where id = $3 and test_space_id = $4',
-    [encryptText(name), lookup, folderId, spaceId],
-  )
+  if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
+  const folderId = nullableDirectoryId(request.params.folderId)
+  if (!folderId) throw new TestCaseDirectoryError('目录 ID 无效。')
+  const name = request.body.name === undefined ? undefined : directoryName(request.body.name)
+  const parentId = request.body.parentId === undefined ? undefined : nullableDirectoryId(request.body.parentId)
+  if (name === undefined && parentId === undefined) throw new TestCaseDirectoryError('请指定目录名称或目标目录。')
+  await transaction(async (client) => {
+    await lockTestCaseSpace(client, spaceId!)
+    const subjectId = await caseFolderSubject(client, spaceId!, folderId)
+    await lockTestCaseScope(client, spaceId!, subjectId, session.userId)
+    await updateCaseDirectory(client, spaceId!, subjectId, folderId, { name, parentId })
+  })
   response.json(await getTestWorkbench(session.userId))
 }))
 
@@ -3043,99 +3033,102 @@ router.delete('/test-spaces/:spaceId/folders/:folderId', asyncRoute(async (reque
   const session = await requireActiveRole(request, response, 'tester')
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
-  const folderId = positiveId(request.params.folderId)
-  if (!(await requireSpaceAccess(response, spaceId, session.userId, true)) || !folderId) return
-  const folder = await query<{ id: string; test_subject_id: string }>(
-    'select id, test_subject_id from test_case_folders where id = $1 and test_space_id = $2',
-    [folderId, spaceId],
-  )
-  if (!folder.rows[0]) {
-    response.status(404).json({ error: 'Case folder not found' })
-    return
-  }
+  if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
+  const folderId = nullableDirectoryId(request.params.folderId)
+  if (!folderId) throw new TestCaseDirectoryError('目录 ID 无效。')
   await transaction(async (client) => {
-    await client.query(
-      'update test_cases set folder_id = null, updated_at = now() where folder_id = $1 and test_space_id = $2 and test_subject_id = $3',
-      [folderId, spaceId, folder.rows[0].test_subject_id],
-    )
-    await client.query(
-      'delete from test_case_folders where id = $1 and test_space_id = $2',
-      [folderId, spaceId],
-    )
+    await lockTestCaseSpace(client, spaceId!)
+    const subjectId = await caseFolderSubject(client, spaceId!, folderId)
+    await lockTestCaseScope(client, spaceId!, subjectId, session.userId)
+    await deleteEmptyCaseDirectory(client, spaceId!, subjectId, folderId)
   })
   response.json(await getTestWorkbench(session.userId))
 }))
 
-router.post('/test-spaces/:spaceId/cases', asyncRoute(async (request, response) => {
+router.post('/test-spaces/:spaceId/cases/move', asyncRoute(async (request, response) => {
   const session = await requireActiveRole(request, response, 'tester')
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
   if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
   const subjectId = positiveId(request.body.testSubjectId)
-  let folderId = positiveId(request.body.folderId)
-  const modulePath = text(request.body.modulePath, 240)
-  const title = text(request.body.title, 160)
-  if (!subjectId || !title) {
-    response.status(400).json({ error: 'Case title and test subject are required' })
-    return
+  if (!subjectId) throw new TestCaseDirectoryError('测试对象 ID 无效。')
+  const caseIds = parseCaseMoveIds(request.body.caseIds)
+  const targetFolderId = nullableDirectoryId(request.body.targetFolderId)
+  const moved = await transaction(async (client) => {
+    await lockTestCaseScope(client, spaceId!, subjectId, session.userId)
+    return moveCaseDirectories(client, spaceId!, subjectId, caseIds, targetFolderId)
+  })
+  for (const item of moved) {
+    if (item.createdByUserId && item.createdByUserId !== session.userId) onTestCaseChanged({ actorUserId: session.userId, caseId: item.id })
   }
-  const subject = await query('select id from test_subjects where id = $1 and test_space_id = $2', [subjectId, spaceId])
-  if (!subject.rows[0]) {
-    response.status(404).json({ error: 'Test subject not found' })
-    return
-  }
-  if (folderId) {
-    const folder = await query(
-      'select id from test_case_folders where id = $1 and test_space_id = $2 and test_subject_id = $3',
-      [folderId, spaceId, subjectId],
-    )
-    if (!folder.rows[0]) {
-      response.status(404).json({ error: 'Case folder not found' })
-      return
-    }
-  }
-  const priority = ['high', 'medium', 'low'].includes(request.body.priority) ? request.body.priority : 'medium'
-  const caseType = ['functional', 'regression', 'smoke', 'security', 'performance'].includes(request.body.caseType)
-    ? request.body.caseType
-    : 'functional'
-  const caseKind = isTestCaseKind(request.body.caseKind) ? request.body.caseKind : 'functional'
-  const tags = customTags(request.body.customTags)
-  const client = await pool.connect()
-  try {
-    await client.query('begin')
-    if (modulePath) folderId = await getOrCreateCaseFolder(client, spaceId!, subjectId, modulePath)
-    await client.query(
-      `
-      insert into test_cases
-        (test_space_id, test_subject_id, folder_id, title, preconditions, steps, expected_result,
-         remarks, priority, case_type, case_kind, custom_tags, status, created_by_user_id)
-      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', $13)
-      `,
-      [
-        spaceId,
-        subjectId,
-        folderId,
-        encryptText(title),
-        encryptText(text(request.body.preconditions, 5000)),
-        encryptText(text(request.body.steps, 10000)),
-        encryptText(text(request.body.expectedResult, 10000)),
-        encryptText(text(request.body.remarks, 5000)),
-        priority,
-        caseType,
-        caseKind,
-        encryptJson(tags),
-        session.userId,
-      ],
-    )
-    await client.query('commit')
-  } catch (error) {
-    await client.query('rollback')
-    throw error
-  } finally {
-    client.release()
-  }
-  response.status(201).json(await getTestWorkbench(session.userId))
+  response.json({ movedCount: moved.length, workbench: await getTestWorkbench(session.userId) })
 }))
+
+async function saveTestCaseRequest(request: express.Request, response: express.Response, updating: boolean) {
+  const session = await requireActiveRole(request, response, 'tester')
+  if (!session) return
+  const spaceId = positiveId(request.params.spaceId)
+  if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
+  const caseId = updating ? positiveId(request.params.caseId) : null
+  if (updating && !caseId) throw new TestCaseDirectoryError('用例 ID 无效。')
+  if (request.body.modulePath !== undefined && request.body.folderId !== undefined) {
+    throw new TestCaseDirectoryError('目录 ID 与旧模块名称不能同时提交。')
+  }
+  const modulePath = request.body.modulePath === undefined ? undefined
+    : request.body.modulePath === '' ? '' : directoryName(request.body.modulePath)
+  const requestedFolder = request.body.folderId === undefined ? undefined : nullableDirectoryId(request.body.folderId)
+  const creator = await transaction(async (client) => {
+    await lockTestCaseSpace(client, spaceId!)
+    const current = caseId ? (await client.query<{
+      test_subject_id: string; folder_id: string | null; created_by_user_id: string | null
+      title: string; preconditions: string; steps: string; expected_result: string; remarks: string
+      priority: string; case_type: string; custom_tags: string; status: string
+    }>('select * from test_cases where id = $1 and test_space_id = $2', [caseId, spaceId])).rows[0] : undefined
+    if (caseId && !current) throw new TestCaseDirectoryError('用例不存在。', 404)
+    const subjectId = current ? Number(current.test_subject_id) : positiveId(request.body.testSubjectId)
+    if (!subjectId) throw new TestCaseDirectoryError('测试对象 ID 无效。')
+    await lockTestCaseScope(client, spaceId!, subjectId, session.userId)
+    const title = request.body.title === undefined && current ? decryptText(current.title) : text(request.body.title, 160)
+    if (!title) throw new TestCaseDirectoryError('用例名称不能为空。')
+    const fields = [
+      ['preconditions', 'preconditions', 5000], ['steps', 'steps', 10000],
+      ['expectedResult', 'expected_result', 10000], ['remarks', 'remarks', 5000],
+    ] as const
+    const content = fields.map(([key, column, limit]) => encryptText(
+      request.body[key] === undefined && current ? decryptText(current[column]) : text(request.body[key], limit),
+    ))
+    const priority = ['high', 'medium', 'low'].includes(request.body.priority) ? request.body.priority : current?.priority ?? 'medium'
+    const caseType = ['functional', 'regression', 'smoke', 'security', 'performance'].includes(request.body.caseType)
+      ? request.body.caseType : current?.case_type ?? 'functional'
+    const status = isTestCaseStatus(request.body.status) ? request.body.status : current?.status ?? 'active'
+    const tags = request.body.customTags === undefined && current ? decryptJson<string[]>(current.custom_tags, []) : customTags(request.body.customTags)
+    let folderId = requestedFolder === undefined ? (current?.folder_id ? Number(current.folder_id) : null) : requestedFolder
+    createDirectoryIndex(await readCaseDirectories(client, spaceId!, subjectId)).path(folderId)
+    // All input is normalized and every reference validated before creating a legacy module.
+    if (modulePath !== undefined) folderId = modulePath ? await getOrCreateCaseFolder(client, spaceId!, subjectId, modulePath) : null
+    const values = [encryptText(title), ...content, priority, caseType, encryptJson(tags), status, folderId]
+    if (caseId) {
+      await client.query(
+        `update test_cases set title = $1, preconditions = $2, steps = $3, expected_result = $4, remarks = $5,
+         priority = $6, case_type = $7, custom_tags = $8, status = $9,
+         folder_id = $10, updated_at = now() where id = $11 and test_space_id = $12 and test_subject_id = $13`,
+        [...values, caseId, spaceId, subjectId],
+      )
+    } else {
+      await client.query(
+        `insert into test_cases (title, preconditions, steps, expected_result, remarks, priority, case_type,
+         custom_tags, status, folder_id, test_space_id, test_subject_id, created_by_user_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        [...values, spaceId, subjectId, session.userId],
+      )
+    }
+    return current?.created_by_user_id ? Number(current.created_by_user_id) : null
+  })
+  if (caseId && creator && creator !== session.userId) onTestCaseChanged({ actorUserId: session.userId, caseId })
+  response.status(updating ? 200 : 201).json(await getTestWorkbench(session.userId))
+}
+
+router.post('/test-spaces/:spaceId/cases', asyncRoute((request, response) => saveTestCaseRequest(request, response, false)))
 
 router.post(
   '/test-spaces/:spaceId/cases/import',
@@ -3146,172 +3139,53 @@ router.post(
     const spaceId = positiveId(request.params.spaceId)
     if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
     const subjectId = positiveId(request.query.testSubjectId)
-    if (!subjectId) {
-      response.status(400).json({ error: 'Valid test subject is required' })
-      return
-    }
-    const subject = await query(
-      'select id from test_subjects where id = $1 and test_space_id = $2',
-      [subjectId, spaceId],
-    )
-    if (!subject.rows[0]) {
-      response.status(404).json({ error: 'Test subject not found' })
-      return
-    }
-    const parsed = parseTestCaseCsv(typeof request.body === 'string' ? request.body : '')
-    if (request.query.preview === 'true') {
-      response.json({ preview: parsed.preview })
-      return
-    }
-
-    const client = await pool.connect()
-    try {
-      await client.query('begin')
-      const folderIds = new Map<string, number>()
-      for (const row of parsed.rows) {
-        let folderId = folderIds.get(row.modulePath)
-        if (!folderId) {
-          folderId = await getOrCreateCaseFolder(client, spaceId!, subjectId, row.modulePath)
-          folderIds.set(row.modulePath, folderId)
-        }
+    if (!subjectId) throw new TestCaseDirectoryError('测试对象 ID 无效。')
+    const mode = request.query.directoryMode ?? 'legacy'
+    if (mode !== 'current' && mode !== 'tree' && mode !== 'legacy') throw new TestCaseDirectoryError('导入目录方式无效。')
+    const targetFolderId = request.query.targetFolderId === undefined ? null : nullableDirectoryId(request.query.targetFolderId)
+    if (mode === 'legacy' && targetFolderId !== null) throw new TestCaseDirectoryError('旧版导入只能使用测试对象根目录。')
+    const parsed = parseTestCaseCsv(typeof request.body === 'string' ? request.body : '', mode)
+    const preview = await transaction(async (client) => {
+      await lockTestCaseScope(client, spaceId!, subjectId, session.userId)
+      const directories = await readCaseDirectories(client, spaceId!, subjectId)
+      const plan = planDirectoryImport(directories, targetFolderId, parsed.rows.map((row) => row.directorySegments))
+      const result = {
+        ...parsed.preview,
+        targetPath: plan.targetPath.join(' / ') || '根目录',
+        newDirectoryCount: plan.created.length,
+        reusedDirectoryCount: plan.reusedCount,
+        samplePaths: parsed.rows.slice(0, 5).map((row) => row.directorySegments.join(' / ') || '当前目录'),
+      }
+      if (request.query.preview === 'true') return result
+      // The complete input and every target path are validated before the first write.
+      const insertedIds = new Map<number, number>()
+      for (const directory of plan.created) {
+        const parentId = directory.parentId !== null && directory.parentId < 0 ? insertedIds.get(directory.parentId)! : directory.parentId
+        insertedIds.set(directory.id, await insertCaseDirectory(client, spaceId!, subjectId, directory.name, parentId))
+      }
+      for (const [index, row] of parsed.rows.entries()) {
+        const plannedId = plan.folderIds[index]
+        const folderId = plannedId !== null && plannedId < 0 ? insertedIds.get(plannedId)! : plannedId
         await client.query(
-          `
-          insert into test_cases
+          `insert into test_cases
             (test_space_id, test_subject_id, folder_id, title, preconditions, steps,
-             expected_result, remarks, priority, case_type, case_kind, custom_tags, status, created_by_user_id)
-          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'functional', 'functional', $10, 'active', $11)
-          `,
-          [
-            spaceId,
-            subjectId,
-            folderId,
-            encryptText(row.title),
-            encryptText(row.preconditions),
-            encryptText(row.steps),
-            encryptText(row.expectedResult),
-            encryptText(row.remarks),
-            row.priority,
-            encryptJson(row.customTags),
-            session.userId,
-          ],
+             expected_result, remarks, priority, case_type, custom_tags, status, created_by_user_id)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'functional', $10, 'active', $11)`,
+          [spaceId, subjectId, folderId, encryptText(row.title), encryptText(row.preconditions), encryptText(row.steps),
+            encryptText(row.expectedResult), encryptText(row.remarks), row.priority, encryptJson(row.customTags), session.userId],
         )
       }
-      await client.query('commit')
-    } catch (error) {
-      await client.query('rollback')
-      throw error
-    } finally {
-      client.release()
-    }
-    response.status(201).json({
-      importedCount: parsed.rows.length,
-      workbench: await getTestWorkbench(session.userId),
+      return result
     })
+    if (request.query.preview === 'true') {
+      response.json({ preview })
+      return
+    }
+    response.status(201).json({ importedCount: parsed.rows.length, workbench: await getTestWorkbench(session.userId) })
   }),
 )
 
-router.patch('/test-spaces/:spaceId/cases/:caseId', asyncRoute(async (request, response) => {
-  const session = await requireActiveRole(request, response, 'tester')
-  if (!session) return
-  const spaceId = positiveId(request.params.spaceId)
-  const caseId = positiveId(request.params.caseId)
-  if (!(await requireSpaceAccess(response, spaceId, session.userId, true)) || !caseId) return
-  const current = await query<{
-    case_kind: TestCaseKind
-    case_type: string
-    custom_tags: string
-    created_by_user_id: string | null
-    expected_result: string
-    folder_id: string | null
-    preconditions: string
-    priority: string
-    remarks: string
-    status: string
-    steps: string
-    test_subject_id: string
-    title: string
-  }>('select title, preconditions, steps, expected_result, remarks, status, folder_id, priority, case_type, case_kind, custom_tags, test_subject_id, created_by_user_id from test_cases where id = $1 and test_space_id = $2', [caseId, spaceId])
-  if (!current.rows[0]) {
-    response.status(404).json({ error: 'Test case not found' })
-    return
-  }
-  const row = current.rows[0]
-  const title = request.body.title === undefined ? decryptText(row.title) : text(request.body.title, 160)
-  if (!title) {
-    response.status(400).json({ error: 'Case title is required' })
-    return
-  }
-  const status = isTestCaseStatus(request.body.status) ? request.body.status : row.status
-  let folderId = request.body.folderId === undefined
-    ? (row.folder_id ? Number(row.folder_id) : null)
-    : positiveId(request.body.folderId)
-  const modulePath = request.body.modulePath === undefined
-    ? undefined
-    : text(request.body.modulePath, 240)
-  if (folderId) {
-    const folder = await query(
-      `select id from test_case_folders where id = $1 and test_space_id = $2 and test_subject_id = (select test_subject_id from test_cases where id = $3)`,
-      [folderId, spaceId, caseId],
-    )
-    if (!folder.rows[0]) {
-      response.status(400).json({ error: 'Case folder is invalid' })
-      return
-    }
-  }
-  const priority = ['high', 'medium', 'low'].includes(request.body.priority)
-    ? request.body.priority
-    : row.priority
-  const caseType = ['functional', 'regression', 'smoke', 'security', 'performance'].includes(request.body.caseType)
-    ? request.body.caseType
-    : row.case_type
-  const caseKind = isTestCaseKind(request.body.caseKind) ? request.body.caseKind : row.case_kind
-  const tags = request.body.customTags === undefined
-    ? decryptJson<string[]>(row.custom_tags, [])
-    : customTags(request.body.customTags)
-  const client = await pool.connect()
-  try {
-    await client.query('begin')
-    if (modulePath !== undefined) {
-      folderId = modulePath
-        ? await getOrCreateCaseFolder(client, spaceId!, Number(row.test_subject_id), modulePath)
-        : null
-    }
-    await client.query(
-      `
-      update test_cases set
-        title = $1, preconditions = $2, steps = $3, expected_result = $4, remarks = $5,
-        status = $6, folder_id = $7, priority = $8, case_type = $9,
-        case_kind = $10, custom_tags = $11, updated_at = now()
-      where id = $12 and test_space_id = $13
-      `,
-      [
-        encryptText(title),
-        encryptText(request.body.preconditions === undefined ? decryptText(row.preconditions) : text(request.body.preconditions, 5000)),
-        encryptText(request.body.steps === undefined ? decryptText(row.steps) : text(request.body.steps, 10000)),
-        encryptText(request.body.expectedResult === undefined ? decryptText(row.expected_result) : text(request.body.expectedResult, 10000)),
-        encryptText(request.body.remarks === undefined ? decryptText(row.remarks) : text(request.body.remarks, 5000)),
-        status,
-        folderId,
-        priority,
-        caseType,
-        caseKind,
-        encryptJson(tags),
-        caseId,
-        spaceId,
-      ],
-    )
-    await client.query('commit')
-  } catch (error) {
-    await client.query('rollback')
-    throw error
-  } finally {
-    client.release()
-  }
-  if (row.created_by_user_id && Number(row.created_by_user_id) !== session.userId) {
-    onTestCaseChanged({ actorUserId: session.userId, caseId })
-  }
-  response.json(await getTestWorkbench(session.userId))
-}))
+router.patch('/test-spaces/:spaceId/cases/:caseId', asyncRoute((request, response) => saveTestCaseRequest(request, response, true)))
 
 router.delete('/test-spaces/:spaceId/cases/:caseId', asyncRoute(async (request, response) => {
   const session = await requireActiveRole(request, response, 'tester')
@@ -3338,12 +3212,16 @@ router.delete('/test-spaces/:spaceId/cases/:caseId', asyncRoute(async (request, 
     response.status(403).json({ error: 'Only the test case creator can delete it' })
     return
   }
-  const deleted = await query(
-    `delete from test_cases
-     where id = $1 and test_space_id = $2 and created_by_user_id = $3
-     returning id`,
-    [caseId, spaceId, session.userId],
-  )
+  const deleted = await transaction(async (client) => {
+    await lockTestCaseSpace(client, spaceId!)
+    const scope = await client.query<{ test_subject_id: string }>('select test_subject_id from test_cases where id = $1 and test_space_id = $2', [caseId, spaceId])
+    if (!scope.rows[0]) throw new TestCaseDirectoryError('用例不存在。', 404)
+    await lockCreatorCaseScope(client, spaceId!, Number(scope.rows[0].test_subject_id), session.userId)
+    return client.query(
+      `delete from test_cases where id = $1 and test_space_id = $2 and created_by_user_id = $3 returning id`,
+      [caseId, spaceId, session.userId],
+    )
+  })
   if (!deleted.rows[0]) {
     response.status(409).json({ error: 'Test case ownership changed; refresh and try again' })
     return
@@ -3413,12 +3291,14 @@ router.post('/test-spaces/:spaceId/plans', asyncRoute(async (request, response) 
   const client = await pool.connect()
   try {
     await client.query('begin')
+    await lockTestCaseSpace(client, spaceId!)
+    const planEnvironment = await resolvePlanEnvironment(client, spaceId!, request.body.testEnvironmentId)
     const created = await client.query<{ id: string }>(
       `
       insert into test_plans
         (test_space_id, test_subject_id, project_id, name, version_label, environment, starts_on, ends_on,
-         status, owner_user_id, created_by_user_id)
-      values ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9, $10)
+         status, owner_user_id, created_by_user_id, test_environment_id, environment_access_url)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9, $10, $11, $12)
       returning id
       `,
       [
@@ -3427,11 +3307,13 @@ router.post('/test-spaces/:spaceId/plans', asyncRoute(async (request, response) 
         projectId,
         encryptText(name),
         encryptText(text(request.body.versionLabel, 80)),
-        encryptText(text(request.body.environment, 160)),
+        planEnvironment.environment,
         startsOn,
         endsOn,
         ownerUserId,
         session.userId,
+        planEnvironment.test_environment_id,
+        planEnvironment.environment_access_url,
       ],
     )
     const planId = Number(created.rows[0].id)
@@ -3588,17 +3470,28 @@ router.patch('/test-spaces/:spaceId/plans/:planId/details', asyncRoute(async (re
   const client = await pool.connect()
   try {
     await client.query('begin')
+    await lockTestCaseSpace(client, spaceId!)
+    const lockedPlan = await client.query<PlanEnvironmentSnapshot & { status: string; created_by_user_id: string | null }>(
+      'select environment, environment_access_url, test_environment_id, status, created_by_user_id from test_plans where id = $1 and test_space_id = $2 for update',
+      [planId, spaceId],
+    )
+    const currentPlan = lockedPlan.rows[0]
+    if (!currentPlan || Number(currentPlan.created_by_user_id) !== session.userId) {
+      throw Object.assign(new Error('Only the test plan creator can edit it'), { status: 403 })
+    }
+    const planEnvironment = await resolvePlanEnvironment(client, spaceId!, request.body.testEnvironmentId, currentPlan)
     await client.query(
       `
       update test_plans set
         name = $1, version_label = $2, environment = $3, starts_on = $4, ends_on = $5,
-        owner_user_id = $6, project_id = $7, test_subject_id = $8, updated_at = now()
+        owner_user_id = $6, project_id = $7, test_subject_id = $8, updated_at = now(),
+        test_environment_id = $12, environment_access_url = $13
       where id = $9 and test_space_id = $10 and created_by_user_id = $11
       `,
       [
         encryptText(name),
         encryptText(text(request.body.versionLabel, 80)),
-        encryptText(text(request.body.environment, 160)),
+        planEnvironment.environment,
         startsOn,
         endsOn,
         ownerUserId,
@@ -3607,6 +3500,8 @@ router.patch('/test-spaces/:spaceId/plans/:planId/details', asyncRoute(async (re
         planId,
         spaceId,
         session.userId,
+        planEnvironment.test_environment_id,
+        planEnvironment.environment_access_url,
       ],
     )
     await client.query('delete from test_plan_subjects where test_plan_id = $1', [planId])

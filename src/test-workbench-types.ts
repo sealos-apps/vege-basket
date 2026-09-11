@@ -2,7 +2,6 @@ import type { Priority, Project } from './types'
 import type { UserRole } from './api'
 
 export type TestCaseStatus = 'draft' | 'active' | 'archived'
-export type TestCaseKind = 'functional' | 'baseline'
 export type TestCaseType = 'functional' | 'regression' | 'smoke' | 'security' | 'performance'
 export type TestPlanStatus = 'draft' | 'in_progress' | 'completed' | 'aborted'
 export type TestResult = 'untested' | 'passed' | 'failed' | 'blocked' | 'skipped'
@@ -108,6 +107,7 @@ export type TestSubject = {
 }
 
 export type TestCaseFolder = {
+  parentId: number | null
   createdAt: string
   id: number
   name: string
@@ -117,7 +117,6 @@ export type TestCaseFolder = {
 
 export type TestCase = {
   canDelete: boolean
-  caseKind: TestCaseKind
   caseType: TestCaseType
   createdAt: string
   customTags: string[]
@@ -141,6 +140,7 @@ export type TestPlan = {
   createdByUserId?: number
   endsOn?: string
   environment: string
+  environmentAccessUrl: string
   id: number
   name: string
   ownerUserId?: number
@@ -152,6 +152,7 @@ export type TestPlan = {
   testSubjectIds: number[]
   updatedAt: string
   versionLabel: string
+  testEnvironmentId?: number
 }
 
 export type TestPlanCase = {
@@ -308,6 +309,10 @@ export type TestWorkbenchData = {
 export type TestWorkbenchProjectOption = Pick<Project, 'id' | 'name'>
 
 export type TestCaseImportPreview = {
+  targetPath?: string
+  newDirectoryCount?: number
+  reusedDirectoryCount?: number
+  samplePaths?: string[]
   levelCounts: Record<'P0' | 'P1' | 'P2', number>
   moduleCount: number
   rowCount: number

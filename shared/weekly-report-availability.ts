@@ -91,6 +91,29 @@ export function getShanghaiDateTime(value = new Date()) {
   return `${part('year')}-${part('month')}-${part('day')}T${part('hour')}:${part('minute')}:${part('second')}`
 }
 
+function organizationWeekStart(today: string, weekStartsOn: number) {
+  const date = new Date(`${today}T00:00:00Z`)
+  const startDay = weekStartsOn === 7 ? 0 : weekStartsOn
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() - startDay + 7) % 7))
+  return date.toISOString().slice(0, 10)
+}
+
+export function getWeeklyReportRulesExample(params: {
+  today: string
+  weekStartsOn: number
+  rules: WeeklyReportRules
+}) {
+  const rules = normalizeWeeklyReportRules(params.rules)
+  if (!rules) return null
+  const weekStart = organizationWeekStart(params.today, params.weekStartsOn)
+  return {
+    weekStart,
+    weekEnd: shiftIsoDate(weekStart, 6),
+    ...getWeeklyReportWindow({ rules, weekStart }),
+    nextOpensAt: getWeeklyReportWindow({ rules, weekStart: shiftIsoDate(weekStart, 7) }).opensAt,
+  }
+}
+
 export function getWeeklyReportTargetWeekStart(params: {
   now: string
   rules?: WeeklyReportRules
@@ -98,11 +121,7 @@ export function getWeeklyReportTargetWeekStart(params: {
 }) {
   const rules = normalizeWeeklyReportRules(params.rules ?? defaultWeeklyReportRules)
     ?? defaultWeeklyReportRules
-  const today = params.now.slice(0, 10)
-  const date = new Date(`${today}T00:00:00Z`)
-  const startDay = params.weekStartsOn === 7 ? 0 : params.weekStartsOn
-  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() - startDay + 7) % 7))
-  const current = date.toISOString().slice(0, 10)
+  const current = organizationWeekStart(params.now.slice(0, 10), params.weekStartsOn)
   const previous = shiftIsoDate(current, -7)
   const previousWindow = getWeeklyReportWindow({ rules, weekStart: previous })
   return params.now <= previousWindow.closesAt && params.now >= previousWindow.opensAt

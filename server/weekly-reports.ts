@@ -1020,7 +1020,8 @@ async function loadCollection(client: PoolClient, organizationId: number, weekSt
        and membership.status = 'active'
        and membership.weekly_report_required = true
        and lower(users.email) <> 'admin'
-     order by lower(coalesce(nullif(users.display_name, ''), users.email))`,
+     order by membership.weekly_report_sort_order asc nulls last,
+       lower(coalesce(nullif(users.display_name, ''), users.email)), membership.user_id`,
     [organizationId, weekStart],
   )
   return result.rows.map((row) => ({

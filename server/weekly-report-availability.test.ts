@@ -3,11 +3,57 @@ import test from 'node:test'
 import {
   defaultWeeklyReportRules,
   getWeeklyReportCreationAvailability,
+  getWeeklyReportRulesExample,
   getWeeklyReportTargetWeekStart,
   normalizeWeeklyReportRules,
   submittedWeeklyReportCreationReason,
 } from '../shared/weekly-report-availability.ts'
 import { formatShanghaiCalendarDate } from '../shared/calendar-date.ts'
+
+test('rule examples show the report period, actual window, and next opening', () => {
+  assert.deepEqual(getWeeklyReportRulesExample({
+    today: '2026-09-10', weekStartsOn: 1, rules: defaultWeeklyReportRules,
+  }), {
+    weekStart: '2026-09-07', weekEnd: '2026-09-13',
+    opensAt: '2026-09-11T00:00:00', closesAt: '2026-09-14T23:59:59',
+    nextOpensAt: '2026-09-18T00:00:00',
+  })
+})
+
+test('rule examples count from the organization start day across months and years', () => {
+  assert.deepEqual(getWeeklyReportRulesExample({
+    today: '2026-12-31', weekStartsOn: 7,
+    rules: { openDay: 5, openTime: '09:30', closeDay: 2, closeTime: '18:00' },
+  }), {
+    weekStart: '2026-12-27', weekEnd: '2027-01-02',
+    opensAt: '2026-12-31T09:30:00', closesAt: '2027-01-04T18:00:59',
+    nextOpensAt: '2027-01-07T09:30:00',
+  })
+})
+
+test('invalid or overlapping rule drafts never show a default example', () => {
+  for (const rules of [
+    { ...defaultWeeklyReportRules, openTime: '' },
+    { ...defaultWeeklyReportRules, closeDay: 7 },
+    { openDay: 5, openTime: '09:00', closeDay: 5, closeTime: '09:00' },
+  ]) {
+    assert.equal(getWeeklyReportRulesExample({ today: '2026-09-10', weekStartsOn: 1, rules }), null)
+  }
+})
+
+test('example boundaries agree with submission availability to the second', () => {
+  const rules = { openDay: 5, openTime: '09:00', closeDay: 5, closeTime: '08:59' }
+  const example = getWeeklyReportRulesExample({ today: '2026-09-10', weekStartsOn: 1, rules })!
+  for (const [now, enabled] of [
+    ['2026-09-11T08:59:59', false], [example.opensAt, true],
+    [example.closesAt, true], [example.nextOpensAt, false],
+  ] as const) {
+    assert.equal(getWeeklyReportCreationAvailability({
+      rules, now, today: now.slice(0, 10), weekStart: example.weekStart,
+      loading: false, submitted: false,
+    }).enabled, enabled)
+  }
+})
 
 test('database date values preserve the Shanghai calendar day', () => {
   assert.equal(formatShanghaiCalendarDate(new Date('2026-07-26T16:00:00.000Z')), '2026-07-27')

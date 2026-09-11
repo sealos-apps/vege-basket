@@ -1,3 +1,4 @@
+import { backfillCaseDirectoryEncryption } from './test-case-directory-backfill.ts'
 import 'dotenv/config'
 import { pool, query } from './db.ts'
 import { schemaSql } from './schema.ts'
@@ -121,6 +122,17 @@ async function encryptTestSpaceVersionFields() {
 
 async function main() {
   await query(schemaSql)
+  const directoryClient = await pool.connect()
+  try {
+    await directoryClient.query('begin')
+    await backfillCaseDirectoryEncryption(directoryClient)
+    await directoryClient.query('commit')
+  } catch (error) {
+    await directoryClient.query('rollback')
+    throw error
+  } finally {
+    directoryClient.release()
+  }
 
   const projects = await query<{ id: string; name: string; tags: string[]; tags_encrypted: string | null }>(
     'select id, name, tags, tags_encrypted from projects',
@@ -164,6 +176,7 @@ async function main() {
   await encryptColumn('project_package_operations', 'content')
   await encryptProjectPackageOperationTodoNotes()
   await encryptColumn('test_cases', 'remarks')
+  await encryptColumn('test_plans', 'environment_access_url')
   await encryptTestEnvironmentFields()
   await encryptTestSpaceVersionFields()
 

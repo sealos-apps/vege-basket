@@ -151,6 +151,11 @@ historical product context; current code and these operational docs take precede
   same-site URL built from validated `APP_PUBLIC_URL` and its positive canonical todo ID.
   Escape current user-controlled item text for Lark Markdown, and render legacy `Veges
   待办日报 | YYYY-MM-DD` bodies as Markdown literals before retrying them.
+- Test-case directory and assignment writes must lock the test space, then test subject,
+  then resources, and recheck access in the transaction. Lock multiple spaces and subjects
+  in numeric order for space imports. Directories may be deleted only when they have no
+  child directories or directly assigned cases; never silently reassign their contents.
+  Preserve encrypted names, sibling-scoped blind indexes, and existing case/plan snapshots.
 - Concurrency invariants belong in PostgreSQL unique indexes plus conflict-safe SQL, not
   select-before-insert checks alone.
 - Todo completion and reopen transitions must lock the todo row inside the same
