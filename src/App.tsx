@@ -7454,7 +7454,7 @@ function NotificationCenterView({
     for (const todo of visible(notifications.assignedTodos)) {
       result.push({
         id: `assigned-todo-${todo.id}`,
-        message: `${todo.assignedByName ?? '有人'} 在「${todo.projectName}」中为你添加了一条待办「${todo.title}」，请及时前往待办列表查看。`,
+        message: `${todo.assignedByName ?? '有人'} 在「${todo.projectName}${todo.subprojectName ? ` / ${todo.subprojectName}` : ''}」中为你添加了一条待办「${todo.title}」，请及时前往待办列表查看。`,
         sortAt: sortTime(todo),
         time: todo.assignedAt,
       })
@@ -7462,7 +7462,7 @@ function NotificationCenterView({
     for (const todo of visible(notifications.watchedTodos)) {
       result.push({
         id: `watched-todo-${todo.id}`,
-        message: `${todo.watchedByName ?? '有人'} 在「${todo.projectName}」中关注了待办「${todo.title}」。`,
+        message: `${todo.watchedByName ?? '有人'} 在「${todo.projectName}${todo.subprojectName ? ` / ${todo.subprojectName}` : ''}」中关注了待办「${todo.title}」。`,
         sortAt: sortTime(todo),
         time: todo.watchedAt,
       })
@@ -7486,7 +7486,7 @@ function NotificationCenterView({
     for (const todo of visible(notifications.dueTomorrowTodos)) {
       result.push({
         id: `due-tomorrow-${todo.id}`,
-        message: `「${todo.projectName}」中的待办「${todo.title}」将于 ${todo.dueDate} 到期，请及时处理。`,
+        message: `「${todo.projectName}${todo.subprojectName ? ` / ${todo.subprojectName}` : ''}」中的待办「${todo.title}」将于 ${todo.dueDate} 到期，请及时处理。`,
         sortAt: sortTime(todo),
         time: todo.dueDate,
       })
@@ -7494,7 +7494,7 @@ function NotificationCenterView({
     for (const note of visible(notifications.noteMentions)) {
       result.push({
         id: `note-mention-${note.noteId ?? note.id}`,
-        message: `${note.noteAuthorName ?? '有人'} 在「${note.projectName}」的待办「${note.title}」备注中提到了你${note.notePreview ? `：“${note.notePreview}”` : '。'}`,
+        message: `${note.noteAuthorName ?? '有人'} 在「${note.projectName}${note.subprojectName ? ` / ${note.subprojectName}` : ''}」的待办「${note.title}」备注中提到了你${note.notePreview ? `：“${note.notePreview}”` : '。'}`,
         sortAt: sortTime(note),
         time: note.createdAt,
       })
