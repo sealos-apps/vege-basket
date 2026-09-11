@@ -1514,9 +1514,6 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
   const scopePlanCases = scope?.spaceId && scope?.subjectId
     ? ` and p.test_space_id = ${scope.spaceId} and p.test_subject_id = ${scope.subjectId}`
     : ''
-  const scopeBugs = scope?.spaceId && scope?.subjectId
-    ? ` and b.test_space_id = ${scope.spaceId} and b.test_subject_id = ${scope.subjectId}`
-    : ''
 
   const [
     spaces,
@@ -1757,7 +1754,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
         on m.test_space_id = b.test_space_id and m.user_id = $1 and m.status = 'active'
       left join users reporter on reporter.id = b.reporter_user_id
       left join users assignee on assignee.id = b.assignee_user_id
-      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopeBugs}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})
       order by b.updated_at desc, b.id desc
       `,
       [userId],

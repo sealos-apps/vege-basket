@@ -70,6 +70,8 @@ test('test-space member settings do not show unrelated departed accounts', () =>
 })
 
 test('Bug scope stays within the current space while its subject is returned as detail metadata', () => {
+  // Scoped polling replaces the full client cache, so Bugs must span all accessible spaces.
+  assert.doesNotMatch(testWorkbenchSource, /scopeBugs/u)
   assert.match(testWorkbenchSource, /join test_subjects subject on subject\.id = b\.test_subject_id/u)
   assert.match(testWorkbenchSource, /subject\.name as test_subject_name/u)
   assert.match(testWorkbenchSource, /testSubjectName: decryptText\(row\.test_subject_name\)/u)
