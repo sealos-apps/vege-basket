@@ -140,6 +140,7 @@ export type TestPlan = {
   createdByUserId?: number
   endsOn?: string
   environment: string
+  environmentAccessUrl: string
   id: number
   name: string
   ownerUserId?: number
@@ -151,6 +152,7 @@ export type TestPlan = {
   testSubjectIds: number[]
   updatedAt: string
   versionLabel: string
+  testEnvironmentId?: number
 }
 
 export type TestPlanCase = {

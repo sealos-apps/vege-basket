@@ -1793,6 +1793,10 @@ create table if not exists test_plans (
 alter table test_plans
   add column if not exists project_id bigint references projects(id) on delete set null;
 
+alter table test_plans
+  add column if not exists test_environment_id bigint references test_environments(id) on delete set null,
+  add column if not exists environment_access_url text not null default '';
+
 do $$
 begin
   if not exists (

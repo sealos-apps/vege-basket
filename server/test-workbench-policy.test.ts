@@ -69,7 +69,7 @@ test('Bug scope stays within the current space while its subject is returned as 
   assert.match(testWorkbenchClientSource, /const bugs = data\.bugs\.filter\(\s*\(bug\) => bug\.testSpaceId === spaceId,/u)
   assert.doesNotMatch(testWorkbenchClientSource, /const bugs = data\.bugs\.filter\(\s*\(bug\) => bug\.testSpaceId === spaceId && \(!subjectId/u)
   assert.match(testWorkbenchClientSource, /activeSpace && tab === 'cases' \?/u)
-  assert.match(testWorkbenchClientSource, /tab === 'cases' && !activeSubject \?/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /tab === 'cases' && !activeSubject \?/u)
   assert.match(testWorkbenchClientSource, /test-bug-detail-meta/u)
   assert.match(testWorkbenchClientSource, /测试对象\s*<strong>\{bug\.testSubjectName/u)
   assert.match(testWorkbenchClientSource, /测试空间\s*<strong>\{bug\.testSpaceName \|\| '未记录'\}/u)

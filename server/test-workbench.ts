@@ -56,6 +56,7 @@ import {
   type OrganizationContext,
 } from '../shared/organization-context.ts'
 import { containerImageReferenceKey, normalizeContainerImageReference } from '../shared/container-image-reference.ts'
+import { resolvePlanEnvironment, type PlanEnvironmentSnapshot } from './test-plan-environment.ts'
 import {
   createClusterImageVerificationScript,
   createPackageVerificationScript,
@@ -1638,6 +1639,8 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       created_by_user_id: string | null
       ends_on: string | null
       environment: string
+      environment_access_url: string
+      test_environment_id: string | null
       id: string
       name: string
       owner_user_id: string | null
@@ -2154,6 +2157,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       createdByUserId: row.created_by_user_id ? Number(row.created_by_user_id) : undefined,
       endsOn: row.ends_on || undefined,
       environment: decryptText(row.environment),
+      environmentAccessUrl: decryptText(row.environment_access_url),
       id: Number(row.id),
       name: decryptText(row.name),
       ownerUserId: row.owner_user_id ? Number(row.owner_user_id) : undefined,
@@ -2165,6 +2169,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       testSubjectIds: subjectIdsByPlan.get(Number(row.id)) ?? [Number(row.test_subject_id)],
       updatedAt: row.updated_at.toISOString(),
       versionLabel: decryptText(row.version_label),
+      testEnvironmentId: row.test_environment_id ? Number(row.test_environment_id) : undefined,
     })),
     spaces: spaces.rows.map((row) => ({
       accessLevel: row.access_level,
@@ -3286,12 +3291,14 @@ router.post('/test-spaces/:spaceId/plans', asyncRoute(async (request, response) 
   const client = await pool.connect()
   try {
     await client.query('begin')
+    await lockTestCaseSpace(client, spaceId!)
+    const planEnvironment = await resolvePlanEnvironment(client, spaceId!, request.body.testEnvironmentId)
     const created = await client.query<{ id: string }>(
       `
       insert into test_plans
         (test_space_id, test_subject_id, project_id, name, version_label, environment, starts_on, ends_on,
-         status, owner_user_id, created_by_user_id)
-      values ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9, $10)
+         status, owner_user_id, created_by_user_id, test_environment_id, environment_access_url)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9, $10, $11, $12)
       returning id
       `,
       [
@@ -3300,11 +3307,13 @@ router.post('/test-spaces/:spaceId/plans', asyncRoute(async (request, response) 
         projectId,
         encryptText(name),
         encryptText(text(request.body.versionLabel, 80)),
-        encryptText(text(request.body.environment, 160)),
+        planEnvironment.environment,
         startsOn,
         endsOn,
         ownerUserId,
         session.userId,
+        planEnvironment.test_environment_id,
+        planEnvironment.environment_access_url,
       ],
     )
     const planId = Number(created.rows[0].id)
@@ -3461,17 +3470,28 @@ router.patch('/test-spaces/:spaceId/plans/:planId/details', asyncRoute(async (re
   const client = await pool.connect()
   try {
     await client.query('begin')
+    await lockTestCaseSpace(client, spaceId!)
+    const lockedPlan = await client.query<PlanEnvironmentSnapshot & { status: string; created_by_user_id: string | null }>(
+      'select environment, environment_access_url, test_environment_id, status, created_by_user_id from test_plans where id = $1 and test_space_id = $2 for update',
+      [planId, spaceId],
+    )
+    const currentPlan = lockedPlan.rows[0]
+    if (!currentPlan || Number(currentPlan.created_by_user_id) !== session.userId) {
+      throw Object.assign(new Error('Only the test plan creator can edit it'), { status: 403 })
+    }
+    const planEnvironment = await resolvePlanEnvironment(client, spaceId!, request.body.testEnvironmentId, currentPlan)
     await client.query(
       `
       update test_plans set
         name = $1, version_label = $2, environment = $3, starts_on = $4, ends_on = $5,
-        owner_user_id = $6, project_id = $7, test_subject_id = $8, updated_at = now()
+        owner_user_id = $6, project_id = $7, test_subject_id = $8, updated_at = now(),
+        test_environment_id = $12, environment_access_url = $13
       where id = $9 and test_space_id = $10 and created_by_user_id = $11
       `,
       [
         encryptText(name),
         encryptText(text(request.body.versionLabel, 80)),
-        encryptText(text(request.body.environment, 160)),
+        planEnvironment.environment,
         startsOn,
         endsOn,
         ownerUserId,
@@ -3480,6 +3500,8 @@ router.patch('/test-spaces/:spaceId/plans/:planId/details', asyncRoute(async (re
         planId,
         spaceId,
         session.userId,
+        planEnvironment.test_environment_id,
+        planEnvironment.environment_access_url,
       ],
     )
     await client.query('delete from test_plan_subjects where test_plan_id = $1', [planId])

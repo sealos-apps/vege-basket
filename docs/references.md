@@ -302,8 +302,7 @@ must remain bound to the authorized project ID.
   `步骤描述`, `预期结果`, `备注`, and `用例等级`. Levels map as P0/high,
   P1/medium, and P2/low. Files are limited to 2 MB and 1000 non-empty rows.
 - Test-plan status: `draft`, `in_progress`, `completed`, `aborted`.
-- Test plans are scoped to a test space and then associated with one or more test
-  subjects. A plan may optionally link to an accessible project through `projectId`;
+- Test plans are scoped to a test space and select cases from the space-level case library. Legacy subject IDs remain in snapshots for compatibility. A plan may optionally link to an accessible project through `projectId` and must select an environment assigned to the current space through `testEnvironmentId`;
   project access is checked when creating or updating the plan. A plan response includes
   `projectId`, `testSubjectIds`, and `canManage`. Only its creator receives `true` and
   may use `PATCH /api/test-spaces/:spaceId/plans/:planId/details` to change metadata,

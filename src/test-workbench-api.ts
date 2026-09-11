@@ -278,6 +278,7 @@ export function createTestPlan(spaceId: number, payload: {
   caseIds: number[]
   endsOn?: string
   environment: string
+  testEnvironmentId?: number
   name: string
   ownerUserId?: number
   projectId?: number
@@ -302,6 +303,7 @@ export function updateTestPlan(spaceId: number, planId: number, payload: {
   caseIds: number[]
   endsOn?: string
   environment: string
+  testEnvironmentId?: number
   name: string
   ownerUserId?: number
   projectId?: number

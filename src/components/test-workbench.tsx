@@ -1,7 +1,7 @@
 import { useDirectoryTreeState } from '../use-case-directory-tree'
 import { buildTestCaseCsv, testCaseCsvHeaders } from '../test-case-csv'
 import { DirectoryPicker, DirectoryTree } from './test-case-directory-tree'
-import { createDirectoryIndex } from '../../shared/test-case-directories'
+import { countDirectoryCases, createDirectoryIndex } from '../../shared/test-case-directories'
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type DragEvent, type FormEvent, type ReactNode } from 'react'
 import {
   ArrowCounterClockwise,
@@ -25,6 +25,8 @@ import {
   FileText,
   Flask,
   FolderPlus,
+  Folder,
+  FolderOpen,
   FunnelSimple,
   GearSix,
   ListChecks,
@@ -770,9 +772,7 @@ export function TestWorkbench({
   const subjects = data.subjects.filter((subject) => subject.testSpaceId === spaceId)
   const activeSubject = subjects.find((subject) => subject.id === subjectId)
   const spaceCases = data.cases.filter((testCase) => testCase.testSpaceId === spaceId)
-  const cases = spaceCases.filter(
-    (testCase) => testCase.testSpaceId === spaceId && (!subjectId || testCase.testSubjectId === subjectId),
-  )
+  const cases = spaceCases
   const plans = data.plans.filter(
     (plan) => plan.testSpaceId === spaceId,
   )
@@ -1265,7 +1265,7 @@ export function TestWorkbench({
               </div>
               <WorkspaceError message={error} />
             </div>
-          ) : tab === 'cases' && !activeSubject ? (
+          ) : tab === 'cases' && subjects.length === 0 ? (
             <div className="test-inline-empty">
               <WorkspaceError message={error} />
               <Flask size={30} />
@@ -1279,13 +1279,14 @@ export function TestWorkbench({
             <>
               <WorkspaceError message={error} />
               <CasesView
-                key={`${spaceId}-${subjectId}`}
+                key={`${spaceId}`}
                 busy={busy}
-                subjectId={subjectId}
-                onCreateFolder={(name, parentId) => mutate(() => createTestCaseFolder(spaceId!, { name, parentId, testSubjectId: subjectId! }))}
+                subjectId={subjects[0]?.id}
+                spaceId={spaceId}
+                onCreateFolder={(name, parentId) => mutate(() => createTestCaseFolder(spaceId!, { name, parentId, testSubjectId: subjects[0]!.id }))}
                 onUpdateFolder={(folder, name, parentId) => mutate(() => updateTestCaseFolder(spaceId!, folder.id, { name, parentId }))}
                 onDeleteFolder={(folder) => mutate(() => deleteTestCaseFolder(spaceId!, folder.id))}
-                onMove={(ids, target) => mutate(() => moveTestCases(spaceId!, subjectId!, ids, target))}
+                onMove={(ids, target) => mutate(() => moveTestCases(spaceId!, subjects[0]!.id, ids, target))}
                 cases={cases}
                 data={data}
                 readOnly={activeSpaceReadOnly}
@@ -1504,13 +1505,13 @@ export function TestWorkbench({
       <ImportCasesDialog
         key={`${caseImportDialogOpen}-${spaceId}-${subjectId}-${caseTargetFolderId}`}
         targetFolderId={caseTargetFolderId}
-        folders={data.folders.filter(f => f.testSubjectId === subjectId)}
+        folders={data.folders.filter(f => f.testSpaceId === spaceId)}
         busy={busy}
         open={caseImportDialogOpen}
         spaceId={spaceId}
         subject={activeSubject}
         onOpenChange={setCaseImportDialogOpen}
-        onSubmit={(csvText, directoryMode) => mutate(() => importTestCases(spaceId!, subjectId!, csvText, { directoryMode, targetFolderId: caseTargetFolderId }))}
+        onSubmit={(csvText, directoryMode) => mutate(() => importTestCases(spaceId!, subjects[0]!.id, csvText, { directoryMode, targetFolderId: caseTargetFolderId }))}
       />
       <PlanDialog
         key={`${planDialogOpen}-${editingPlan?.id ?? 'new'}`}
@@ -1521,6 +1522,7 @@ export function TestWorkbench({
         plan={editingPlan}
         planCases={data.planCases}
         projects={projects}
+        testEnvironments={data.testEnvironments.filter((environment) => spaceId != null && environment.testSpaceIds.includes(spaceId))}
         subjects={subjects}
         users={data.users}
         onOpenChange={setPlanDialogOpen}
@@ -1867,9 +1869,10 @@ function NotificationsView({
   )
 }
 
-export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, onCreate, onCreateFolder, onUpdateFolder, onDeleteFolder, onMove, onDelete, onEdit, onExport, onImport, onSelect }: {
+export function CasesView({ busy, subjectId, spaceId, cases, data, readOnly, selectedId, onCreate, onCreateFolder, onUpdateFolder, onDeleteFolder, onMove, onDelete, onEdit, onExport, onImport, onSelect }: {
   busy: boolean
   subjectId?: number
+  spaceId?: number
   onUpdateFolder: (folder: TestCaseFolder, name: string, parentId: number | null) => Promise<boolean>
   onDeleteFolder: (folder: TestCaseFolder) => Promise<boolean>
   onMove: (ids: number[], target: number | null) => Promise<boolean>
@@ -1892,7 +1895,7 @@ export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, 
   const [folderFilter, setFolderFilter] = useState('all')
   const [typeFilter, setTypeFilter] = useState('all')
   const [priorityFilter, setPriorityFilter] = useState('all')
-  const folders = useMemo(() => data.folders.filter(f => f.testSubjectId === subjectId), [data.folders, subjectId])
+  const folders = useMemo(() => data.folders.filter(f => f.testSpaceId === spaceId), [data.folders, spaceId])
   const directoryIndex = useMemo(() => createDirectoryIndex(folders), [folders])
   const treeState = useDirectoryTreeState(folders)
   const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 760px)').matches)
@@ -4089,6 +4092,7 @@ type TestPlanFormPayload = {
   caseIds: number[]
   endsOn?: string
   environment: string
+  testEnvironmentId?: number
   name: string
   ownerUserId?: number
   projectId?: number
@@ -4097,7 +4101,75 @@ type TestPlanFormPayload = {
   versionLabel: string
 }
 
-function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, planCases, projects, subjects, users }: {
+function PlanDirectoryTree({
+  cases,
+  folders,
+  onCollapseAll,
+  onExpandAll,
+  onSelect,
+  onToggle,
+  selected,
+  expanded,
+}: {
+  cases: TestCase[]
+  folders: TestCaseFolder[]
+  onCollapseAll: () => void
+  onExpandAll: () => void
+  onSelect: (id: string) => void
+  onToggle: (id: number) => void
+  selected: string
+  expanded: Set<number>
+}) {
+  const index = useMemo(() => createDirectoryIndex(folders), [folders])
+  const counts = useMemo(() => countDirectoryCases(folders, cases), [cases, folders])
+  const selectedFolder = selected !== 'all' && selected !== 'uncategorized' ? index.byId.get(Number(selected)) : undefined
+  const visible: Array<{ folder: TestCaseFolder; depth: number }> = []
+  const visit = (parentId: number | null, depth: number) => {
+    for (const folder of index.children.get(parentId) ?? []) {
+      visible.push({ folder, depth })
+      if (expanded.has(folder.id)) visit(folder.id, depth + 1)
+    }
+  }
+  visit(null, 1)
+  return (
+    <aside className="test-plan-directory-pane" aria-label="选择用例目录">
+      <div className="test-plan-directory-heading">
+        <div><span>用例目录</span><strong>{selected === 'all' ? '全部目录' : selected === 'uncategorized' ? '未分类' : selectedFolder ? index.path(selectedFolder.id).map((folder) => folder.name).join(' / ') : '全部目录'}</strong></div>
+        <small>{cases.length} 条可选用例</small>
+      </div>
+      <div className="test-plan-directory-actions">
+        <Button type="button" size="sm" variant="ghost" onClick={onExpandAll}>全部展开</Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onCollapseAll}>全部收起</Button>
+      </div>
+      <div className="test-plan-directory-tree" role="tree" aria-label="测试用例目录">
+        <button type="button" role="treeitem" aria-selected={selected === 'all'} className={`test-plan-directory-node ${selected === 'all' ? 'active' : ''}`} onClick={() => onSelect('all')}>
+          <Folder /><span>全部目录</span><small>{cases.length}</small>
+        </button>
+        {visible.map(({ folder, depth }) => {
+          const hasChildren = Boolean(index.children.get(folder.id)?.length)
+          const isExpanded = expanded.has(folder.id)
+          return (
+            <div key={folder.id} role="treeitem" aria-level={depth} aria-expanded={hasChildren ? isExpanded : undefined} aria-selected={selected === String(folder.id)} className={`test-plan-directory-node ${selected === String(folder.id) ? 'active' : ''}`} style={{ paddingLeft: 8 + (depth - 1) * 15 }} onClick={() => onSelect(String(folder.id))}>
+              <button type="button" className="test-plan-directory-toggle" tabIndex={-1} aria-label={`${isExpanded ? '收起' : '展开'} ${folder.name}`} disabled={!hasChildren} onClick={(event) => { event.stopPropagation(); onToggle(folder.id) }}>
+                {hasChildren ? isExpanded ? <CaretDown /> : <CaretRight /> : null}
+              </button>
+              {isExpanded && hasChildren ? <FolderOpen /> : <Folder />}
+              <span title={folder.name}>{folder.name}</span>
+              <small>{counts.total.get(folder.id) ?? 0}</small>
+            </div>
+          )
+        })}
+        <button type="button" role="treeitem" aria-selected={selected === 'uncategorized'} className={`test-plan-directory-node ${selected === 'uncategorized' ? 'active' : ''}`} onClick={() => onSelect('uncategorized')}>
+          <Folder /><span>未分类</span><small>{counts.direct.get(null) ?? 0}</small>
+        </button>
+        {!folders.length ? <p className="test-list-empty">当前测试空间还没有目录。</p> : null}
+      </div>
+      <small className="test-plan-directory-footnote">目录数量包含所有下级用例</small>
+    </aside>
+  )
+}
+
+function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, planCases, projects, subjects, users, testEnvironments }: {
   busy: boolean
   cases: TestCase[]
   folders: TestWorkbenchData['folders']
@@ -4107,20 +4179,24 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
   plan?: TestPlan
   planCases: TestWorkbenchData['planCases']
   projects: TestWorkbenchProjectOption[]
+  testEnvironments: TestWorkbenchData['testEnvironments']
   subjects: TestWorkbenchData['subjects']
   users: TestWorkbenchData['users']
 }) {
   const [name, setName] = useState(plan?.name ?? '')
   const [versionLabel, setVersionLabel] = useState(plan?.versionLabel ?? '')
   const [environment, setEnvironment] = useState(plan?.environment ?? '')
+  const [testEnvironmentId, setTestEnvironmentId] = useState(plan?.testEnvironmentId ? String(plan.testEnvironmentId) : '')
   const [startsOn, setStartsOn] = useState(plan?.startsOn?.slice(0, 10) ?? '')
   const [endsOn, setEndsOn] = useState(plan?.endsOn?.slice(0, 10) ?? '')
   const [ownerUserId, setOwnerUserId] = useState(plan?.ownerUserId ? String(plan.ownerUserId) : 'none')
   const [projectId, setProjectId] = useState(plan?.projectId ? String(plan.projectId) : 'none')
-  const [subjectIds, setSubjectIds] = useState<number[]>(plan?.testSubjectIds ?? [])
+  const [subjectIds] = useState<number[]>(plan?.testSubjectIds ?? subjects.map((subject) => subject.id))
   const [caseIds, setCaseIds] = useState<number[]>([])
   const [caseSearchQuery, setCaseSearchQuery] = useState('')
   const [caseFolderFilter, setCaseFolderFilter] = useState('all')
+  const scopedFolders = useMemo(() => folders.filter((folder) => subjectIds.includes(folder.testSubjectId)), [folders, subjectIds])
+  const [expandedDirectories, setExpandedDirectories] = useState<Set<number>>(() => new Set(scopedFolders.filter((folder) => folder.parentId === null).map((folder) => folder.id)))
   const [caseTypeFilter, setCaseTypeFilter] = useState('all')
   const [casePriorityFilter, setCasePriorityFilter] = useState('all')
   const [step, setStep] = useState<1 | 2>(1)
@@ -4129,10 +4205,9 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
     .filter((item) => item.testPlanId === plan?.id && item.testCaseId)
     .map((item) => item.testCaseId as number))
   const available = cases.filter((item) => subjectIds.includes(item.testSubjectId) && item.status === 'active' && !existingCaseIds.has(item.id))
-  const planDirectoryIndex = createDirectoryIndex(folders)
-  const availableFolderIds = new Set(available.flatMap(item => planDirectoryIndex.path(item.folderId ?? null).map(f => f.id)))
-  const availableFolders = folders.filter(folder => availableFolderIds.has(folder.id))
-  const planScopeIds = caseFolderFilter === 'all' || caseFolderFilter === 'uncategorized' ? new Set<number>() : planDirectoryIndex.descendants(Number(caseFolderFilter))
+  const planDirectoryIndex = useMemo(() => createDirectoryIndex(scopedFolders), [scopedFolders])
+  const effectiveCaseFolderFilter = caseFolderFilter === 'all' || caseFolderFilter === 'uncategorized' || planDirectoryIndex.byId.has(Number(caseFolderFilter)) ? caseFolderFilter : 'all'
+  const planScopeIds = effectiveCaseFolderFilter === 'all' || effectiveCaseFolderFilter === 'uncategorized' ? new Set<number>() : planDirectoryIndex.descendants(Number(effectiveCaseFolderFilter))
   const normalizedCaseQuery = caseSearchQuery.trim().toLocaleLowerCase('zh-CN')
   const filteredAvailable = available.filter((item) => {
     const folder = folders.find((candidate) => candidate.id === item.folderId)
@@ -4146,8 +4221,8 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
       item.remarks,
       item.customTags.join(' '),
     ].some((value) => value.toLocaleLowerCase('zh-CN').includes(normalizedCaseQuery))
-    const matchesFolder = caseFolderFilter === 'all'
-      || (caseFolderFilter === 'uncategorized' ? !item.folderId : planScopeIds.has(item.folderId ?? -1))
+    const matchesFolder = effectiveCaseFolderFilter === 'all'
+      || (effectiveCaseFolderFilter === 'uncategorized' ? !item.folderId : planScopeIds.has(item.folderId ?? -1))
     return matchesSearch
       && matchesFolder
       && (caseTypeFilter === 'all' || item.caseType === caseTypeFilter)
@@ -4157,11 +4232,15 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
   const selectedFilteredCount = filteredCaseIds.filter((id) => caseIds.includes(id)).length
   const allFilteredSelected = filteredCaseIds.length > 0 && selectedFilteredCount === filteredCaseIds.length
   const hasCaseFilters = Boolean(caseSearchQuery.trim())
-    || caseFolderFilter !== 'all'
+    || effectiveCaseFolderFilter !== 'all'
     || caseTypeFilter !== 'all'
     || casePriorityFilter !== 'all'
   const invalidDateRange = Boolean(startsOn && endsOn && startsOn > endsOn)
-  const selectedSubjects = subjects.filter((subject) => subjectIds.includes(subject.id))
+  useEffect(() => {
+    const validIds = new Set(scopedFolders.map((folder) => folder.id))
+    setExpandedDirectories((current) => new Set([...current].filter((id) => validIds.has(id))))
+    if (caseFolderFilter !== 'all' && caseFolderFilter !== 'uncategorized' && !validIds.has(Number(caseFolderFilter))) setCaseFolderFilter('all')
+  }, [caseFolderFilter, scopedFolders])
 
   useEffect(() => {
     if (selectAllRef.current) {
@@ -4174,7 +4253,7 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
   }, [open, plan?.id])
 
   const canGoNext = name.trim().length > 0 && !invalidDateRange
-  const canSubmit = canGoNext && subjectIds.length > 0 && (Boolean(plan) || caseIds.length > 0)
+  const canSubmit = canGoNext && (Boolean(plan) || Boolean(testEnvironmentId)) && subjectIds.length > 0 && (Boolean(plan) || caseIds.length > 0)
 
   return <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent fixedHeader className={`test-wide-dialog test-plan-dialog ${step === 2 ? 'test-plan-dialog-fixed' : 'test-plan-dialog-auto'}`}>
@@ -4189,6 +4268,7 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
           caseIds,
           endsOn: endsOn || undefined,
           environment,
+          ...(testEnvironmentId ? { testEnvironmentId: Number(testEnvironmentId) } : {}),
           name,
           ownerUserId: ownerUserId === 'none' ? undefined : Number(ownerUserId),
           projectId: projectId === 'none' ? undefined : Number(projectId),
@@ -4205,7 +4285,7 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
           <i aria-hidden="true" />
           <button className={step === 2 ? 'active' : ''} type="button" disabled={!canGoNext} onClick={() => setStep(2)}>
             <span>2</span>
-            <strong>测试对象与用例</strong>
+            <strong>选择用例</strong>
           </button>
         </div>
         {step === 1 ? (
@@ -4213,7 +4293,7 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
             <Label>计划名称<Input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Label>
             <div className="test-form-grid test-plan-basic-grid">
               <Label>版本<Input value={versionLabel} onChange={(event) => setVersionLabel(event.target.value)} /></Label>
-              <Label>环境<Input value={environment} onChange={(event) => setEnvironment(event.target.value)} /></Label>
+              <Label>环境<Select value={testEnvironmentId} onValueChange={(value) => { setTestEnvironmentId(value); const selected = testEnvironments.find((item) => item.id === Number(value)); if (selected) setEnvironment(selected.name) }}><SelectTrigger><SelectValue placeholder="选择已配置环境" /></SelectTrigger><SelectContent>{testEnvironments.map((item) => <SelectItem key={item.id} value={String(item.id)}>{item.name}</SelectItem>)}</SelectContent></Select></Label>
               <Label>
                 开始日期
                 <JournalDatePicker
@@ -4242,31 +4322,16 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
         ) : (
           <section className="test-plan-step-panel test-plan-scope-panel" aria-label="计划范围与用例">
             <div className="test-plan-scope-grid">
-              <fieldset className="test-plan-subject-picker">
-                <legend>测试对象</legend>
-                <div className="test-plan-subject-list">
-                  {subjects.length ? subjects.map((subject) => (
-                    <label key={subject.id}>
-                      <input
-                        type="checkbox"
-                        checked={subjectIds.includes(subject.id)}
-                        onChange={(event) => {
-                          setSubjectIds((current) => event.target.checked
-                            ? Array.from(new Set([...current, subject.id]))
-                            : current.filter((id) => id !== subject.id))
-                          if (!event.target.checked) {
-                            setCaseIds((current) => current.filter((id) => cases.find((testCase) => testCase.id === id)?.testSubjectId !== subject.id))
-                          }
-                        }}
-                      />
-                      <span>
-                        <strong>{subject.name}</strong>
-                      </span>
-                    </label>
-                  )) : <p className="test-list-empty">当前测试空间还没有测试对象。</p>}
-                </div>
-                {selectedSubjects.length ? <small className="test-plan-subject-summary">已选 {selectedSubjects.map((subject) => subject.name).join('、')}</small> : null}
-              </fieldset>
+              <PlanDirectoryTree
+                cases={available}
+                folders={scopedFolders}
+                selected={caseFolderFilter}
+                expanded={expandedDirectories}
+                onSelect={setCaseFolderFilter}
+                onToggle={(id) => setExpandedDirectories((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })}
+                onExpandAll={() => setExpandedDirectories(new Set(scopedFolders.map((folder) => folder.id)))}
+                onCollapseAll={() => setExpandedDirectories(new Set())}
+              />
               <fieldset className="test-plan-case-picker">
                 <legend>{plan ? '追加用例' : '选择用例'}</legend>
                 <div className="test-plan-case-tools">
@@ -4295,14 +4360,6 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
                     ><XCircle /> 清除</Button>
                   </div>
                   <div className="test-plan-case-filter-row">
-                    <Select value={caseFolderFilter} onValueChange={setCaseFolderFilter}>
-                      <SelectTrigger aria-label="计划用例所属模块筛选"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">全部模块</SelectItem>
-                        <SelectItem value="uncategorized">未分类</SelectItem>
-                        {availableFolders.map((folder) => <SelectItem key={folder.id} value={String(folder.id)}>{planDirectoryIndex.path(folder.id).map(f => f.name).join(' / ')}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
                     <Select value={caseTypeFilter} onValueChange={setCaseTypeFilter}>
                       <SelectTrigger aria-label="计划用例类型筛选"><SelectValue /></SelectTrigger>
                       <SelectContent><SelectItem value="all">全部类型</SelectItem>{Object.entries(caseTypeLabel).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
@@ -4338,7 +4395,7 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
                       <input type="checkbox" checked={caseIds.includes(item.id)} onChange={(event) => setCaseIds((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} />
                       <span className="test-plan-case-option">
                         <span><code>CASE-{item.id}</code><strong>{item.title}</strong></span>
-                        <small>{subjects.find((subject) => subject.id === item.testSubjectId)?.name || '未知对象'} · {folder?.name || '未分类'} · {caseTypeLabel[item.caseType]} · {caseLevelLabel[item.priority]}</small>
+                        <small>{folder ? planDirectoryIndex.path(folder.id).map((node) => node.name).join(' / ') : '未分类'} · {caseTypeLabel[item.caseType]} · {caseLevelLabel[item.priority]}</small>
                       </span>
                     </label>
                   }) : <p className="test-list-empty">{available.length ? '没有符合条件的可选用例。' : '没有可追加的活动用例。'}</p>}
