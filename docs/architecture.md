@@ -26,6 +26,15 @@ The production image builds `src/` into `dist/`, copies `server/`, and starts
 
 ## Module Boundaries
 
+- `server/project-subprojects.ts`: parent-project-scoped subproject names, encrypted
+  name lookups, strict identifiers, and transactional governance checks. Subproject
+  maintenance and task selection share the existing project advisory lock. A composite
+  foreign key binds each task's subproject to the same project; deleting a referenced
+  subproject fails, while deleting the parent cascades its tasks and subprojects.
+- `src/components/project-subprojects-panel.tsx`: shared maintenance surface used by
+  the project Owner dialog and expanded organization project rows. Mutations refresh
+  the workspace so task selectors observe new or renamed subprojects.
+
 - `src/App.tsx`, `src/components/`: UI state and user workflows. They must not hold
   database, OSS credential, or authorization decisions.
 - `src/ai-attachments.ts`: browser-side text attachment format checks, display sizing,

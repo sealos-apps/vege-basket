@@ -15,6 +15,12 @@ export function requireProjectSubprojectName(value: unknown) {
 
 export function parseProjectSubprojectId(value: unknown): number | null {
   if (value == null || value === '') return null
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    throw new ProjectSubprojectError('PROJECT_SUBPROJECT_INVALID', '请选择有效的项目子项目。', 400)
+  }
+  if (typeof value === 'string' && !/^[1-9][0-9]*$/.test(value)) {
+    throw new ProjectSubprojectError('PROJECT_SUBPROJECT_INVALID', '请选择有效的项目子项目。', 400)
+  }
   const id = Number(value)
   if (!Number.isSafeInteger(id) || id <= 0) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_INVALID', '请选择有效的项目子项目。', 400)
   return id
@@ -22,11 +28,29 @@ export function parseProjectSubprojectId(value: unknown): number | null {
 
 export async function projectSubprojectNameLookup(client: Pick<PoolClient, 'query'>, name: string) {
   const result = await client.query<{ lookup_key_id: string }>('select lookup_key_id from project_module_settings where id = 1')
-  return keyedDigest(JSON.stringify(['project-subproject-name', name]), result.rows[0]?.lookup_key_id ?? process.env.APP_ENCRYPTION_ACTIVE_KEY_ID ?? 'active')
+  if (!result.rows[0]) throw new Error('Project lookup key initialization has not completed')
+  return keyedDigest(JSON.stringify(['project-subproject-name', name]), result.rows[0].lookup_key_id)
 }
 
 export async function lockProjectSubprojects(client: Pick<PoolClient, 'query'>, projectId: number) {
   await client.query('select pg_advisory_xact_lock(hashtextextended($1::text, 0))', [`ai-project:${projectId}`])
+}
+
+export async function requireProjectSubprojectManager(client: Pick<PoolClient, 'query'>, projectId: number, userId: number) {
+  const project = await client.query<{ user_id: string; organization_id: string | null }>(
+    'select user_id, organization_id from projects where id = $1 for update', [projectId],
+  )
+  const row = project.rows[0]
+  if (!row) throw new ProjectSubprojectError('PROJECT_NOT_FOUND', '项目不存在。', 404)
+  if (Number(row.user_id) === userId) return
+  const manager = await client.query(
+    `select membership.user_id from organization_memberships membership
+     join user_roles role on role.user_id = membership.user_id and role.role = 'organization_admin'
+     where membership.organization_id = $1 and membership.user_id = $2
+       and membership.status = 'active' and membership.access_role in ('owner', 'admin')
+     for share of membership, role`, [row.organization_id, userId],
+  )
+  if (!manager.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_FORBIDDEN', '没有维护此项目子项目的权限。', 403)
 }
 
 export async function listProjectSubprojects(client: Pick<PoolClient, 'query'>, projectId: number) {

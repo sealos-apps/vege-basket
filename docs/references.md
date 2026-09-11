@@ -143,6 +143,22 @@ visible when the global dependency switch or parent component channel is disable
 
 ## HTTP API Families
 
+Project subprojects use `/api/projects/:projectId/subprojects`: GET lists project-scoped
+names and task counts; POST accepts `{ name }`; PATCH and DELETE address
+`/:subprojectId`. Names trim to 1-40 Unicode characters with exact case-sensitive
+uniqueness within the parent project. Owners or active organization owner/admin members
+with the `organization_admin` role may maintain them. Other project readers may list
+them. Task create/update accepts optional `subprojectId`; explicit null clears the
+association, omission preserves it on update. Cross-project selections return 400;
+duplicate names and deletion of referenced subprojects return 409. Subprojects have
+one level and remain independent of project modules and test environments.
+
+Workspace tasks expose `subprojectId` and `subprojectName`; workspace projects expose
+`subprojects`. The task list supports all, unassigned, and concrete subproject filters.
+My Work uses the task's subproject as `contextName`; task shares and task notifications
+expose `subprojectName`. Name encryption reuses the retained lookup key in
+`project_module_settings`; retain that key when rotating encryption keys.
+
 Protected JSON endpoints use `Authorization: Bearer <session-token>`. The primary route
 families are:
 

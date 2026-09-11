@@ -160,6 +160,7 @@ export type ProjectTransferNotification = NotificationState & {
 }
 
 export type TodoNotification = NotificationState & {
+  subprojectName?: string
   id: number
   projectId: number
   projectName: string

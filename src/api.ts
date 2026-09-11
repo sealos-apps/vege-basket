@@ -991,6 +991,10 @@ export function createProjectSubproject(projectId: number, payload: { name: stri
   return request<WorkspaceData>(`/api/projects/${projectId}/subprojects`, { method: 'POST', body: JSON.stringify(payload) })
 }
 
+export function fetchProjectSubprojects(projectId: number) {
+  return request<import('./types').ProjectSubproject[]>(`/api/projects/${projectId}/subprojects`)
+}
+
 export function updateProjectSubproject(projectId: number, subprojectId: number, payload: { name: string }) {
   return request<WorkspaceData>(`/api/projects/${projectId}/subprojects/${subprojectId}`, { method: 'PATCH', body: JSON.stringify(payload) })
 }
@@ -1144,6 +1148,7 @@ export async function uploadTodoImage(file: File) {
 export const uploadWorkbenchAttachment = uploadTodoImage
 
 export function createTodo(payload: {
+  subprojectId?: number | null
   assigneeUserId?: number
   watcherUserId?: number
   watcherUserIds?: number[]
@@ -1242,7 +1247,8 @@ export function markNotificationRead(
 
 export function updateTodo(
   todoId: number,
-  payload: Omit<Partial<Todo>, 'assigneeUserId' | 'moduleId' | 'reviewerUserId' | 'watcherUserId' | 'watcherUserIds'> & {
+  payload: Omit<Partial<Todo>, 'assigneeUserId' | 'moduleId' | 'subprojectId' | 'reviewerUserId' | 'watcherUserId' | 'watcherUserIds'> & {
+    subprojectId?: number | null
     assigneeUserId?: number | null
     createdAt?: string
     acceptanceNote?: string

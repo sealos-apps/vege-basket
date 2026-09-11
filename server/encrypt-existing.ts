@@ -149,6 +149,7 @@ async function main() {
   await encryptColumn('journal_entries', 'content')
   await encryptColumn('todos', 'title')
   await encryptColumn('todos', 'detail')
+  await encryptColumn('project_subprojects', 'name')
   await encryptColumn('risks', 'content')
   await encryptColumn('draft_items', 'content')
   await encryptColumn('draft_items', 'todo_title')

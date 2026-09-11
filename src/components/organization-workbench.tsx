@@ -109,6 +109,7 @@ import { UserName } from './user-name'
 import { OrganizationPackageMarketPanel } from './organization-package-market-panel'
 import { OrganizationProjectModulesPanel } from './organization-project-modules-panel'
 import './organization-workbench.css'
+import { ProjectSubprojectsPanel } from './project-subprojects-panel'
 
 type OrganizationTab = 'overview' | 'projects' | 'testSpaces' | 'testEnvironments' | 'members' | 'reports' | 'packageMarket'
 
@@ -308,12 +309,14 @@ export function OrganizationWorkbench({
   currentUser,
   onOrganizationsChanged,
   onProjectModulesChanged,
+  onSubprojectsChanged,
   onPackageMarketVisibilityChange,
   refreshToken = 0,
 }: {
   currentUser: AuthUser
   onOrganizationsChanged?: () => void
   onProjectModulesChanged?: () => void
+  onSubprojectsChanged?: () => void
   onPackageMarketVisibilityChange?: (organizationId: number, enabled: boolean) => void
   refreshToken?: number
 }) {
@@ -1118,6 +1121,8 @@ export function OrganizationWorkbench({
                 <OrganizationProjectRow
                   busy={busy}
                   canManage={detail.canManageProjects}
+                  canManageSubprojects={detail.canManageProjects || project.ownerUserId === currentUser.id}
+                  onSubprojectsChanged={onSubprojectsChanged}
                   detail={detail}
                   key={project.id}
                   onMutate={mutate}
@@ -1782,12 +1787,16 @@ function TestEnvironmentEditorDialog({ busy, environment, onOpenChange, onSave, 
 }
 
 function OrganizationProjectRow({
+  canManageSubprojects,
+  onSubprojectsChanged,
   busy,
   canManage,
   detail,
   onMutate,
   project,
 }: {
+  canManageSubprojects: boolean
+  onSubprojectsChanged?: () => void
   busy: boolean
   canManage: boolean
   detail: OrganizationDetail
@@ -1884,6 +1893,7 @@ function OrganizationProjectRow({
       <div className={`organization-project-reveal${expanded ? ' open' : ''}`}>
         <div>
           <div className="organization-project-detail">
+            {expanded && <ProjectSubprojectsPanel key={project.id} projectId={project.id} canManage={canManageSubprojects} onChange={onSubprojectsChanged} />}
             <div className="organization-project-detail-heading">
               <div>
                 <Target size={17} weight="duotone" />

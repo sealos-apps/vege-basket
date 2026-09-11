@@ -119,6 +119,7 @@ import { projectModuleAvailability, type ProjectModuleAvailability } from '../sh
 import {
   createProjectSubproject, listProjectSubprojects, lockProjectSubprojects, parseProjectSubprojectId,
   ProjectSubprojectError, projectSubprojectNameLookup, requireProjectSubprojectName, resolveProjectSubprojectId,
+  requireProjectSubprojectManager,
 } from './project-subprojects.ts'
 import {
   buildAiClassificationContent,
@@ -5457,6 +5458,7 @@ async function getNotifications(userId: number) {
       priority: Priority
       done: boolean
       watched_at: Date | null
+      subproject_name: string | null
       created_at: Date
       watcher_email: string | null
       watcher_display_name: string | null
@@ -5478,6 +5480,7 @@ async function getNotifications(userId: number) {
              watcher.display_name as watcher_display_name,
              watched_by.email as watched_by_email,
              watched_by.display_name as watched_by_display_name
+             ,(select s.name from project_subprojects s where s.id = t.subproject_id and s.project_id = t.project_id) as subproject_name
       from todos t
       join projects p on p.id = t.project_id
       left join project_memberships pm
@@ -5504,6 +5507,7 @@ async function getNotifications(userId: number) {
       priority: Priority
       done: boolean
       assigned_at: Date | null
+      subproject_name: string | null
       created_at: Date
       assigner_email: string | null
       assigner_display_name: string | null
@@ -5529,6 +5533,7 @@ async function getNotifications(userId: number) {
              assignee.feishu_email as assignee_feishu_email,
              assignee.feishu_user_id as assignee_feishu_user_id,
              assignee.display_name as assignee_display_name
+             ,(select s.name from project_subprojects s where s.id = t.subproject_id and s.project_id = t.project_id) as subproject_name
       from todos t
       join projects p on p.id = t.project_id
       left join project_memberships pm
@@ -5556,6 +5561,7 @@ async function getNotifications(userId: number) {
       due_date: Date
       priority: Priority
       owner_user_id: string
+      subproject_name: string | null
       assigned_at: Date | null
       created_at: Date
     }>(
@@ -5569,7 +5575,8 @@ async function getNotifications(userId: number) {
              t.priority,
              t.assigned_at,
              t.created_at,
-             p.user_id as owner_user_id
+             p.user_id as owner_user_id,
+             (select s.name from project_subprojects s where s.id = t.subproject_id and s.project_id = t.project_id) as subproject_name
       from todos t
       join projects p on p.id = t.project_id
       left join project_modules module on module.id = t.project_module_id
@@ -5598,6 +5605,7 @@ async function getNotifications(userId: number) {
       content: string
       created_at: Date
       todo_created_at: Date
+      subproject_name: string | null
     }>(
       `
       select n.id as note_id,
@@ -5612,7 +5620,8 @@ async function getNotifications(userId: number) {
              author.display_name as author_display_name,
              n.content,
              m.created_at,
-             t.created_at as todo_created_at
+             t.created_at as todo_created_at,
+             (select s.name from project_subprojects s where s.id = t.subproject_id and s.project_id = t.project_id) as subproject_name
       from todo_note_mentions m
       join todo_notes n on n.id = m.todo_note_id
       join todos t on t.id = n.todo_id
@@ -5713,6 +5722,7 @@ async function getNotifications(userId: number) {
       assigneeFeishuEmail: todo.assignee_feishu_email || (
         todo.assignee_feishu_user_id?.includes('@') ? todo.assignee_feishu_user_id : undefined
       ),
+      subprojectName: todo.subproject_name ? decryptText(todo.subproject_name) : undefined,
       done: todo.done,
       dueDate: formatDate(todo.due_date),
       id: Number(todo.id),
@@ -5758,6 +5768,7 @@ async function getNotifications(userId: number) {
       sortAt: comment.created_at.toISOString(),
     })),
     watchedTodos: watchedTodosResult.rows.map((todo) => ({
+      subprojectName: todo.subproject_name ? decryptText(todo.subproject_name) : undefined,
       ...stateFor('watched_todo', todo.id),
       done: todo.done,
       dueDate: formatDate(todo.due_date),
@@ -5784,6 +5795,7 @@ async function getNotifications(userId: number) {
       sortAt: (todo.watched_at ?? todo.created_at).toISOString(),
     })),
     dueTomorrowTodos: dueTomorrowResult.rows.map((todo) => ({
+      subprojectName: todo.subproject_name ? decryptText(todo.subproject_name) : undefined,
       ...stateFor('todo_due_tomorrow', todo.id),
       dueDate: formatDate(todo.due_date),
       id: Number(todo.id),
@@ -5795,6 +5807,7 @@ async function getNotifications(userId: number) {
       sortAt: (todo.assigned_at ?? todo.created_at).toISOString(),
     })),
     noteMentions: noteMentionsResult.rows.map((note) => ({
+      subprojectName: note.subproject_name ? decryptText(note.subproject_name) : undefined,
       ...stateFor('todo_note_mention', note.note_id),
       createdAt: formatDateTime(note.created_at),
       dueDate: formatDate(note.due_date),
@@ -10483,8 +10496,7 @@ app.post('/api/projects/:projectId/subprojects', asyncHandler(async (request, re
   const client = await pool.connect()
   try {
     await client.query('begin'); await lockProjectSubprojects(client, projectId)
-    const manager = await client.query(`select 1 from projects p where p.id = $1 and (p.user_id = $2 or ${managedOrganizationReadScopeSql('p.organization_id', '$2')})`, [projectId, userId])
-    if (!manager.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_FORBIDDEN', '没有维护此项目子项目的权限。', 403)
+    await requireProjectSubprojectManager(client, projectId, userId)
     await createProjectSubproject(client, projectId, name); await client.query('commit')
   } catch (error) { await client.query('rollback'); throw error } finally { client.release() }
   response.status(201).json(await getWorkspace(userId))
@@ -10497,8 +10509,7 @@ app.patch('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(asy
   if (!access) { response.status(404).json({ error: 'Project not found' }); return }
   const name = requireProjectSubprojectName(request.body.name); const client = await pool.connect()
   try { await client.query('begin'); await lockProjectSubprojects(client, projectId)
-    const manager = await client.query(`select 1 from projects p where p.id = $1 and (p.user_id = $2 or ${managedOrganizationReadScopeSql('p.organization_id', '$2')})`, [projectId, userId])
-    if (!manager.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_FORBIDDEN', '没有维护此项目子项目的权限。', 403)
+    await requireProjectSubprojectManager(client, projectId, userId)
     const exists = await client.query('select 1 from project_subprojects where id = $1 and project_id = $2', [subprojectId, projectId])
     if (!exists.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_NOT_FOUND', '项目子项目不存在。', 404)
     await client.query('update project_subprojects set name = $1, name_lookup = $2, updated_at = now() where id = $3 and project_id = $4', [encryptText(name), await projectSubprojectNameLookup(client, name), subprojectId, projectId]); await client.query('commit')
@@ -10513,8 +10524,7 @@ app.delete('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(as
   if (!access) { response.status(404).json({ error: 'Project not found' }); return }
   const client = await pool.connect()
   try { await client.query('begin'); await lockProjectSubprojects(client, projectId)
-    const manager = await client.query(`select 1 from projects p where p.id = $1 and (p.user_id = $2 or ${managedOrganizationReadScopeSql('p.organization_id', '$2')})`, [projectId, userId])
-    if (!manager.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_FORBIDDEN', '没有维护此项目子项目的权限。', 403)
+    await requireProjectSubprojectManager(client, projectId, userId)
     const result = await client.query('delete from project_subprojects where id = $1 and project_id = $2', [subprojectId, projectId])
     if (!result.rowCount) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_NOT_FOUND', '项目子项目不存在。', 404)
     await client.query('commit')
@@ -13534,6 +13544,14 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
   if (error instanceof ProjectSubprojectError) {
     response.status(error.status).json({ error: error.message, code: error.code })
     return
+  }
+  if (error && typeof error === 'object' && 'constraint' in error &&
+      String(error.constraint).includes('subproject')) {
+    const code = databaseErrorCode(error)
+    if (code === '23505' || code === '23503') {
+      response.status(409).json({ error: code === '23505' ? '此子项目名称已存在。' : '子项目仍被任务引用，不能删除。' })
+      return
+    }
   }
   if (error instanceof OrganizationPackageMarketPolicyError) {
     response.status(error.status).json({ error: error.message, code: error.code })

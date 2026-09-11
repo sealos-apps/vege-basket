@@ -21,6 +21,7 @@ export type TodoShareView = {
   dueDate: string
   mentionableMembers: Array<{ id: number; name: string }>
   moduleName: string | null
+  subprojectName: string | null
   notes: TodoShareNote[]
   priority: string
   projectName: string
