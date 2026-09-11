@@ -305,7 +305,8 @@ must remain bound to the authorized project ID.
   can create, rename, and delete folders; deleting a folder clears `folder_id` on its
   current cases and does not delete cases or immutable plan snapshots.
 - Test-case deletion requires test-space write access and is limited to the account that
-  created the case. It permanently removes the source case, while existing test-plan
+  created the case. A case referenced by any Bug cannot be deleted (409); a subject with
+  Bugs also cannot be deleted. Otherwise deletion permanently removes the source case, while existing test-plan
   execution snapshots remain and their nullable `test_case_id` is cleared.
 - Test-case CSV import accepts UTF-8 `text/csv` at
   `POST /api/test-spaces/:spaceId/cases/import?testSubjectId=:id`; add `preview=true` for
@@ -323,6 +324,18 @@ must remain bound to the authorized project ID.
   Plan deletion keeps bugs and clears their plan and plan-case references.
 - Test result: `untested`, `passed`, `failed`, `blocked`, `skipped`.
 - Bug status: `new`, `pending_confirmation`, `assigned`, `in_progress`, `pending_verification`, `closed`, `rejected`.
+  `POST /api/test-spaces/:spaceId/bugs` requires `testCaseId`; the server derives the subject
+  from that case and checks any `testPlanCaseId` against the same canonical case.
+  Bug DTOs include optional `testCaseId`, `testCaseTitle`, `testCaseFolderId`, and
+  `testCaseFolderName` (optional only for legacy unlinked Bugs or uncategorized cases).
+  Creator-owned detail PATCH accepts `testCaseId` to fill a missing legacy association;
+  an existing association cannot change. Ordinary status/assignment updates remain possible
+  for legacy Bugs. Detail edits require case binding first.
+  `POST /api/test-spaces/:spaceId/bugs/:bugId/transfer-space` requires `targetSpaceId` and
+  `targetTestCaseId`. Target-space ownership and same-organization checks remain in force;
+  old plan/execution links are cleared. Transfer candidates include only cases in eligible
+  owned destination spaces. Folder filtering uses current folder IDs, with `uncategorized`
+  for linked cases without a folder and `unlinked` for legacy Bugs without a case.
   Returning a Bug to `pending_confirmation` replaces the former `reopened` status, and marking a
   duplicate Bug closes it instead of using a separate `duplicate` status.
 - Bug deletion requires the active tester persona, direct active membership in its test

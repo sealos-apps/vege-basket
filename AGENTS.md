@@ -163,6 +163,12 @@ historical product context; current code and these operational docs take precede
 
 ## Database Safety
 
+New Bugs must reference a canonical case in the same test space; derive the subject from
+the case and keep the composite database FK. Never infer legacy case associations from
+titles. Referenced cases and subjects with Bugs cannot be deleted individually. Bug directory
+filters use the case's current folder, and Bug lists must not be scoped by selected subject.
+Single-Bug space transfers require an existing destination case and clear execution links.
+
 Never execute database writes unless the user explicitly authorizes them. Starting
 `server/index.ts`, `npm run dev:api`, `npm run db:init`, and
 `npm run db:encrypt-existing` all mutate the configured database because startup applies

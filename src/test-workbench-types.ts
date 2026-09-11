@@ -251,6 +251,10 @@ export type TestBug = {
   reproductionSteps: string
   severity: BugSeverity
   status: BugStatus
+  testCaseId?: number
+  testCaseTitle?: string
+  testCaseFolderId?: number
+  testCaseFolderName?: string
   testPlanCaseId?: number
   testPlanId?: number
   testPlanName?: string
@@ -263,7 +267,7 @@ export type TestBug = {
   testSubjectId?: number
   testSubjectName?: string
   title: string
-  transferSpaceCandidates?: Array<{ id: number; name: string; versionLabel?: string }>
+  transferSpaceCandidates?: Array<{ id: number; name: string; versionLabel?: string; cases: Array<{ id: number; title: string; folderName?: string }> }>
   transferCandidates?: Array<{ id: number; name: string }>
   updatedAt: string
   verificationSubmissions?: TestBugVerificationSubmission[]

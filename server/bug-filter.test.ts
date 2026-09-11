@@ -35,6 +35,10 @@ const baseBug: TestBug = {
   testSpaceName: '控制台',
   testSubjectId: 21,
   testSubjectName: '用户管理',
+  testCaseId: 41,
+  testCaseTitle: '保存用户',
+  testCaseFolderId: 51,
+  testCaseFolderName: '用户/编辑',
   title: '保存用户时报错',
   updatedAt: '2026-08-04T13:00:00.000Z',
 }
@@ -49,15 +53,29 @@ function condition(
 
 test('bug filters match linked test fields and people by stable ids', () => {
   assert.equal(matchesBugFilterConditions(baseBug, [
-    condition('testSubject', 'equals', '21'),
+    condition('testCase', 'equals', '41'),
+    condition('caseFolder', 'equals', '51'),
     condition('testPlan', 'equals', '22'),
     condition('reporter', 'equals', '12'),
     condition('assignee', 'equals', '11'),
   ], 'and'), true)
   assert.equal(matchesBugFilterConditions(baseBug, [
-    condition('testSubject', 'equals', '99'),
+    condition('testCase', 'equals', '99'),
     condition('testPlan', 'equals', '22'),
   ], 'and'), false)
+})
+
+test('directory filters follow current case folders and distinguish legacy Bugs from uncategorized cases', () => {
+  const filter = [condition('caseFolder', 'equals', '51')]
+  assert.equal(matchesBugFilterConditions(baseBug, filter, 'and'), true)
+  assert.equal(matchesBugFilterConditions({ ...baseBug, testCaseFolderId: 52 }, filter, 'and'), false)
+  const uncategorized = { ...baseBug, testCaseFolderId: undefined, testCaseFolderName: undefined }
+  const legacy = { ...uncategorized, testCaseId: undefined, testCaseTitle: undefined }
+  assert.equal(matchesBugFilterConditions(uncategorized, [condition('caseFolder', 'equals', 'uncategorized')], 'and'), true)
+  assert.equal(matchesBugFilterConditions(legacy, [condition('caseFolder', 'equals', 'uncategorized')], 'and'), false)
+  assert.equal(matchesBugFilterConditions(legacy, [condition('caseFolder', 'equals', 'unlinked')], 'and'), true)
+  assert.equal(matchesBugFilterConditions(legacy, [condition('testCase', 'is_empty', '')], 'and'), true)
+  assert.equal(matchesBugFilterConditions(baseBug, [condition('testCase', 'is_empty', '')], 'and'), false)
 })
 
 test('bug filters support status, text, date range, and or matching', () => {

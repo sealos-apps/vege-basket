@@ -279,6 +279,17 @@ const severityLabel: Record<BugSeverity, string> = {
   trivial: '轻微',
 }
 
+function bugFolderOptions(bugs: TestBug[]): BugFilterOption[] {
+  return [
+    { label: '未分类', value: 'uncategorized' },
+    { label: '待补关联', value: 'unlinked' },
+    ...uniqueBugFilterOptions(bugs, (bug) => bug.testCaseFolderId ? {
+      label: `${bug.testSubjectName || ''} / ${bug.testCaseFolderName || ''}`,
+      value: String(bug.testCaseFolderId),
+    } : undefined),
+  ]
+}
+
 function uniqueBugFilterOptions(
   bugs: TestBug[],
   getOption: (bug: TestBug) => BugFilterOption | undefined,
@@ -790,7 +801,9 @@ export function TestWorkbench({
       `bug-${bug.id}`,
       bug.title,
       bug.environment,
-      bug.testSubjectName,
+      bug.testCaseTitle,
+      bug.testCaseId ? `case-${bug.testCaseId}` : '',
+      bug.testCaseFolderName,
       bug.testPlanName,
       bug.reporterName,
       bug.assigneeName,
@@ -807,9 +820,10 @@ export function TestWorkbench({
       ? { label: bug.reporterName, value: String(bug.reporterUserId) }
       : undefined),
     spaces: [],
-    subjects: uniqueBugFilterOptions(bugs, (bug) => bug.testSubjectId && bug.testSubjectName
-      ? { label: bug.testSubjectName, value: String(bug.testSubjectId) }
+    cases: uniqueBugFilterOptions(bugs, (bug) => bug.testCaseId
+      ? { label: `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}`, value: String(bug.testCaseId) }
       : undefined),
+    folders: bugFolderOptions(bugs),
   }), [bugs])
   const returnedBugs: BugReturnNotification[] = data.notifications.flatMap((notification) => {
     if (notification.kind !== 'test_bug_status_changed') return []
@@ -1330,6 +1344,7 @@ export function TestWorkbench({
                     expectedResult: planCase.snapshotExpectedResult,
                     reproductionSteps: planCase.snapshotSteps,
                     testPlanCaseId: planCase.id,
+                    testCaseId: planCase.testCaseId,
                     testPlanId: plan.id,
                     testSubjectId: planCase.testSubjectId ?? plan.testSubjectId,
                     title: planCase.snapshotTitle,
@@ -1354,14 +1369,14 @@ export function TestWorkbench({
                 readOnly={activeSpaceReadOnly}
                 selectedId={selectedBugId}
                 onSelect={setSelectedBugId}
-                onCreate={() => { setEditingBug(undefined); setBugSeed({ testSubjectId: subjectId }); setBugDialogOpen(true) }}
+                onCreate={() => { setEditingBug(undefined); setBugSeed({}); setBugDialogOpen(true) }}
                 onEdit={(bug) => { setEditingBug(bug); setBugSeed(bug); setBugDialogOpen(true) }}
                 onDelete={(bug) => {
                   setBugPendingDelete(bug)
                   setBugDeleteDialogOpen(true)
                 }}
                 onStatus={(bug, status) => void mutate(() => updateTestBug(bug.testSpaceId, bug.id, { assigneeUserId: bug.assigneeUserId, status }))}
-                onTransferSpace={(bug, targetSpaceId) => mutate(() => transferTestBugToSpace(bug.testSpaceId, bug.id, targetSpaceId))}
+                onTransferSpace={(bug, targetSpaceId, targetTestCaseId) => mutate(() => transferTestBugToSpace(bug.testSpaceId, bug.id, targetSpaceId, targetTestCaseId))}
                 onAssignee={(bug, assigneeUserId) => void mutate(() => updateTestBug(bug.testSpaceId, bug.id, { assigneeUserId, status: assigneeUserId ? 'pending_confirmation' : 'new' }))}
                 onComment={(bug, content) => mutate(() => addTestBugComment(bug.testSpaceId, bug.id, content))}
                 onUpdateComment={(bug, comment, content) => mutate(() => updateTestBugComment(bug.testSpaceId, bug.id, comment.id, content))}
@@ -1562,6 +1577,8 @@ export function TestWorkbench({
         environments={testEnvironments}
         open={bugDialogOpen}
         seed={bugSeed}
+        cases={spaceCases}
+        folders={data.folders.filter((folder) => folder.testSpaceId === spaceId)}
         subjects={subjects}
         users={data.users}
         onOpenChange={(open) => {
@@ -2276,7 +2293,7 @@ function BugsView({ bugs, busy, data, draftOwnerUserId, filterConditions, onAssi
   onSearchQueryChange: (value: string) => void
   onSelect: (id: number) => void
   onStatus: (bug: TestBug, status: BugStatus) => void
-  onTransferSpace: (bug: TestBug, targetSpaceId: number) => Promise<boolean>
+  onTransferSpace: (bug: TestBug, targetSpaceId: number, targetTestCaseId: number) => Promise<boolean>
   onUpdateComment: (bug: TestBug, comment: TestBugComment, content: string) => Promise<boolean>
   readOnly: boolean
   searchQuery: string
@@ -2341,7 +2358,7 @@ function BugDetail({ bug, busy, departedUserIds, draftOwnerUserId, onAssignee, o
   onDeleteComment?: (bug: TestBug, comment: TestBugComment) => Promise<boolean>
   onEdit: (bug: TestBug) => void
   onStatus: (bug: TestBug, status: BugStatus) => void
-  onTransferSpace: (bug: TestBug, targetSpaceId: number) => Promise<boolean>
+  onTransferSpace: (bug: TestBug, targetSpaceId: number, targetTestCaseId: number) => Promise<boolean>
   onUpdateComment?: (bug: TestBug, comment: TestBugComment, content: string) => Promise<boolean>
   readOnly: boolean
   users: TestWorkbenchData['users']
@@ -2380,7 +2397,9 @@ function BugDetail({ bug, busy, departedUserIds, draftOwnerUserId, onAssignee, o
     </div>
     <div className="test-bug-controls"><Label>状态<Select value={visibleBugStatus(bug.status)} onValueChange={(value) => onStatus(bug, selectedBugStatus(bug, value as BugStatus))} disabled={busy || readOnly}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{bugStatusOptions.map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></Label><Label>负责人<Select value={bug.assigneeUserId ? String(bug.assigneeUserId) : 'none'} onValueChange={(value) => onAssignee(bug, value === 'none' ? undefined : Number(value))} disabled={busy || readOnly}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">未分配</SelectItem>{developers.map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.displayName}</SelectItem>)}</SelectContent></Select></Label></div>
     <div className="test-detail-meta test-bug-detail-meta">
-      <span>测试对象 <strong>{bug.testSubjectName || '未记录'}</strong></span>
+      <span>测试用例 <strong>{bug.testCaseId ? `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}` : '待补关联'}</strong></span>
+      <span>用例目录 <strong>{bug.testCaseId ? bug.testCaseFolderName || '未分类' : '待补关联'}</strong></span>
+      {bug.testPlanName ? <span>测试计划 <strong>{bug.testPlanName}</strong></span> : null}
       <span>测试空间 <strong>{bug.testSpaceName || '未记录'}</strong></span>
         <span>空间版本 <span className="test-detail-meta-label"><strong>{bug.testSpaceVersionLabel || '未指定'}</strong>{bug.canTransferSpace ? <Button aria-label="迁移到其他测试空间" className="test-detail-meta-copy" disabled={busy} onClick={() => setTransferSpaceOpen(true)} size="icon-xs" title="迁移到其他测试空间" variant="ghost"><PencilSimple /></Button> : null}</span></span>
       <span>严重程度 <strong>{severityLabel[bug.severity]}</strong></span>
@@ -2416,18 +2435,20 @@ function BugSpaceTransferDialog({ bug, busy, onOpenChange, onSubmit, open }: {
   bug: TestBug
   busy: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (bug: TestBug, targetSpaceId: number) => Promise<boolean>
+  onSubmit: (bug: TestBug, targetSpaceId: number, targetTestCaseId: number) => Promise<boolean>
   open: boolean
 }) {
   const [targetSpaceId, setTargetSpaceId] = useState('')
+  const [targetCaseId, setTargetCaseId] = useState('')
+  const targetCases = bug.transferSpaceCandidates?.find((space) => String(space.id) === targetSpaceId)?.cases ?? []
 
   useEffect(() => {
-    if (open) setTargetSpaceId('')
+    if (open) { setTargetSpaceId(''); setTargetCaseId('') }
   }, [bug.id, open])
 
   async function submit() {
-    if (!targetSpaceId) return
-    const transferred = await onSubmit(bug, Number(targetSpaceId))
+    if (!targetSpaceId || !targetCaseId) return
+    const transferred = await onSubmit(bug, Number(targetSpaceId), Number(targetCaseId))
     if (transferred) onOpenChange(false)
   }
 
@@ -2440,7 +2461,7 @@ function BugSpaceTransferDialog({ bug, busy, onOpenChange, onSubmit, open }: {
         </DialogHeader>
         {(bug.transferSpaceCandidates?.length ?? 0) > 0 ? (
           <Label>目标测试空间
-            <Select value={targetSpaceId} onValueChange={setTargetSpaceId}>
+            <Select value={targetSpaceId} onValueChange={(value) => { setTargetSpaceId(value); setTargetCaseId('') }}>
               <SelectTrigger aria-label="目标测试空间"><SelectValue placeholder="选择测试空间" /></SelectTrigger>
               <SelectContent>
                 {bug.transferSpaceCandidates?.map((space) => (
@@ -2451,10 +2472,17 @@ function BugSpaceTransferDialog({ bug, busy, onOpenChange, onSubmit, open }: {
               </SelectContent>
             </Select>
           </Label>
-        ) : <p className="test-list-empty">当前测试空间还没有测试对象，请先创建测试对象；也没有同组织的其他可用测试空间。</p>}
+        ) : <p className="test-list-empty">没有同组织的其他可用测试空间。</p>}
+        {targetSpaceId ? <Label>目标测试用例
+          <Select value={targetCaseId} onValueChange={setTargetCaseId}>
+            <SelectTrigger aria-label="目标测试用例"><SelectValue placeholder="选择测试用例" /></SelectTrigger>
+            <SelectContent>{targetCases.map((item) => <SelectItem key={item.id} value={String(item.id)}>CASE-{item.id} {item.title} · {item.folderName || '未分类'}</SelectItem>)}</SelectContent>
+          </Select>
+          {!targetCases.length ? <span>目标空间暂无用例，请先创建用例。</span> : null}
+        </Label> : null}
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-          <Button disabled={busy || !targetSpaceId} onClick={() => void submit()}><ArrowsLeftRight />{busy ? '转移中...' : '确认转移'}</Button>
+          <Button disabled={busy || !targetSpaceId || !targetCaseId} onClick={() => void submit()}><ArrowsLeftRight />{busy ? '转移中...' : '确认转移'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -4434,15 +4462,15 @@ type BugDialogPayload = {
   testEnvironmentId?: number | null
   testPlanCaseId?: number
   testPlanId?: number
-  testSubjectId: number
+  testCaseId: number
   title: string
 }
 
-function BugDialog({ busy, editing, environments, onOpenChange, onSubmit, open, seed, subjects, users }: { busy: boolean; editing: boolean; environments: TestEnvironment[]; onOpenChange: (open: boolean) => void; onSubmit: (payload: BugDialogPayload) => void; open: boolean; seed: Partial<TestBug>; subjects: TestSubject[]; users: TestWorkbenchData['users'] }) {
-  return <BugDialogForm key={`${open}-${editing ? seed.id : seed.testPlanCaseId ?? 'new'}`} {...{ busy, editing, environments, onOpenChange, onSubmit, open, seed, subjects, users }} />
+function BugDialog(props: { busy: boolean; editing: boolean; environments: TestEnvironment[]; onOpenChange: (open: boolean) => void; onSubmit: (payload: BugDialogPayload) => void; open: boolean; seed: Partial<TestBug>; subjects: TestSubject[]; cases: TestCase[]; folders: TestCaseFolder[]; users: TestWorkbenchData['users'] }) {
+  return <BugDialogForm key={`${props.open}-${props.editing ? props.seed.id : props.seed.testPlanCaseId ?? 'new'}`} {...props} />
 }
 
-function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, open, seed, subjects, users }: Parameters<typeof BugDialog>[0]) {
+function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, open, seed, subjects, cases, folders, users }: Parameters<typeof BugDialog>[0]) {
   const [title, setTitle] = useState(seed.title ?? '')
   const [severity, setSeverity] = useState<BugSeverity>(seed.severity ?? 'major')
   const [priority, setPriority] = useState<Priority>(seed.priority ?? 'medium')
@@ -4456,7 +4484,15 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
   const [expectedResult, setExpectedResult] = useState(seed.expectedResult ?? '')
   const [actualResult, setActualResult] = useState(seed.actualResult ?? '')
   const [assigneeUserId, setAssigneeUserId] = useState(seed.assigneeUserId ? String(seed.assigneeUserId) : 'none')
-  const [testSubjectId, setTestSubjectId] = useState(seed.testSubjectId ? String(seed.testSubjectId) : '')
+  const [testCaseId, setTestCaseId] = useState(seed.testCaseId ? String(seed.testCaseId) : '')
+  const [caseSearch, setCaseSearch] = useState('')
+  const [caseFolder, setCaseFolder] = useState('all')
+  const caseLocked = editing ? Boolean(seed.testCaseId) : Boolean(seed.testPlanCaseId)
+  const selectableCases = cases.filter((item) => (
+    (caseFolder === 'all' || (caseFolder === 'uncategorized' ? !item.folderId : String(item.folderId) === caseFolder))
+    && `CASE-${item.id} ${item.title}`.toLocaleLowerCase('zh-CN').includes(caseSearch.trim().toLocaleLowerCase('zh-CN'))
+  ))
+  const selectedCase = cases.find((item) => String(item.id) === testCaseId)
   const [reproductionUploading, setReproductionUploading] = useState(false)
   const [expectedUploading, setExpectedUploading] = useState(false)
   const [actualUploading, setActualUploading] = useState(false)
@@ -4487,7 +4523,7 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
               ...(testEnvironmentId === 'manual' ? {} : { testEnvironmentId: Number(testEnvironmentId) }),
               testPlanCaseId: seed.testPlanCaseId,
               testPlanId: seed.testPlanId,
-              testSubjectId: Number(testSubjectId),
+              testCaseId: Number(testCaseId),
               title,
             })
           }}
@@ -4518,13 +4554,30 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
                 <SelectContent><SelectItem value="none">未分配</SelectItem>{users.filter((user) => user.roles.includes('developer')).map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.displayName}</SelectItem>)}</SelectContent>
               </Select>
             </Label>
-            <Label>
-              测试对象
-              <Select value={testSubjectId} onValueChange={setTestSubjectId} disabled={editing}>
-                <SelectTrigger><SelectValue placeholder="选择测试对象" /></SelectTrigger>
-                <SelectContent>{subjects.map((subject) => <SelectItem key={subject.id} value={String(subject.id)}>{subject.name}</SelectItem>)}</SelectContent>
-              </Select>
-            </Label>
+            <div className="test-bug-case-picker">
+              {!caseLocked ? <>
+                <Label>用例目录
+                  <Select value={caseFolder} onValueChange={setCaseFolder}>
+                    <SelectTrigger aria-label="用例目录"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="all">全部目录</SelectItem><SelectItem value="uncategorized">未分类</SelectItem>{folders.map((folder) => <SelectItem key={folder.id} value={String(folder.id)}>{subjects.find((subject) => subject.id === folder.testSubjectId)?.name} / {folder.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </Label>
+                <Input aria-label="搜索测试用例" placeholder="搜索用例编号或标题" value={caseSearch} onChange={(event) => setCaseSearch(event.target.value)} />
+              </> : null}
+              <Label>测试用例（必填）
+                <Select value={testCaseId} disabled={caseLocked} onValueChange={(value) => {
+                  setTestCaseId(value)
+                  const item = cases.find((candidate) => String(candidate.id) === value)
+                  if (item && !editing) { setReproductionSteps(item.steps); setExpectedResult(item.expectedResult) }
+                }}>
+                  <SelectTrigger aria-label="关联测试用例"><SelectValue placeholder="选择测试用例">{selectedCase ? `CASE-${selectedCase.id} ${selectedCase.title}` : undefined}</SelectValue></SelectTrigger>
+                  <SelectContent>{selectableCases.map((item) => <SelectItem key={item.id} value={String(item.id)}>CASE-{item.id} {item.title}</SelectItem>)}</SelectContent>
+                </Select>
+              </Label>
+              {!cases.length ? <p className="test-list-empty">当前测试空间暂无用例，请先创建测试用例。</p> : null}
+              {caseLocked && !selectedCase ? <p className="test-list-empty">来源用例已删除，无法从此执行记录创建 Bug。</p> : null}
+              {!caseLocked && cases.length > 0 && !selectableCases.length ? <p className="test-list-empty">没有符合条件的用例。</p> : null}
+            </div>
             <Label>
               测试环境
               <Select
@@ -4572,7 +4625,7 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
           />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-            <Button disabled={busy || evidenceUploading || !title.trim() || !testSubjectId}>
+            <Button disabled={busy || evidenceUploading || !title.trim() || !selectedCase}>
               {evidenceUploading ? '附件上传中...' : editing ? '保存修改' : '创建 Bug'}
             </Button>
           </DialogFooter>
@@ -5364,7 +5417,9 @@ export function AssignedTestBugs({
         `bug-${bug.id}`,
         bug.title,
         bug.environment,
-        bug.testSubjectName,
+        bug.testCaseTitle,
+        bug.testCaseId ? `case-${bug.testCaseId}` : '',
+        bug.testCaseFolderName,
         bug.testPlanName,
         bug.reporterName,
         bug.assigneeName,
@@ -5386,9 +5441,10 @@ export function AssignedTestBugs({
       ? { label: bug.reporterName, value: String(bug.reporterUserId) }
       : undefined),
     spaces: [],
-    subjects: uniqueBugFilterOptions(spaceBugs, (bug) => bug.testSubjectId && bug.testSubjectName
-      ? { label: bug.testSubjectName, value: String(bug.testSubjectId) }
+    cases: uniqueBugFilterOptions(spaceBugs, (bug) => bug.testCaseId
+      ? { label: `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}`, value: String(bug.testCaseId) }
       : undefined),
+    folders: bugFolderOptions(spaceBugs),
   }), [spaceBugs])
 
   useEffect(() => {
@@ -5556,7 +5612,8 @@ export function AssignedTestBugs({
                 </div>
                 <div className="test-detail-meta assigned-bug-detail-meta">
                   <span>负责人 <UserName departedUserIds={departedUserIds} name={selected.assigneeName || '未分配'} userId={selected.assigneeUserId} /></span>
-                  <span>测试对象 <strong>{selected.testSubjectName}</strong></span>
+                  <span>测试用例 <strong>{selected.testCaseId ? `CASE-${selected.testCaseId} ${selected.testCaseTitle || ''}` : '待补关联'}</strong></span>
+                  <span>用例目录 <strong>{selected.testCaseId ? selected.testCaseFolderName || '未分类' : '待补关联'}</strong></span>
                   <span>测试空间 <strong>{selected.testSpaceName || '未记录'}</strong></span>
                   <span>版本号 <strong>{selected.testSpaceVersionLabel || '未指定'}</strong></span>
                   <span>严重程度 <strong>{severityLabel[selected.severity]}</strong></span>

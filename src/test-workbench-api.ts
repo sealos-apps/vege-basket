@@ -78,10 +78,10 @@ export function deleteTestSpace(spaceId: number, confirmationName: string) {
   })
 }
 
-export function transferTestBugToSpace(spaceId: number, bugId: number, targetSpaceId: number) {
+export function transferTestBugToSpace(spaceId: number, bugId: number, targetSpaceId: number, targetTestCaseId: number) {
   return request<TestWorkbenchData>(`/api/test-spaces/${spaceId}/bugs/${bugId}/transfer-space`, {
     method: 'POST',
-    body: JSON.stringify({ targetSpaceId }),
+    body: JSON.stringify({ targetSpaceId, targetTestCaseId }),
   })
 }
 
@@ -350,7 +350,7 @@ export function createTestBug(spaceId: number, payload: {
   testEnvironmentId?: number | null
   testPlanCaseId?: number
   testPlanId?: number
-  testSubjectId: number
+  testCaseId: number
   title: string
 }) {
   return request<TestWorkbenchData>(`/api/test-spaces/${spaceId}/bugs`, {
@@ -369,7 +369,7 @@ export function updateTestBug(spaceId: number, bugId: number, payload: {
   severity?: BugSeverity
   status?: BugStatus
   testEnvironmentId?: number | null
-  testSubjectId?: number
+  testCaseId?: number
   title?: string
 }) {
   return request<TestWorkbenchData>(`/api/test-spaces/${spaceId}/bugs/${bugId}`, {

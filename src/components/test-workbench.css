@@ -2344,6 +2344,24 @@
   gap: 12px;
 }
 
+.test-bug-case-picker {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+
+.test-bug-case-picker [data-slot="select-trigger"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.test-bug-case-picker [data-slot="select-value"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .test-bug-controls {
   margin-top: 18px;
 }

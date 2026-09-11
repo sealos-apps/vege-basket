@@ -69,7 +69,7 @@ test('test-space member settings do not show unrelated departed accounts', () =>
   assert.match(testWorkbenchClientSource, /selectedSpace\.members\.length/u)
 })
 
-test('Bug scope stays within the current space while its subject is returned as detail metadata', () => {
+test('Bug scope stays within the current space and exposes its case instead of a subject picker', () => {
   assert.match(testWorkbenchSource, /join test_subjects subject on subject\.id = b\.test_subject_id/u)
   assert.match(testWorkbenchSource, /subject\.name as test_subject_name/u)
   assert.match(testWorkbenchSource, /testSubjectName: decryptText\(row\.test_subject_name\)/u)
@@ -78,16 +78,16 @@ test('Bug scope stays within the current space while its subject is returned as 
   assert.match(testWorkbenchClientSource, /activeSpace && tab === 'cases' \?/u)
   assert.doesNotMatch(testWorkbenchClientSource, /tab === 'cases' && !activeSubject \?/u)
   assert.match(testWorkbenchClientSource, /test-bug-detail-meta/u)
-  assert.match(testWorkbenchClientSource, /测试对象\s*<strong>\{bug\.testSubjectName/u)
+  assert.match(testWorkbenchClientSource, /测试用例\s*<strong>\{bug\.testCaseId/u)
   assert.match(testWorkbenchClientSource, /测试空间\s*<strong>\{bug\.testSpaceName \|\| '未记录'\}/u)
-  assert.match(testWorkbenchClientSource, /当前测试空间还没有测试对象，请先创建测试对象/u)
-  assert.match(testWorkbenchClientSource, /<Label>\s*测试对象[\s\S]*subjects\.map/u)
+  assert.match(testWorkbenchClientSource, /当前测试空间暂无用例，请先创建测试用例/u)
+  assert.match(testWorkbenchClientSource, /aria-label="关联测试用例"/u)
 })
 
-test('assigned Bug details include their test subject and space version label', () => {
+test('assigned Bug details include their test case and space version label', () => {
   assert.match(testWorkbenchSource, /space\.version_label as test_space_version_label/u)
   assert.match(testWorkbenchSource, /testSpaceVersionLabel: row\.test_space_version_label\s*\? decryptText\(row\.test_space_version_label\)\s*:\s*undefined/u)
-  assert.match(testWorkbenchClientSource, /selected\.testSubjectName/u)
+  assert.match(testWorkbenchClientSource, /selected\.testCaseTitle/u)
   assert.match(testWorkbenchClientSource, /selected\.testSpaceVersionLabel \|\| '未指定'/u)
   assert.match(testWorkbenchClientSource, /<small>\{bug\.testSpaceName \|\| '未知测试空间'\} · 版本号 \{bug\.testSpaceVersionLabel \|\| '未指定'\}/u)
   assert.match(testWorkbenchClientSource, /label: `\$\{bug\.testSpaceName\}\$\{bug\.testSpaceVersionLabel \? ` · \$\{bug\.testSpaceVersionLabel\}` : ''\}`/u)
@@ -305,11 +305,11 @@ test('Bug details offer same-organization space transfer with the existing trans
   assert.match(testWorkbenchSource, /transferSpaceCandidates: ownedSpaces/u)
   assert.match(testWorkbenchSource, /space\.organization_id === row\.organization_id/u)
   assert.match(testWorkbenchSource, /allowBugCreatorTransfer: true/u)
-  assert.match(testWorkbenchSource, /目标测试空间还没有测试对象，请先创建测试对象/u)
+  assert.match(testWorkbenchSource, /目标用例不存在或不属于目标测试空间/u)
   assert.match(testWorkbenchClientSource, /bug\.canTransferSpace/u)
   assert.match(testWorkbenchClientSource, /<BugSpaceTransferDialog/u)
   assert.match(testWorkbenchClientSource, /<DialogTitle>转移 Bug 到其他空间<\/DialogTitle>/u)
-  assert.match(testWorkbenchClientSource, /transferTestBugToSpace\(bug\.testSpaceId, bug\.id, targetSpaceId\)/u)
+  assert.match(testWorkbenchClientSource, /transferTestBugToSpace\(bug\.testSpaceId, bug\.id, targetSpaceId, targetTestCaseId\)/u)
 })
 
 test('assigned Bug selection keeps the current item when parent callbacks refresh counts', () => {

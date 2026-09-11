@@ -4,7 +4,8 @@ export type BugFilterJoin = 'and' | 'or'
 export type BugFilterField =
   | 'title'
   | 'testSpace'
-  | 'testSubject'
+  | 'testCase'
+  | 'caseFolder'
   | 'testPlan'
   | 'reporter'
   | 'assignee'
@@ -33,7 +34,8 @@ export type BugFilterCondition = {
 export const bugFilterFieldLabels: Record<BugFilterField, string> = {
   title: 'Bug 标题',
   testSpace: '测试空间',
-  testSubject: '测试对象',
+  testCase: '测试用例',
+  caseFolder: '用例目录',
   testPlan: '测试计划',
   reporter: '创建人',
   assignee: '指派人',
@@ -59,7 +61,8 @@ export const bugFilterOperatorLabels: Record<BugFilterOperator, string> = {
 export const bugFilterFields: BugFilterField[] = [
   'title',
   'testSpace',
-  'testSubject',
+  'testCase',
+  'caseFolder',
   'testPlan',
   'reporter',
   'assignee',
@@ -73,7 +76,8 @@ export const bugFilterFields: BugFilterField[] = [
 export const bugFilterOperatorsByField: Record<BugFilterField, BugFilterOperator[]> = {
   title: ['contains', 'not_contains', 'equals', 'not_equals'],
   testSpace: ['equals', 'not_equals'],
-  testSubject: ['equals', 'not_equals'],
+  testCase: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
+  caseFolder: ['equals', 'not_equals'],
   testPlan: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
   reporter: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
   assignee: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
@@ -153,7 +157,8 @@ export function normalizeBugFilterCondition(
 function getFieldValue(bug: TestBug, field: BugFilterField) {
   if (field === 'title') return bug.title
   if (field === 'testSpace') return String(bug.testSpaceId)
-  if (field === 'testSubject') return bug.testSubjectId ? String(bug.testSubjectId) : ''
+  if (field === 'testCase') return bug.testCaseId ? String(bug.testCaseId) : ''
+  if (field === 'caseFolder') return bug.testCaseId ? (bug.testCaseFolderId ? String(bug.testCaseFolderId) : 'uncategorized') : 'unlinked'
   if (field === 'testPlan') return bug.testPlanId ? String(bug.testPlanId) : ''
   if (field === 'reporter') return bug.reporterUserId ? String(bug.reporterUserId) : ''
   if (field === 'assignee') return bug.assigneeUserId ? String(bug.assigneeUserId) : ''

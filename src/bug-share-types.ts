@@ -31,6 +31,9 @@ export type BugShareView = {
   testPlanName: string | null
   testSpaceName: string
   testSubjectName: string
+  testCaseId?: number
+  testCaseTitle?: string
+  testCaseFolderName?: string
   title: string
   updatedAt: string
   viewer: 'anonymous' | 'commenter' | 'assignee'

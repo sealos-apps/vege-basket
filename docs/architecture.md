@@ -384,6 +384,18 @@ The schema is normalized around these groups:
   snapshot, or delete the plan. Test-case archiving means promoting a functional case
   into a baseline case; it no longer creates a new case version. Deleting a plan
   preserves existing bugs while clearing their plan association.
+  Every new Bug directly references a canonical test case. A composite foreign key
+  enforces case/space/subject consistency; subject is derived from the case and is not
+  a Bug selection boundary. Existing execution-backed Bugs are backfilled only when
+  the source case survives. Other legacy Bugs remain readable and support creator-owned
+  one-time case binding. New inserts, unlinking, and space transfers without a case are
+  rejected by a database trigger; NOT NULL is enabled when no unlinked rows remain.
+  Referenced cases cannot be deleted. Subject deletion is also rejected while Bugs remain;
+  deleting the entire test space retains its existing explicit cascade behavior.
+  Case folder metadata is read from the current case, including for assigned Bugs and
+  share views, without granting access to the rest of the case catalog. Single-Bug
+  transfers select an existing destination case and clear plan/execution links; encrypted
+  collaboration text retains the previous case, plan, and execution IDs.
   Test environments belong to one organization, store encrypted names and access URLs,
   and are assigned to one or more organization-owned test spaces through an explicit
   relation. A Bug may reference only an environment assigned to its own space; database

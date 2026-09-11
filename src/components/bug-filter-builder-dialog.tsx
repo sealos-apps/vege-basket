@@ -41,7 +41,8 @@ export type BugFilterOptions = {
   plans: BugFilterOption[]
   reporters: BugFilterOption[]
   spaces: BugFilterOption[]
-  subjects: BugFilterOption[]
+  cases: BugFilterOption[]
+  folders: BugFilterOption[]
 }
 
 const statusOptions: BugFilterOption[] = [
@@ -69,7 +70,8 @@ const priorityOptions: BugFilterOption[] = [
 
 function optionsForField(field: BugFilterField, options: BugFilterOptions) {
   if (field === 'testSpace') return options.spaces
-  if (field === 'testSubject') return options.subjects
+  if (field === 'testCase') return options.cases
+  if (field === 'caseFolder') return options.folders
   if (field === 'testPlan') return options.plans
   if (field === 'reporter') return options.reporters
   if (field === 'assignee') return options.assignees
