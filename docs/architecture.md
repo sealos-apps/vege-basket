@@ -518,3 +518,26 @@ five minutes. Digest runs are unique per subscription/date, claimed with row loc
 a lease, retried at most three times, and terminally failed when the last lease expires.
 Build receipts and deployment state under `.sealos/` are historical evidence; all three
 template image references and both live workload images are deployment sources of truth.
+
+### Test-case directory trees
+
+`test_case_folders.parent_id` is an adjacency list within one test space and test
+subject. A composite foreign key prevents cross-scope parents; separate root/child
+unique indexes enforce sibling name lookups. Names stay encrypted; full paths are
+computed after decryption and are never persisted. Legacy module strings, including
+literal slashes, remain root directory names with their original IDs.
+
+`shared/test-case-directories.ts` owns path escaping, depth (32 levels), sibling
+validation and import planning. `server/test-case-directories.ts` owns scoped writes.
+All directory/assignment writers lock the space, then the subject, then resources;
+space imports lock all spaces and subjects in numeric order. Permissions are checked
+again inside the transaction. Creator-only case/subject deletion retains its existing
+read-access policy; directory management and case reassignment require editor access.
+Only directories with no children and no directly assigned cases can be deleted.
+Case migration changes assignment and update time only, preserving plan snapshots.
+
+The case workbench keeps tree expansion separate from the desktop panel preference.
+Mobile uses an independent drawer. Directory selection clears batch selection;
+collapsing the panel or the whole tree preserves case scope and selection. Filtering
+and export share the same result set, including every matching page. Import captures
+its target on opening and invalidates asynchronous previews when closed or changed.

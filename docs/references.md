@@ -300,9 +300,7 @@ must remain bound to the authorized project ID.
 - Test-case status: `draft`, `active`, `archived` remains accepted for compatibility,
   but the workbench no longer exposes case versions or archived status as the primary
   workflow.
-- Test-case kind: `functional`, `baseline`. Archiving a case promotes it from
-  `functional` to `baseline`; baseline cases remain active and serve as the reusable
-  bottom layer for each test subject. Test cases also support encrypted custom tags.
+- Test cases use `case_type` for functional, regression, smoke, security, or performance classification. The former baseline/archiving concept has been removed. Test cases also support encrypted custom tags.
 - Test-case folders/modules are scoped to one test subject. Test-space owners and editors
   can create, rename, and delete folders; deleting a folder clears `folder_id` on its
   current cases and does not delete cases or immutable plan snapshots.
@@ -315,8 +313,7 @@ must remain bound to the authorized project ID.
   `步骤描述`, `预期结果`, `备注`, and `用例等级`. Levels map as P0/high,
   P1/medium, and P2/low. Files are limited to 2 MB and 1000 non-empty rows.
 - Test-plan status: `draft`, `in_progress`, `completed`, `aborted`.
-- Test plans are scoped to a test space and then associated with one or more test
-  subjects. A plan may optionally link to an accessible project through `projectId`;
+- Test plans are scoped to a test space and select cases from the space-level case library. Legacy subject IDs remain in snapshots for compatibility. A plan may optionally link to an accessible project through `projectId` and must select an environment assigned to the current space through `testEnvironmentId`;
   project access is checked when creating or updating the plan. A plan response includes
   `projectId`, `testSubjectIds`, and `canManage`. Only its creator receives `true` and
   may use `PATCH /api/test-spaces/:spaceId/plans/:planId/details` to change metadata,
@@ -551,3 +548,30 @@ Package-item batch failures additionally return `code`, `requestId`, and `detail
 `read_package_timeline`; database failures may include safe `databaseCode`, `constraint`,
 `table`, `column`, and redacted `databaseDetail` fields. Responses never include a stack,
 raw SQL, credentials, encryption material, or unknown exception messages.
+
+### Test-case directory and CSV contracts
+
+Folder DTOs include `parentId: number | null`. Under `/api/test-spaces/:spaceId`:
+
+- `POST /folders`: `{ testSubjectId, name, parentId? }`; omitted parent creates a root.
+- `PATCH /folders/:folderId`: `{ name?, parentId? }`; explicit null moves to the root.
+  Moving a subtree to itself/descendants, sibling duplicates, or exceeding 32 levels
+  is rejected. Names are trimmed, 1–240 characters, with no control characters.
+- `DELETE /folders/:folderId`: only an empty directory; nonempty returns 409.
+- Case create/update accepts `folderId` (null means uncategorized). The legacy
+  `modulePath` string is accepted separately as one root name; sending both is invalid.
+- `POST /cases/move`: `{ testSubjectId, caseIds, targetFolderId }`, with 1–1000 distinct
+  positive numeric IDs and a folder ID or null. The entire batch succeeds or fails.
+  Response is `{ movedCount, workbench }`; unchanged assignments produce no notification.
+- `POST /cases/import?testSubjectId=…&directoryMode=current|tree&targetFolderId=…`:
+  UTF-8 CSV, at most 2 MiB / 1000 cases. `preview=true` validates without writes and
+  returns `preview` with `targetPath`, `newDirectoryCount`, `reusedDirectoryCount`,
+  `samplePaths` and the existing row/priority summaries. Submission revalidates.
+
+`current` ignores directory columns and places all cases directly in the target.
+`tree` uses relative `目录路径`: `/` separates segments, `~1` escapes a literal slash,
+`~0` escapes a tilde, and an empty value means the selected target. If the path column
+is absent, `所属模块` is treated as one literal child name. Omitting `directoryMode`
+retains legacy root-module import behavior. Other required Chinese CSV fields and
+priority mappings remain unchanged. Exports include both a readable `所属模块` and the
+reversible relative `目录路径`; uncategorized exports use an empty path.
