@@ -4142,7 +4142,7 @@ function PlanDirectoryTree({
         <Button type="button" size="sm" variant="ghost" onClick={onCollapseAll}>全部收起</Button>
       </div>
       <div className="test-plan-directory-tree" role="tree" aria-label="测试用例目录">
-        <button type="button" role="treeitem" aria-selected={selected === 'all'} className={`test-plan-directory-node ${selected === 'all' ? 'active' : ''}`} onClick={() => onSelect('all')}>
+        <button type="button" role="treeitem" aria-selected={selected === 'all'} className={`test-plan-directory-node test-plan-directory-node-root ${selected === 'all' ? 'active' : ''}`} onClick={() => onSelect('all')}>
           <Folder /><span>全部目录</span><small>{cases.length}</small>
         </button>
         {visible.map(({ folder, depth }) => {
@@ -4159,7 +4159,7 @@ function PlanDirectoryTree({
             </div>
           )
         })}
-        <button type="button" role="treeitem" aria-selected={selected === 'uncategorized'} className={`test-plan-directory-node ${selected === 'uncategorized' ? 'active' : ''}`} onClick={() => onSelect('uncategorized')}>
+        <button type="button" role="treeitem" aria-selected={selected === 'uncategorized'} className={`test-plan-directory-node test-plan-directory-node-root ${selected === 'uncategorized' ? 'active' : ''}`} onClick={() => onSelect('uncategorized')}>
           <Folder /><span>未分类</span><small>{counts.direct.get(null) ?? 0}</small>
         </button>
         {!folders.length ? <p className="test-list-empty">当前测试空间还没有目录。</p> : null}

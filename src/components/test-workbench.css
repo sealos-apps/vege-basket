@@ -2749,6 +2749,10 @@
   cursor: pointer;
 }
 
+.test-plan-directory-node-root {
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+}
+
 .test-plan-directory-node > svg {
   width: 15px;
   height: 15px;

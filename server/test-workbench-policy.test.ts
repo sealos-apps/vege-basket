@@ -55,6 +55,13 @@ test('test spaces persist encrypted organization-scoped unique versions', () => 
   assert.match(createDialog, /<Input maxLength=\{80\} value=\{versionLabel\}/u)
 })
 
+test('test plan root directory entries reserve the correct grid columns', () => {
+  assert.match(testWorkbenchClientSource, /test-plan-directory-node-root/u)
+  assert.match(testWorkbenchClientSource, /className=\{`test-plan-directory-node test-plan-directory-node-root \$\{selected === 'all'/u)
+  assert.match(testWorkbenchClientSource, /className=\{`test-plan-directory-node test-plan-directory-node-root \$\{selected === 'uncategorized'/u)
+  assert.match(readFileSync(new URL('../src/components/test-workbench.css', import.meta.url), 'utf8'), /\.test-plan-directory-node-root\s*\{\s*grid-template-columns: 16px minmax\(0, 1fr\) auto;/u)
+})
+
 test('test-space member settings do not show unrelated departed accounts', () => {
   assert.doesNotMatch(testWorkbenchSource, /getDepartedUsers/u)
   assert.doesNotMatch(testWorkbenchClientSource, /departedUsers.*TestSpaceSettingsDialog/u)
