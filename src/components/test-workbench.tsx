@@ -2528,8 +2528,10 @@ function BugTimelineDialog({ bug, departedUserIds, onOpenChange, open }: {
     eventType: TestBugEvent['eventType'] | 'rejected'
     id: number
     nextSpaceName?: string
+    nextSpaceVersionLabel?: string
     nextStatus?: BugStatus
     previousSpaceName?: string
+    previousSpaceVersionLabel?: string
     previousStatus?: BugStatus
     transferSource?: 'manual' | 'offboarding'
   }> = [
@@ -2548,6 +2550,9 @@ function BugTimelineDialog({ bug, departedUserIds, onOpenChange, open }: {
       })),
     ...bug.events.map((event) => ({ ...event, actorUserId: event.actorUserId, assigneeUserId: event.assigneeUserId })),
   ].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+  const formatSpace = (name?: string, versionLabel?: string) => (
+    name ? `${name} · ${versionLabel ?? '未设置版本'}` : '未知空间'
+  )
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bug-timeline-dialog">
@@ -2569,7 +2574,7 @@ function BugTimelineDialog({ bug, departedUserIds, onOpenChange, open }: {
                 ) : event.eventType === 'transferred' ? (
                   <strong>转移给 <UserName departedUserIds={departedUserIds} name={event.assigneeName ?? '未分配'} userId={event.assigneeUserId} />{event.transferSource === 'offboarding' ? '（离职转移）' : null}</strong>
                 ) : event.eventType === 'space_transferred' ? (
-                  <strong>从「{event.previousSpaceName ?? '未知空间'}」转移到「{event.nextSpaceName ?? '未知空间'}」</strong>
+                  <strong>从「{formatSpace(event.previousSpaceName, event.previousSpaceVersionLabel)}」转移到「{formatSpace(event.nextSpaceName, event.nextSpaceVersionLabel)}」</strong>
                 ) : event.eventType === 'rejected' ? (
                   <strong>驳回了该 Bug</strong>
                 ) : (

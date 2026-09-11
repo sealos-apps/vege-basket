@@ -46,6 +46,5 @@ test('create and legacy repair validate canonical cases and preserve prior execu
   assert.match(client, /const caseLocked = editing \? Boolean\(seed.testCaseId\) : Boolean\(seed.testPlanCaseId\)/)
   assert.match(source, /历史 Bug 补关联：原计划/)
   assert.match(source, /if \(sources.some\(\(source\) => source.categories.includes\('bugs'\)\) && !targetCase\)/)
-  const scope = source.slice(source.indexOf('const scopeBugs'), source.indexOf('const [', source.indexOf('const scopeBugs')))
-  assert.doesNotMatch(scope, /b.test_subject_id/)
+  assert.doesNotMatch(source, /scopeBugs/)
 })

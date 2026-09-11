@@ -1532,9 +1532,6 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
   const scopePlanCases = scope?.spaceId && scope?.subjectId
     ? ` and p.test_space_id = ${scope.spaceId} and p.test_subject_id = ${scope.subjectId}`
     : ''
-  const scopeBugs = scope?.spaceId
-    ? ` and b.test_space_id = ${scope.spaceId}`
-    : ''
 
   const [
     spaces,
@@ -1784,7 +1781,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
         on m.test_space_id = b.test_space_id and m.user_id = $1 and m.status = 'active'
       left join users reporter on reporter.id = b.reporter_user_id
       left join users assignee on assignee.id = b.assignee_user_id
-      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopeBugs}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})
       order by b.updated_at desc, b.id desc
       `,
       [userId],
@@ -1825,8 +1822,10 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       id: string
       transfer_source: 'manual' | 'offboarding' | null
       next_test_space_name: string | null
+      next_test_space_version_label: string | null
       next_status: string | null
       previous_test_space_name: string | null
+      previous_test_space_version_label: string | null
       previous_status: string | null
       test_bug_id: string
     }>(
@@ -1834,7 +1833,9 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       select e.*, actor.display_name as actor_display_name, actor.email as actor_email,
              assignee.display_name as assignee_display_name, assignee.email as assignee_email,
              previous_space.name as previous_test_space_name,
-             next_space.name as next_test_space_name
+             previous_space.version_label as previous_test_space_version_label,
+             next_space.name as next_test_space_name,
+             next_space.version_label as next_test_space_version_label
       from test_bug_events e
       join test_bugs b on b.id = e.test_bug_id
       join test_spaces space on space.id = b.test_space_id
@@ -2022,8 +2023,10 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
         id: Number(row.id),
         transferSource: row.transfer_source ?? undefined,
         nextSpaceName: row.next_test_space_name ? decryptText(row.next_test_space_name) : undefined,
+        nextSpaceVersionLabel: row.next_test_space_version_label ? decryptText(row.next_test_space_version_label) : undefined,
         nextStatus: row.next_status ?? undefined,
         previousSpaceName: row.previous_test_space_name ? decryptText(row.previous_test_space_name) : undefined,
+        previousSpaceVersionLabel: row.previous_test_space_version_label ? decryptText(row.previous_test_space_version_label) : undefined,
         previousStatus: row.previous_status ?? undefined,
       },
     ])
@@ -4438,8 +4441,10 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
     id: string
     transfer_source: 'manual' | 'offboarding' | null
     next_test_space_name: string | null
+    next_test_space_version_label: string | null
     next_status: string | null
     previous_test_space_name: string | null
+    previous_test_space_version_label: string | null
     previous_status: string | null
     test_bug_id: string
   }>(
@@ -4447,7 +4452,9 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
     select e.*, actor.display_name as actor_display_name, actor.email as actor_email,
            assignee.display_name as assignee_display_name, assignee.email as assignee_email,
            previous_space.name as previous_test_space_name,
-           next_space.name as next_test_space_name
+           previous_space.version_label as previous_test_space_version_label,
+           next_space.name as next_test_space_name,
+           next_space.version_label as next_test_space_version_label
     from test_bug_events e
     join test_bugs b on b.id = e.test_bug_id
     join test_spaces space on space.id = b.test_space_id
@@ -4515,8 +4522,10 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
         id: Number(row.id),
         transferSource: row.transfer_source ?? undefined,
         nextSpaceName: row.next_test_space_name ? decryptText(row.next_test_space_name) : undefined,
+        nextSpaceVersionLabel: row.next_test_space_version_label ? decryptText(row.next_test_space_version_label) : undefined,
         nextStatus: row.next_status ?? undefined,
         previousSpaceName: row.previous_test_space_name ? decryptText(row.previous_test_space_name) : undefined,
+        previousSpaceVersionLabel: row.previous_test_space_version_label ? decryptText(row.previous_test_space_version_label) : undefined,
         previousStatus: row.previous_status ?? undefined,
       },
     ])
