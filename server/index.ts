@@ -10487,6 +10487,32 @@ app.get('/api/projects/:projectId/subprojects', asyncHandler(async (request, res
   try { response.json(await listProjectSubprojects(client, projectId)) } finally { client.release() }
 }))
 
+app.get('/api/projects/:projectId/todos', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  const projectId = parseProjectSubprojectId(request.params.projectId)
+  if (projectId === null || !await getProjectReadAccess(projectId, userId)) {
+    response.status(404).json({ error: 'Project not found' })
+    return
+  }
+  const filter = request.query.subprojectId
+  if (filter === 'all') {
+    response.json((await getWorkspace(userId)).todos.filter(todo => todo.projectId === projectId))
+    return
+  }
+  const unassigned = filter === 'none'
+  const subprojectId = unassigned ? null : parseProjectSubprojectId(filter)
+  if (subprojectId !== null) {
+    const client = await pool.connect()
+    try { await resolveProjectSubprojectId(client, projectId, subprojectId) }
+    finally { client.release() }
+  }
+  const workspace = await getWorkspace(userId)
+  response.json(workspace.todos.filter(todo => todo.projectId === projectId && (
+    unassigned ? todo.subprojectId == null : subprojectId === null || todo.subprojectId === subprojectId
+  )))
+}))
+
 app.post('/api/projects/:projectId/subprojects', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response); if (!userId) return
   const projectId = Number(request.params.projectId)
