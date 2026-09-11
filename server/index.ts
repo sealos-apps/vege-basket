@@ -10477,7 +10477,7 @@ app.get('/api/projects/:projectId/subprojects', asyncHandler(async (request, res
 app.post('/api/projects/:projectId/subprojects', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response); if (!userId) return
   const projectId = Number(request.params.projectId)
-  const access = await getProjectAccess(projectId, userId)
+  const access = await getProjectReadAccess(projectId, userId)
   if (!access) { response.status(404).json({ error: 'Project not found' }); return }
   const name = requireProjectSubprojectName(request.body.name)
   const client = await pool.connect()
@@ -10493,7 +10493,7 @@ app.post('/api/projects/:projectId/subprojects', asyncHandler(async (request, re
 app.patch('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response); if (!userId) return
   const projectId = Number(request.params.projectId); const subprojectId = parseProjectSubprojectId(request.params.subprojectId)
-  const access = await getProjectAccess(projectId, userId)
+  const access = await getProjectReadAccess(projectId, userId)
   if (!access) { response.status(404).json({ error: 'Project not found' }); return }
   const name = requireProjectSubprojectName(request.body.name); const client = await pool.connect()
   try { await client.query('begin'); await lockProjectSubprojects(client, projectId)
@@ -10509,7 +10509,7 @@ app.patch('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(asy
 app.delete('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response); if (!userId) return
   const projectId = Number(request.params.projectId); const subprojectId = parseProjectSubprojectId(request.params.subprojectId)
-  const access = await getProjectAccess(projectId, userId)
+  const access = await getProjectReadAccess(projectId, userId)
   if (!access) { response.status(404).json({ error: 'Project not found' }); return }
   const client = await pool.connect()
   try { await client.query('begin'); await lockProjectSubprojects(client, projectId)
@@ -13528,6 +13528,10 @@ app.get(/^(?!\/api).*/, (_request, response) => {
 app.use((error: unknown, _request: express.Request, response: express.Response, next: express.NextFunction) => {
   void next
   if (error instanceof ProjectModuleError) {
+    response.status(error.status).json({ error: error.message, code: error.code })
+    return
+  }
+  if (error instanceof ProjectSubprojectError) {
     response.status(error.status).json({ error: error.message, code: error.code })
     return
   }
