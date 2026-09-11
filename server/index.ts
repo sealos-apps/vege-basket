@@ -117,6 +117,10 @@ import {
 } from './project-modules.ts'
 import { projectModuleAvailability, type ProjectModuleAvailability } from '../shared/project-modules.ts'
 import {
+  createProjectSubproject, listProjectSubprojects, lockProjectSubprojects, parseProjectSubprojectId,
+  ProjectSubprojectError, requireProjectSubprojectName, resolveProjectSubprojectId,
+} from './project-subprojects.ts'
+import {
   buildAiClassificationContent,
   deriveAiIntentTargetContext,
 } from '../shared/ai-input-intent.ts'
@@ -4149,6 +4153,7 @@ async function getWorkspace(userId: number) {
   const [
     projectsResult,
     projectModulesResult,
+    projectSubprojectsResult,
     journalsResult,
     risksResult,
     todosResult,
@@ -4238,6 +4243,14 @@ async function getWorkspace(userId: number) {
       `,
       [userId],
     ),
+    query<{ id: string; project_id: string; name: string; created_at: Date; updated_at: Date; task_count: string }>(
+      `select s.id, s.project_id, s.name, s.created_at, s.updated_at, count(t.id)::text as task_count
+         from project_subprojects s join projects p on p.id = s.project_id
+         left join todos t on t.subproject_id = s.id
+        where p.user_id = $1 or ${managedOrganizationReadScopeSql('p.organization_id')} or exists (
+          select 1 from project_memberships m where m.project_id = p.id and m.status = 'active' and m.invited_user_id = $1)
+        group by s.id order by s.created_at, s.id`, [userId],
+    ),
     query<{
       id: string
       project_id: string
@@ -4315,6 +4328,8 @@ async function getWorkspace(userId: number) {
       linked_to_delivery_event: boolean
       project_module_id: string | null
       module_name: string | null
+      subproject_id: string | null
+      subproject_name: string | null
       created_by_user_id: string | null
       assignee_user_id: string | null
       watcher_user_id: string | null
@@ -4357,6 +4372,8 @@ async function getWorkspace(userId: number) {
              ) as linked_to_delivery_event,
              t.project_module_id,
              module.name as module_name,
+             t.subproject_id,
+             subproject.name as subproject_name,
              t.created_by_user_id,
              t.assignee_user_id,
              t.watcher_user_id,
@@ -4412,6 +4429,7 @@ async function getWorkspace(userId: number) {
       left join users reviewer on reviewer.id = t.reviewer_user_id
       left join users assigner on assigner.id = t.assigned_by_user_id
       left join project_modules module on module.id = t.project_module_id
+      left join project_subprojects subproject on subproject.id = t.subproject_id
       where p.user_id = $1
          or membership.id is not null
          or ${managedOrganizationReadScopeSql('p.organization_id')}
@@ -4628,6 +4646,14 @@ async function getWorkspace(userId: number) {
     modulesByProject.set(projectId, modules)
   }
 
+  const subprojectsByProject = new Map<number, Array<{ id: number; projectId: number; name: string; createdAt: string; updatedAt: string; taskCount: number }>>()
+  for (const row of projectSubprojectsResult.rows) {
+    const projectId = Number(row.project_id)
+    const items = subprojectsByProject.get(projectId) ?? []
+    items.push({ id: Number(row.id), projectId, name: decryptText(row.name), createdAt: formatDateTime(row.created_at), updatedAt: formatDateTime(row.updated_at), taskCount: Number(row.task_count) })
+    subprojectsByProject.set(projectId, items)
+  }
+
   const todoNotesByTodo = new Map<
     number,
     Array<{
@@ -4691,6 +4717,7 @@ async function getWorkspace(userId: number) {
       risks: risksByProject.get(Number(project.id)) ?? [],
       riskJournalEntryIds: riskJournalEntryIdsByProject.get(Number(project.id)) ?? [],
       modules: modulesByProject.get(Number(project.id)) ?? [],
+      subprojects: subprojectsByProject.get(Number(project.id)) ?? [],
     })),
     todos: todosResult.rows.map((todo) => {
       const watcherRows = Array.isArray(todo.watchers_json) && todo.watchers_json.length > 0
@@ -4762,6 +4789,8 @@ async function getWorkspace(userId: number) {
       linkedToDeliveryEvent: todo.linked_to_delivery_event,
       moduleId: todo.project_module_id ? Number(todo.project_module_id) : undefined,
       moduleName: todo.module_name ? decryptText(todo.module_name) : undefined,
+      subprojectId: todo.subproject_id ? Number(todo.subproject_id) : undefined,
+      subprojectName: todo.subproject_name ? decryptText(todo.subproject_name) : undefined,
       notes: todoNotesByTodo.get(Number(todo.id)) ?? [],
       })
     }),
@@ -10436,6 +10465,63 @@ app.delete('/api/projects/:projectId/modules/:moduleId', asyncHandler(async (req
   response.json(await getWorkspace(userId))
 }))
 
+app.get('/api/projects/:projectId/subprojects', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response); if (!userId) return
+  const projectId = Number(request.params.projectId)
+  const access = await getProjectReadAccess(projectId, userId)
+  if (!access) { response.status(404).json({ error: 'Project not found' }); return }
+  const client = await pool.connect()
+  try { response.json(await listProjectSubprojects(client, projectId)) } finally { client.release() }
+}))
+
+app.post('/api/projects/:projectId/subprojects', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response); if (!userId) return
+  const projectId = Number(request.params.projectId)
+  const access = await getProjectAccess(projectId, userId)
+  if (!access) { response.status(404).json({ error: 'Project not found' }); return }
+  const name = requireProjectSubprojectName(request.body.name)
+  const client = await pool.connect()
+  try {
+    await client.query('begin'); await lockProjectSubprojects(client, projectId)
+    const manager = await client.query(`select 1 from projects p where p.id = $1 and (p.user_id = $2 or ${managedOrganizationReadScopeSql('p.organization_id', '$2')})`, [projectId, userId])
+    if (!manager.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_FORBIDDEN', '没有维护此项目子项目的权限。', 403)
+    await createProjectSubproject(client, projectId, name); await client.query('commit')
+  } catch (error) { await client.query('rollback'); throw error } finally { client.release() }
+  response.status(201).json(await getWorkspace(userId))
+}))
+
+app.patch('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response); if (!userId) return
+  const projectId = Number(request.params.projectId); const subprojectId = parseProjectSubprojectId(request.params.subprojectId)
+  const access = await getProjectAccess(projectId, userId)
+  if (!access) { response.status(404).json({ error: 'Project not found' }); return }
+  const name = requireProjectSubprojectName(request.body.name); const client = await pool.connect()
+  try { await client.query('begin'); await lockProjectSubprojects(client, projectId)
+    const manager = await client.query(`select 1 from projects p where p.id = $1 and (p.user_id = $2 or ${managedOrganizationReadScopeSql('p.organization_id', '$2')})`, [projectId, userId])
+    if (!manager.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_FORBIDDEN', '没有维护此项目子项目的权限。', 403)
+    const exists = await client.query('select 1 from project_subprojects where id = $1 and project_id = $2', [subprojectId, projectId])
+    if (!exists.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_NOT_FOUND', '项目子项目不存在。', 404)
+    await client.query('update project_subprojects set name = $1, name_lookup = $2, updated_at = now() where id = $3 and project_id = $4', [encryptText(name), keyedDigest(JSON.stringify(['project-subproject-name', name]), process.env.APP_ENCRYPTION_ACTIVE_KEY_ID ?? 'active'), subprojectId, projectId]); await client.query('commit')
+  } catch (error) { await client.query('rollback'); throw error } finally { client.release() }
+  response.json(await getWorkspace(userId))
+}))
+
+app.delete('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response); if (!userId) return
+  const projectId = Number(request.params.projectId); const subprojectId = parseProjectSubprojectId(request.params.subprojectId)
+  const access = await getProjectAccess(projectId, userId)
+  if (!access) { response.status(404).json({ error: 'Project not found' }); return }
+  const client = await pool.connect()
+  try { await client.query('begin'); await lockProjectSubprojects(client, projectId)
+    const manager = await client.query(`select 1 from projects p where p.id = $1 and (p.user_id = $2 or ${managedOrganizationReadScopeSql('p.organization_id', '$2')})`, [projectId, userId])
+    if (!manager.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_FORBIDDEN', '没有维护此项目子项目的权限。', 403)
+    const result = await client.query('delete from project_subprojects where id = $1 and project_id = $2', [subprojectId, projectId])
+    if (!result.rowCount) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_NOT_FOUND', '项目子项目不存在。', 404)
+    await client.query('commit')
+  } catch (error) { await client.query('rollback'); throw error } finally { client.release() }
+  response.json(await getWorkspace(userId))
+}))
+
 app.delete('/api/projects/:projectId/risks', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
@@ -10552,6 +10638,7 @@ app.post('/api/todos', asyncHandler(async (request, response) => {
     return
   }
   const requestedModuleId = parseProjectModuleId(request.body.moduleId)
+  const requestedSubprojectId = parseProjectSubprojectId(request.body.subprojectId)
   let createdAt: string | null
   try {
     createdAt = parseTodoCreatedDate(request.body.createdAt)
@@ -10571,6 +10658,7 @@ app.post('/api/todos', asyncHandler(async (request, response) => {
     await client.query('begin')
     await lockProjectModules(client, projectId)
     const moduleId = await resolveProjectModuleId(client, projectId, requestedModuleId)
+    const subprojectId = await resolveProjectSubprojectId(client, projectId, requestedSubprojectId)
     const createdTodo = await client.query<{ id: string }>(
       `
       insert into todos (
@@ -10581,6 +10669,7 @@ app.post('/api/todos', asyncHandler(async (request, response) => {
         priority,
         created_at,
         project_module_id,
+        subproject_id,
         created_by_user_id,
         assignee_user_id,
         watcher_user_id,
@@ -10590,7 +10679,7 @@ app.post('/api/todos', asyncHandler(async (request, response) => {
         assigned_at,
         reviewer_user_id
       )
-      values ($1, $2, $3, $4, $5, coalesce($6::timestamptz, now()), $7, $8, $9, $10, case when $10::bigint is null then null else $8::bigint end, case when $10::bigint is null then null else now() end, case when $9::bigint is null then null else $8::bigint end, case when $9::bigint is null then null else now() end, $11)
+      values ($1, $2, $3, $4, $5, coalesce($6::timestamptz, now()), $7, $8, $9, $10, $11, case when $11::bigint is null then null else $9::bigint end, case when $11::bigint is null then null else now() end, case when $10::bigint is null then null else $9::bigint end, case when $10::bigint is null then null else now() end, $12)
       returning id
       `,
       [
@@ -10601,6 +10690,7 @@ app.post('/api/todos', asyncHandler(async (request, response) => {
         priority,
         createdAt,
         moduleId,
+        subprojectId,
         userId,
         assigneeUserId,
         watcherUserId,
@@ -10828,6 +10918,8 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
       : undefined
   const moduleFieldRequested = canManageTodoFields && 'moduleId' in request.body
   const requestedModuleId = moduleFieldRequested ? parseProjectModuleId(request.body.moduleId) : undefined
+  const subprojectFieldRequested = canManageTodoFields && 'subprojectId' in request.body
+  const requestedSubprojectId = subprojectFieldRequested ? parseProjectSubprojectId(request.body.subprojectId) : undefined
   const watcherFieldRequested = canManageTodoFields && (
     'watcherUserIds' in request.body || 'watcherUserId' in request.body
   )
@@ -10899,12 +10991,13 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
       assignee_user_id: string | null
       organization_id: string | null
       project_module_id: string | null
+      subproject_id: string | null
       reviewer_user_id: string | null
       confirmation_status: TodoConfirmationStatus
       done: boolean
     }>(
       `
-      select t.assignee_user_id, p.organization_id, t.project_module_id, t.reviewer_user_id, t.confirmation_status, t.done
+      select t.assignee_user_id, p.organization_id, t.project_module_id, t.subproject_id, t.reviewer_user_id, t.confirmation_status, t.done
       from todos t
       join projects p on p.id = t.project_id
       where t.id = $1
@@ -10922,6 +11015,9 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
     const nextModuleId = moduleFieldRequested
       ? await resolveProjectModuleId(client, projectId, requestedModuleId,
         lockedTodo.project_module_id ? Number(lockedTodo.project_module_id) : null)
+      : undefined
+    const nextSubprojectId = subprojectFieldRequested
+      ? await resolveProjectSubprojectId(client, projectId, requestedSubprojectId)
       : undefined
     if (systemAdminTodoAccess && lockedTodo.organization_id == null) {
       await client.query('rollback')
@@ -11006,6 +11102,7 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
             else assigned_at
           end,
           project_module_id = case when $11::boolean then $12 else project_module_id end,
+          subproject_id = case when $25::boolean then $26 else subproject_id end,
           created_at = case when $13::boolean then $14::timestamptz else created_at end,
           completed_at = case
             when $7::text in ('rejected', 'acceptance_failed') then null
@@ -11061,6 +11158,8 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
         watcherFieldRequested,
         canManageTodoFields && 'reviewerUserId' in request.body,
         nextReviewerUserId,
+        subprojectFieldRequested,
+        nextSubprojectId,
       ],
     )
     const updatedTodo = updatedTodoResult.rows[0]

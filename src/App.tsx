@@ -120,6 +120,7 @@ import {
   acceptProjectInvitation,
   archiveDraft,
   createProjectModule,
+  createProjectSubproject,
   createDraft,
   createJournalEntry,
   createProjectPackageEvent,
@@ -174,6 +175,7 @@ import {
   removeProjectPackageOperation,
   removeProject,
   removeProjectModule,
+  removeProjectSubproject,
   removeProjectMember,
   removeTodo,
   requestProjectTransfer,
@@ -1551,6 +1553,7 @@ const initialProjects: Project[] = [
     risks: ['模型输出质量波动，需要确认评估标准'],
     riskJournalEntryIds: [101],
     modules: [],
+    subprojects: [],
     journals: [
       {
         id: 101,
@@ -1587,6 +1590,7 @@ const initialProjects: Project[] = [
     risks: ['旧指标口径不一致，可能影响上线验收'],
     riskJournalEntryIds: [201],
     modules: [],
+    subprojects: [],
     journals: [
       {
         id: 201,
@@ -1614,6 +1618,7 @@ const initialProjects: Project[] = [
     risks: ['历史文档质量参差，自动整理前需要抽样检查'],
     riskJournalEntryIds: [301],
     modules: [],
+    subprojects: [],
     journals: [
       {
         id: 301,
@@ -1641,6 +1646,7 @@ const initialProjects: Project[] = [
     risks: [],
     riskJournalEntryIds: [],
     modules: [],
+    subprojects: [],
     journals: [
       {
         id: 401,
@@ -1860,6 +1866,7 @@ function App() {
   const [isProjectMembersDialogOpen, setIsProjectMembersDialogOpen] = useState(false)
   const [isProjectModulesDialogOpen, setIsProjectModulesDialogOpen] = useState(false)
   const [projectModuleDraft, setProjectModuleDraft] = useState('')
+  const [projectSubprojectDraft, setProjectSubprojectDraft] = useState('')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'all'>('all')
   const [tagFilter, setTagFilter] = useState('全部')
@@ -3505,6 +3512,17 @@ function App() {
     if (todoModuleId === moduleId) {
       setTodoModuleId(null)
     }
+  }
+
+  async function addProjectSubproject(projectId: number) {
+    const name = projectSubprojectDraft.trim()
+    if (!name) return
+    const data = await runMutation(() => createProjectSubproject(projectId, { name }))
+    if (data) setProjectSubprojectDraft('')
+  }
+
+  async function deleteProjectSubproject(projectId: number, subprojectId: number) {
+    await runMutation(() => removeProjectSubproject(projectId, subprojectId))
   }
 
   async function archiveInboxItem(item: InboxItem, projectId: number) {
@@ -5162,6 +5180,30 @@ ${packageTimelineText}`
                           onDraftChange={setProjectModuleDraft}
                           draft={projectModuleDraft}
                         />
+                      </DialogContent>
+                    </Dialog>
+                  )}
+                  {view === 'project' && selectedProject && selectedProject.accessRole === 'owner' && (
+                    <Dialog>
+                      <DialogTrigger asChild>
+                        <Button className="ghost-button" type="button" variant="outline">
+                          <ListChecks size={16} /> 项目子项目
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>项目子项目</DialogTitle>
+                          <DialogDescription>按客户或交付单元拆分当前大项目，任务可以归属到对应子项目。</DialogDescription>
+                        </DialogHeader>
+                        <div className="project-modules-panel">
+                          <div className="project-module-create-row">
+                            <Input value={projectSubprojectDraft} onChange={(event) => setProjectSubprojectDraft(event.target.value)} placeholder="例如：客户 B" />
+                            <Button type="button" onClick={() => addProjectSubproject(selectedProject.id)}>添加</Button>
+                          </div>
+                          {selectedProject.subprojects.length === 0 ? <p className="muted-text">当前项目还没有子项目。</p> : selectedProject.subprojects.map((item) => (
+                            <div className="project-module-row" key={item.id}><span>{item.name}</span><Button type="button" variant="ghost" onClick={() => deleteProjectSubproject(selectedProject.id, item.id)}>删除</Button></div>
+                          ))}
+                        </div>
                       </DialogContent>
                     </Dialog>
                   )}

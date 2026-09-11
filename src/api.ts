@@ -987,6 +987,18 @@ export function removeProjectModule(projectId: number, moduleId: number) {
   })
 }
 
+export function createProjectSubproject(projectId: number, payload: { name: string }) {
+  return request<WorkspaceData>(`/api/projects/${projectId}/subprojects`, { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function updateProjectSubproject(projectId: number, subprojectId: number, payload: { name: string }) {
+  return request<WorkspaceData>(`/api/projects/${projectId}/subprojects/${subprojectId}`, { method: 'PATCH', body: JSON.stringify(payload) })
+}
+
+export function removeProjectSubproject(projectId: number, subprojectId: number) {
+  return request<WorkspaceData>(`/api/projects/${projectId}/subprojects/${subprojectId}`, { method: 'DELETE' })
+}
+
 export function updateProject(
   projectId: number,
   payload: Partial<{ name: string; description: string; status: ProjectStatus; tags: string[] }>,
