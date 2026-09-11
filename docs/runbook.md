@@ -152,6 +152,17 @@ requiring a report, while the reserved `admin` account is excluded. The applicat
 applies the compatible addition idempotently; the matching forward-only migration remains the
 independent structural record and must only be run against an explicitly authorized database.
 
+Weekly-report assignee ordering adds the nullable nonnegative integer
+`organization_memberships.weekly_report_sort_order`; the forward-only record is
+`server/migrations/20260910_weekly_report_assignee_order.sql`. Startup applies the same
+idempotent addition. No backfill or encryption migration is needed: null preserves the
+existing name ordering. Take a database snapshot and retain the full encryption key ring
+before an approved deployment. An application rollback may leave the additive column in
+place; the old application ignores custom positions and uses its previous ordering.
+In an authorized disposable database, apply the DDL twice and verify ordered save/read,
+empty selections, invalid or departed member rejection without partial updates, simultaneous
+rule saves, and rejoining members appearing after explicitly ranked members.
+
 `npm run db:init` applies the current idempotent schema. `npm run db:encrypt-existing`
 applies the schema and encrypts supported legacy plaintext fields. Both are mutating
 operations and require explicit approval, a current backup or snapshot, the intended
@@ -349,3 +360,32 @@ restricted assignments become organization-wide intentionally; old clients canno
 through `testSpaceIds`. Startup backfill takes organization locks, so perform production rollout
 only in an explicitly approved maintenance window. No separate manual migration is needed after
 successful normal startup. Application rollback does not undo expanded assignments.
+
+## Test-case directory-tree upgrade
+
+`server/migrations/20260910_test_case_directory_tree.sql` matches the idempotent
+startup schema changes. It adds scoped parents and sibling indexes without changing
+existing folder IDs or splitting old slash-containing module names. Before an
+explicitly authorized upgrade, retain a database snapshot and every encryption key.
+Use a maintenance window: drain old API replicas before applying the schema, because
+old folder upserts target the removed global name-lookup index. Start only the new
+API version, then run the explicitly authorized `npm run db:encrypt-existing` against
+that same non-production rehearsal database first. The directory backfill detects
+normalized sibling duplicates before changing rows, preserves existing ciphertext,
+and fills or refreshes blind indexes inside one transaction. Resolve reported name
+collisions before retrying; do not discard retained encryption keys.
+
+Once nested directories or same-named directories in different branches exist,
+rolling back only the container image is not safe. Restore a compatible database
+snapshot and encryption key ring as part of a coordinated rollback, or roll forward.
+Do not attempt to recreate the old global uniqueness constraint on a populated tree.
+
+Acceptance in an authorized isolated PostgreSQL environment must exercise concurrent
+create/move/import/delete requests (including permission revocation while waiting),
+nonempty deletion rejection, wrong-subject parents/cases, and whole-batch rollback.
+Pure tests and browser tests with mocked callbacks do not establish PostgreSQL lock,
+constraint, migration or HTTP integration behavior.
+
+If pure `npm test` imports fail with `DATABASE_URL is required`, supply an inert
+loopback URL with an unused port for the test command only. The affected tests import
+pure helpers from database-aware modules but must not start the API or issue queries.

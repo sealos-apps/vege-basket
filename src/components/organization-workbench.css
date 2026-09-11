@@ -1320,6 +1320,90 @@
   line-height: 1.6;
 }
 
+.organization-weekly-rules-example {
+  border-left: 3px solid var(--line);
+  padding: 10px 14px;
+  color: var(--muted-text);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.organization-weekly-rules-example strong {
+  color: var(--strong);
+  font-size: 13px;
+}
+
+.organization-weekly-rules-example dl {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+}
+
+.organization-weekly-rules-example dl > div {
+  display: grid;
+  grid-template-columns: 6em minmax(0, 1fr);
+  gap: 8px;
+}
+
+.organization-weekly-rules-example dd,
+.organization-weekly-rules-example p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.organization-weekly-assignee-order {
+  display: grid;
+  max-height: 240px;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.organization-weekly-assignee-order li {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.organization-weekly-assignee-number {
+  color: var(--muted-text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.organization-weekly-assignee-name {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  overflow-wrap: anywhere;
+  color: var(--strong);
+  font-size: 13px;
+}
+
+.organization-weekly-assignee-name small {
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.organization-weekly-assignee-order li > div {
+  display: flex;
+}
+
+@media (max-width: 480px) {
+  .organization-weekly-assignee-order li {
+    grid-template-columns: 2ch minmax(0, 1fr);
+  }
+
+  .organization-weekly-assignee-order li > div {
+    grid-column: 2;
+    justify-content: flex-end;
+  }
+}
+
 .organization-weekly-assignees {
   min-width: 0;
   display: grid;

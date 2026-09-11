@@ -140,3 +140,22 @@ test('the client saves assignees and keeps non-assignees on a read-only history 
   assert.match(weeklyReportWorkbenchSource, /readOnly=\{!canWriteWeeklyReport\}/u)
   assert.match(weeklyReportWorkbenchSource, /当前无需填写本组织周报/u)
 })
+
+test('ordered assignees are stored atomically and unselected memberships lose their position', () => {
+  assert.match(schemaSource, /weekly_report_sort_order integer\s+check \(weekly_report_sort_order >= 0\)/u)
+  const orderMigration = readFileSync(
+    new URL('./migrations/20260910_weekly_report_assignee_order.sql', import.meta.url), 'utf8',
+  )
+  assert.match(orderMigration, /add column if not exists weekly_report_sort_order integer/u)
+  assert.match(organizationsSource,
+    /set weekly_report_required = \(membership\.user_id = any\(\$2::bigint\[\]\)\),\s+weekly_report_sort_order = array_position\(\$2::bigint\[\], membership\.user_id\) - 1/u)
+  assert.equal(organizationsSource.match(/weekly_report_sort_order = null/gu)?.length, 3)
+})
+
+test('configuration and collection share saved order, name fallback, and a stable ID tie breaker', () => {
+  assert.match(organizationsSource,
+    /order by m\.weekly_report_sort_order asc nulls last,\s+lower\(coalesce\(nullif\(u\.display_name, ''\), u\.email\)\), m\.user_id/u)
+  assert.match(weeklyReportsSource,
+    /order by membership\.weekly_report_sort_order asc nulls last,\s+lower\(coalesce\(nullif\(users\.display_name, ''\), users\.email\)\), membership\.user_id/u)
+  assert.match(organizationWorkbenchSource, /setWeeklyReportAssigneeUserIds\(detail\.weeklyReportAssigneeUserIds\)/u)
+})
