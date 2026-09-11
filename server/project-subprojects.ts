@@ -20,7 +20,10 @@ export function parseProjectSubprojectId(value: unknown): number | null {
   return id
 }
 
-function lookup(name: string) { return keyedDigest(JSON.stringify(['project-subproject-name', name]), process.env.APP_ENCRYPTION_ACTIVE_KEY_ID ?? 'active') }
+export async function projectSubprojectNameLookup(client: Pick<PoolClient, 'query'>, name: string) {
+  const result = await client.query<{ lookup_key_id: string }>('select lookup_key_id from project_module_settings where id = 1')
+  return keyedDigest(JSON.stringify(['project-subproject-name', name]), result.rows[0]?.lookup_key_id ?? process.env.APP_ENCRYPTION_ACTIVE_KEY_ID ?? 'active')
+}
 
 export async function lockProjectSubprojects(client: Pick<PoolClient, 'query'>, projectId: number) {
   await client.query('select pg_advisory_xact_lock(hashtextextended($1::text, 0))', [`ai-project:${projectId}`])
@@ -44,7 +47,7 @@ export async function resolveProjectSubprojectId(client: Pick<PoolClient, 'query
 }
 
 export async function createProjectSubproject(client: Pick<PoolClient, 'query'>, projectId: number, name: string) {
-  const result = await client.query(`insert into project_subprojects (project_id, name, name_lookup) values ($1, $2, $3) on conflict (project_id, name_lookup) do nothing returning id`, [projectId, encryptText(name), lookup(name)])
+  const result = await client.query(`insert into project_subprojects (project_id, name, name_lookup) values ($1, $2, $3) on conflict (project_id, name_lookup) do nothing returning id`, [projectId, encryptText(name), await projectSubprojectNameLookup(client, name)])
   if (!result.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_NAME_CONFLICT', '此子项目已存在。')
   return Number(result.rows[0].id)
 }

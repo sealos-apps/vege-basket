@@ -118,7 +118,7 @@ import {
 import { projectModuleAvailability, type ProjectModuleAvailability } from '../shared/project-modules.ts'
 import {
   createProjectSubproject, listProjectSubprojects, lockProjectSubprojects, parseProjectSubprojectId,
-  ProjectSubprojectError, requireProjectSubprojectName, resolveProjectSubprojectId,
+  ProjectSubprojectError, projectSubprojectNameLookup, requireProjectSubprojectName, resolveProjectSubprojectId,
 } from './project-subprojects.ts'
 import {
   buildAiClassificationContent,
@@ -10501,7 +10501,7 @@ app.patch('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(asy
     if (!manager.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_FORBIDDEN', '没有维护此项目子项目的权限。', 403)
     const exists = await client.query('select 1 from project_subprojects where id = $1 and project_id = $2', [subprojectId, projectId])
     if (!exists.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_NOT_FOUND', '项目子项目不存在。', 404)
-    await client.query('update project_subprojects set name = $1, name_lookup = $2, updated_at = now() where id = $3 and project_id = $4', [encryptText(name), keyedDigest(JSON.stringify(['project-subproject-name', name]), process.env.APP_ENCRYPTION_ACTIVE_KEY_ID ?? 'active'), subprojectId, projectId]); await client.query('commit')
+    await client.query('update project_subprojects set name = $1, name_lookup = $2, updated_at = now() where id = $3 and project_id = $4', [encryptText(name), await projectSubprojectNameLookup(client, name), subprojectId, projectId]); await client.query('commit')
   } catch (error) { await client.query('rollback'); throw error } finally { client.release() }
   response.json(await getWorkspace(userId))
 }))
