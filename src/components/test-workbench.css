@@ -845,13 +845,16 @@
 
 .test-case-record-list {
   display: grid;
+  align-content: start;
+  grid-auto-rows: minmax(104px, auto);
 }
 
 :is(.test-record-list > button, .test-directory-case-row > button:not([role="checkbox"])) {
   width: 100%;
-  padding: 14px;
+  min-height: 104px;
+  padding: 12px 14px;
   display: grid;
-  gap: 7px;
+  gap: 5px;
   border: 0;
   border-bottom: 1px solid var(--line);
   background: transparent;
@@ -868,6 +871,7 @@
 
 :is(.test-record-list > button, .test-directory-case-row > button:not([role="checkbox"])).active {
   background: var(--test-selection-bg);
+  box-shadow: inset 3px 0 0 var(--primary);
 }
 
 :is(.test-record-list > button, .test-directory-case-row > button:not([role="checkbox"])) > div {
@@ -888,10 +892,12 @@
 
 .test-record-list strong {
   overflow: hidden;
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.35;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .test-record-list small {
@@ -959,7 +965,7 @@
 
 .test-record-detail {
   min-width: 0;
-  padding: 20px;
+  padding: 16px 18px;
   overflow: auto;
 }
 
@@ -4851,7 +4857,7 @@
 .test-directory-batch small { margin-left: auto; }
 .test-directory-case-row { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 0; }
 .test-directory-case-row > button:not([role='checkbox']) { flex: 1; min-width: 0; height: 100%; }
-.test-directory-content .test-cases-split-view { flex: 1; min-height: 320px; grid-template-columns: minmax(230px, .85fr) minmax(0, 1.15fr); }
+.test-directory-content .test-cases-split-view { flex: 1; min-height: 320px; grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr); }
 @media (max-width: 1200px) {
   .test-directory-workspace { grid-template-columns: 220px minmax(0, 1fr); gap: 12px; }
   .test-directory-content .test-case-filters { display: flex; flex-wrap: wrap; }

@@ -231,10 +231,6 @@ const caseTypeLabel: Record<TestCaseType, string> = {
   security: '安全',
   smoke: '冒烟',
 }
-const caseKindLabel: Record<TestCase['caseKind'], string> = {
-  baseline: '基线用例',
-  functional: '功能用例',
-}
 const resultLabel: Record<TestResult, string> = {
   blocked: '阻塞',
   failed: '失败',
@@ -579,7 +575,10 @@ export function TestWorkbench({
 
   useEffect(() => {
     let cancelled = false
-    fetchTestWorkbench()
+    const savedBeforeLoad = readTestWorkbenchViewState(currentUserId)
+    fetchTestWorkbench(savedBeforeLoad?.spaceId && savedBeforeLoad?.subjectId
+      ? { spaceId: savedBeforeLoad.spaceId, subjectId: savedBeforeLoad.subjectId }
+      : undefined)
       .then((result) => {
         if (cancelled) return
         setData(result)
@@ -652,7 +651,7 @@ export function TestWorkbench({
       if (refreshInFlightRef.current) return
       refreshInFlightRef.current = true
       Promise.all([
-        fetchTestWorkbench()
+        fetchTestWorkbench(spaceId && subjectId ? { spaceId, subjectId } : undefined)
           .then((result) => {
             if (!cancelled) setData(result)
           })
@@ -671,7 +670,7 @@ export function TestWorkbench({
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [busy, loading])
+  }, [busy, loading, spaceId, subjectId])
 
   useEffect(() => {
     setInvitePasswordDraft('')
@@ -1300,7 +1299,6 @@ export function TestWorkbench({
                 onEdit={(testCase) => { setEditingCase(testCase); setCaseDialogOpen(true) }}
                 onExport={(items, folderId) => downloadTestCaseCsv(items, data.folders, folderId)}
                 onImport={(folderId) => { setCaseTargetFolderId(folderId); setCaseImportDialogOpen(true) }}
-                onArchive={(testCase) => void mutate(() => updateTestCase(testCase.testSpaceId, testCase.id, { caseKind: 'baseline', status: 'active' }))}
               />
             </>
           ) : tab === 'plans' ? (
@@ -1869,7 +1867,7 @@ function NotificationsView({
   )
 }
 
-export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, onArchive, onCreate, onCreateFolder, onUpdateFolder, onDeleteFolder, onMove, onDelete, onEdit, onExport, onImport, onSelect }: {
+export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, onCreate, onCreateFolder, onUpdateFolder, onDeleteFolder, onMove, onDelete, onEdit, onExport, onImport, onSelect }: {
   busy: boolean
   subjectId?: number
   onUpdateFolder: (folder: TestCaseFolder, name: string, parentId: number | null) => Promise<boolean>
@@ -1879,7 +1877,6 @@ export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, 
   data: TestWorkbenchData
   readOnly: boolean
   selectedId?: number
-  onArchive: (testCase: TestCase) => void
   onCreate: (folderId: number | null) => void
   onCreateFolder: (name: string, parentId: number | null) => Promise<boolean>
   onDelete: (testCase: TestCase) => void
@@ -1895,7 +1892,6 @@ export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, 
   const [folderFilter, setFolderFilter] = useState('all')
   const [typeFilter, setTypeFilter] = useState('all')
   const [priorityFilter, setPriorityFilter] = useState('all')
-  const [kindFilter, setKindFilter] = useState('all')
   const folders = useMemo(() => data.folders.filter(f => f.testSubjectId === subjectId), [data.folders, subjectId])
   const directoryIndex = useMemo(() => createDirectoryIndex(folders), [folders])
   const treeState = useDirectoryTreeState(folders)
@@ -1937,16 +1933,15 @@ export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, 
         && matchesFolder
         && (typeFilter === 'all' || item.caseType === typeFilter)
         && (priorityFilter === 'all' || item.priority === priorityFilter)
-        && (kindFilter === 'all' || item.caseKind === kindFilter)
     })
-  }, [cases, directoryIndex, effectiveFolderFilter, kindFilter, priorityFilter, searchQuery, typeFilter, scopeIds])
+  }, [cases, directoryIndex, effectiveFolderFilter, priorityFilter, searchQuery, typeFilter, scopeIds])
   const selected = filteredCases.find((item) => item.id === selectedId)
   const selectedIndex = filteredCases.findIndex((item) => item.id === selectedId)
   const totalPages = Math.max(1, Math.ceil(filteredCases.length / pageSize))
   const visibleCases = filteredCases.slice(page * pageSize, (page + 1) * pageSize)
   const visibleStart = filteredCases.length === 0 ? 0 : page * pageSize + 1
   const visibleEnd = Math.min((page + 1) * pageSize, filteredCases.length)
-  const hasFilters = Boolean(searchQuery.trim()) || folderFilter !== 'all' || typeFilter !== 'all' || priorityFilter !== 'all' || kindFilter !== 'all'
+  const hasFilters = Boolean(searchQuery.trim()) || folderFilter !== 'all' || typeFilter !== 'all' || priorityFilter !== 'all'
 
   useEffect(() => {
     const panel = listPanelRef.current
@@ -1968,7 +1963,7 @@ export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, 
 
   useEffect(() => {
     setPage(0)
-  }, [folderFilter, kindFilter, priorityFilter, searchQuery, typeFilter])
+  }, [folderFilter, priorityFilter, searchQuery, typeFilter])
 
   useEffect(() => {
     if (filteredCases.length > 0 && selectedIndex < 0) onSelect(filteredCases[0].id)
@@ -2016,10 +2011,6 @@ export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, 
           <SelectTrigger aria-label="用例等级筛选"><SelectValue /></SelectTrigger>
           <SelectContent><SelectItem value="all">全部等级</SelectItem><SelectItem value="high">P0</SelectItem><SelectItem value="medium">P1</SelectItem><SelectItem value="low">P2</SelectItem></SelectContent>
         </Select>
-        <Select value={kindFilter} onValueChange={setKindFilter}>
-          <SelectTrigger aria-label="用例分类筛选"><SelectValue /></SelectTrigger>
-          <SelectContent><SelectItem value="all">全部分类</SelectItem><SelectItem value="functional">功能用例</SelectItem><SelectItem value="baseline">基线用例</SelectItem></SelectContent>
-        </Select>
         <Button
           className="test-case-clear-filters"
           variant="outline"
@@ -2030,8 +2021,7 @@ export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, 
             selectDirectory('all')
             setTypeFilter('all')
             setPriorityFilter('all')
-            setKindFilter('all')
-          }}
+                  }}
         ><XCircle /> 清除</Button>
       </div>
       {!readOnly && <div className="test-directory-batch"><Label><Checkbox aria-label="选择本页用例" checked={visibleCases.length > 0 && visibleCases.every(c => checkedIds.has(c.id))} onCheckedChange={checked => setCheckedIds(prev => { const next = new Set(prev); visibleCases.forEach(c => { if (checked) next.add(c.id); else next.delete(c.id) }); return next })} /> 本页</Label><span>已选 {selectedCaseIds.length} 条</span><Button size="sm" variant="outline" disabled={busy || !selectedCaseIds.length || selectedCaseIds.length > 1000} onClick={() => startMove(selectedCaseIds)}>迁移用例</Button><Button size="sm" variant="ghost" disabled={!selectedCaseIds.length} onClick={() => setCheckedIds(new Set())}>清空选择</Button><small>单次最多 1000 条</small></div>}
@@ -2039,13 +2029,12 @@ export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, 
         <div ref={listPanelRef} className="test-record-list-panel">
           <div
             className="test-record-list test-case-record-list"
-            style={{ gridTemplateRows: `repeat(${Math.max(visibleCases.length, 1)}, minmax(0, 1fr))` }}
           >
             {filteredCases.length ? visibleCases.map((item) => (
               <div key={item.id} className="test-directory-case-row">{!readOnly && <Checkbox aria-label={`选择 CASE-${item.id}`} checked={checkedIds.has(item.id)} onCheckedChange={value => setCheckedIds(prev => { const next = new Set(prev); if (value) next.add(item.id); else next.delete(item.id); return next })} />}<button className={item.id === selectedId ? 'active' : ''} onClick={() => onSelect(item.id)}>
                 <div><code>CASE-{item.id}</code><Badge variant="outline">{caseTypeLabel[item.caseType]}</Badge></div>
                 <strong>{item.title}</strong>
-                <small>{caseLevelLabel[item.priority]} · {directoryIndex.path(item.folderId ?? null).map(f => f.name).join(' / ') || '未分类'} · {caseKindLabel[item.caseKind]}{item.customTags.length ? ` · ${item.customTags.join('、')}` : ''}</small>
+                <small>{caseLevelLabel[item.priority]} · {directoryIndex.path(item.folderId ?? null).map(f => f.name).join(' / ') || '未分类'}{item.customTags.length ? ` · ${item.customTags.join('、')}` : ''}</small>
               </button></div>
             )) : <p className="test-list-empty">{cases.length ? '没有符合条件的用例。' : '当前测试对象还没有用例。'}</p>}
           </div>
@@ -2075,9 +2064,9 @@ export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, 
                     <strong>{directoryIndex.path(selected.folderId ?? null).map(f => f.name).join(' / ') || '未分类'}</strong>
                   </p>
                 </div>
-                {!readOnly ? <div><Button variant="outline" onClick={() => onEdit(selected)}>编辑</Button><Button variant="outline" disabled={busy} onClick={() => startMove([selected.id])}>迁移</Button>{selected.caseKind !== 'baseline' ? <Button variant="outline" onClick={() => onArchive(selected)}>归档为基线</Button> : null}{selected.canDelete ? <Button variant="destructive" onClick={() => onDelete(selected)}><Trash /> 删除</Button> : null}</div> : null}
+                {!readOnly ? <div><Button variant="outline" onClick={() => onEdit(selected)}>编辑</Button><Button variant="outline" disabled={busy} onClick={() => startMove([selected.id])}>迁移</Button>{selected.canDelete ? <Button variant="destructive" onClick={() => onDelete(selected)}><Trash /> 删除</Button> : null}</div> : null}
               </div>
-              <div className="test-detail-meta test-case-detail-meta"><span>分类 <strong>{caseKindLabel[selected.caseKind]}</strong></span><span>类型 <strong>{caseTypeLabel[selected.caseType]}</strong></span><span>等级 <strong>{caseLevelLabel[selected.priority]}</strong></span></div>
+              <div className="test-detail-meta test-case-detail-meta"><span>类型 <strong>{caseTypeLabel[selected.caseType]}</strong></span><span>等级 <strong>{caseLevelLabel[selected.priority]}</strong></span></div>
               {selected.customTags.length ? <div className="test-case-tags">{selected.customTags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}</div> : null}
               <DetailBlock title="前置条件" content={selected.preconditions} />
               <DetailBlock title="测试步骤" content={selected.steps} />
@@ -2089,7 +2078,7 @@ export function CasesView({ busy, subjectId, cases, data, readOnly, selectedId, 
       </div>
       </div></div>
       <Dialog open={Boolean(moveIds)} onOpenChange={open => { if (!open && !busy) setMoveIds(undefined) }}><DialogContent><DialogHeader><DialogTitle>迁移 {moveIds?.length ?? 0} 条用例</DialogTitle><DialogDescription>用例编号、内容与已有执行快照保持不变。所有选中用例将一起迁移。</DialogDescription></DialogHeader><DirectoryPicker folders={folders} value={moveTarget} onChange={setMoveTarget} disabled={busy} />{moveError && <p role="alert">{moveError}</p>}<DialogFooter><Button variant="outline" disabled={busy} onClick={() => setMoveIds(undefined)}>取消</Button><Button disabled={busy} onClick={async () => { if (!moveIds) return; if (await onMove(moveIds, moveTarget)) { setMoveIds(undefined); setCheckedIds(new Set()) } else setMoveError('迁移失败，请检查权限或刷新后重试。') }}>确认迁移</Button></DialogFooter></DialogContent></Dialog>
-      <Dialog open={exportOpen} onOpenChange={setExportOpen}><DialogContent><DialogHeader><DialogTitle>导出用例</DialogTitle><DialogDescription>导出“{scopeLabel}”中符合当前筛选的全部 {filteredCases.length} 条用例（包含所有分页）。{activeFolderId !== null ? includeChildren ? '包含下级目录。' : '仅直属用例。' : ''}</DialogDescription></DialogHeader><p>筛选：{searchQuery.trim() ? `搜索“${searchQuery.trim()}”` : "不限关键词"} · {typeFilter === "all" ? "全部类型" : caseTypeLabel[typeFilter as TestCaseType]} · {priorityFilter === "all" ? "全部等级" : caseLevelLabel[priorityFilter as Priority]} · {kindFilter === "all" ? "全部分类" : caseKindLabel[kindFilter as TestCase["caseKind"]]}</p><p>CSV 保留相对于当前目录的目录路径。</p><DialogFooter><Button variant="outline" onClick={() => setExportOpen(false)}>取消</Button><Button disabled={!filteredCases.length} onClick={() => { onExport(filteredCases, activeFolderId); setExportOpen(false) }}>导出 {filteredCases.length} 条</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={exportOpen} onOpenChange={setExportOpen}><DialogContent><DialogHeader><DialogTitle>导出用例</DialogTitle><DialogDescription>导出“{scopeLabel}”中符合当前筛选的全部 {filteredCases.length} 条用例（包含所有分页）。{activeFolderId !== null ? includeChildren ? '包含下级目录。' : '仅直属用例。' : ''}</DialogDescription></DialogHeader><p>筛选：{searchQuery.trim() ? `搜索“${searchQuery.trim()}”` : "不限关键词"} · {typeFilter === "all" ? "全部类型" : caseTypeLabel[typeFilter as TestCaseType]} · {priorityFilter === "all" ? "全部等级" : caseLevelLabel[priorityFilter as Priority]}</p><p>CSV 保留相对于当前目录的目录路径。</p><DialogFooter><Button variant="outline" onClick={() => setExportOpen(false)}>取消</Button><Button disabled={!filteredCases.length} onClick={() => { onExport(filteredCases, activeFolderId); setExportOpen(false) }}>导出 {filteredCases.length} 条</Button></DialogFooter></DialogContent></Dialog>
     </div>
   )
 }
@@ -3867,7 +3856,6 @@ function SubjectDialog({
 }
 
 type TestCaseFormPayload = {
-  caseKind?: TestCase['caseKind']
   caseType: TestCaseType
   customTags?: string[]
   expectedResult: string
@@ -3894,7 +3882,6 @@ function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSu
   const [expectedResult, setExpectedResult] = useState(testCase?.expectedResult ?? '')
   const [remarks, setRemarks] = useState(testCase?.remarks ?? '')
   const [priority, setPriority] = useState<Priority>(testCase?.priority ?? 'medium')
-  const [caseKind, setCaseKind] = useState<TestCase['caseKind']>(testCase?.caseKind ?? 'functional')
   const [caseType, setCaseType] = useState<TestCaseType>(testCase?.caseType ?? 'functional')
   const [customTagsInput, setCustomTagsInput] = useState(testCase?.customTags.join('、') ?? '')
 
@@ -3910,7 +3897,6 @@ function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSu
           onSubmit={(event) => {
             event.preventDefault()
             onSubmit({
-              caseKind,
               caseType,
               customTags: Array.from(new Set(customTagsInput.split(/[,，;；、\s]+/).map((tag) => tag.trim()).filter(Boolean))).slice(0, 12),
               expectedResult,
@@ -3929,7 +3915,6 @@ function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSu
             <Label>用例名称<Input autoFocus maxLength={160} value={title} onChange={(event) => setTitle(event.target.value)} /></Label>
             <Label>所属目录<DirectoryPicker folders={folders} value={folderId} onChange={setFolderId} /></Label>
             <div className="test-form-grid test-case-classification-grid">
-              <Label>用例分类<Select value={caseKind} onValueChange={(value) => setCaseKind(value as TestCase['caseKind'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="functional">功能用例</SelectItem><SelectItem value="baseline">基线用例</SelectItem></SelectContent></Select></Label>
               <Label>用例等级<Select value={priority} onValueChange={(value) => setPriority(value as Priority)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="high">P0</SelectItem><SelectItem value="medium">P1</SelectItem><SelectItem value="low">P2</SelectItem></SelectContent></Select></Label>
               <Label>类型<Select value={caseType} onValueChange={(value) => setCaseType(value as TestCaseType)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{Object.entries(caseTypeLabel).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></Label>
             </div>
@@ -4138,7 +4123,6 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
   const [caseFolderFilter, setCaseFolderFilter] = useState('all')
   const [caseTypeFilter, setCaseTypeFilter] = useState('all')
   const [casePriorityFilter, setCasePriorityFilter] = useState('all')
-  const [caseKindFilter, setCaseKindFilter] = useState('all')
   const [step, setStep] = useState<1 | 2>(1)
   const selectAllRef = useRef<HTMLInputElement>(null)
   const existingCaseIds = new Set(planCases
@@ -4168,7 +4152,6 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
       && matchesFolder
       && (caseTypeFilter === 'all' || item.caseType === caseTypeFilter)
       && (casePriorityFilter === 'all' || item.priority === casePriorityFilter)
-      && (caseKindFilter === 'all' || item.caseKind === caseKindFilter)
   })
   const filteredCaseIds = filteredAvailable.map((item) => item.id)
   const selectedFilteredCount = filteredCaseIds.filter((id) => caseIds.includes(id)).length
@@ -4177,7 +4160,6 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
     || caseFolderFilter !== 'all'
     || caseTypeFilter !== 'all'
     || casePriorityFilter !== 'all'
-    || caseKindFilter !== 'all'
   const invalidDateRange = Boolean(startsOn && endsOn && startsOn > endsOn)
   const selectedSubjects = subjects.filter((subject) => subjectIds.includes(subject.id))
 
@@ -4309,7 +4291,6 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
                         setCaseFolderFilter('all')
                         setCaseTypeFilter('all')
                         setCasePriorityFilter('all')
-                        setCaseKindFilter('all')
                       }}
                     ><XCircle /> 清除</Button>
                   </div>
@@ -4329,10 +4310,6 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
                     <Select value={casePriorityFilter} onValueChange={setCasePriorityFilter}>
                       <SelectTrigger aria-label="计划用例等级筛选"><SelectValue /></SelectTrigger>
                       <SelectContent><SelectItem value="all">全部等级</SelectItem><SelectItem value="high">P0</SelectItem><SelectItem value="medium">P1</SelectItem><SelectItem value="low">P2</SelectItem></SelectContent>
-                    </Select>
-                    <Select value={caseKindFilter} onValueChange={setCaseKindFilter}>
-                      <SelectTrigger aria-label="计划用例分类筛选"><SelectValue /></SelectTrigger>
-                      <SelectContent><SelectItem value="all">全部分类</SelectItem><SelectItem value="functional">功能用例</SelectItem><SelectItem value="baseline">基线用例</SelectItem></SelectContent>
                     </Select>
                   </div>
                   <div className="test-plan-case-selection-bar">
@@ -4361,7 +4338,7 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
                       <input type="checkbox" checked={caseIds.includes(item.id)} onChange={(event) => setCaseIds((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} />
                       <span className="test-plan-case-option">
                         <span><code>CASE-{item.id}</code><strong>{item.title}</strong></span>
-                        <small>{subjects.find((subject) => subject.id === item.testSubjectId)?.name || '未知对象'} · {folder?.name || '未分类'} · {caseKindLabel[item.caseKind]} · {caseTypeLabel[item.caseType]} · {caseLevelLabel[item.priority]}</small>
+                        <small>{subjects.find((subject) => subject.id === item.testSubjectId)?.name || '未知对象'} · {folder?.name || '未分类'} · {caseTypeLabel[item.caseType]} · {caseLevelLabel[item.priority]}</small>
                       </span>
                     </label>
                   }) : <p className="test-list-empty">{available.length ? '没有符合条件的可选用例。' : '没有可追加的活动用例。'}</p>}

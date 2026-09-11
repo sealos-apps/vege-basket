@@ -429,7 +429,8 @@ test('test case deletion is exposed only when allowed and requires confirmation'
   assert.match(testWorkbenchClientSource, /<Dialog open=\{planDeleteDialogOpen\} onOpenChange=\{setPlanDeleteDialogOpen\}>/u)
   assert.match(testWorkbenchClientSource, /if \(planDeleteDialogOpen \|\| !planPendingDelete\) return[\s\S]*setTimeout[\s\S]*setPlanPendingDelete\(undefined\)/u)
   assert.doesNotMatch(testWorkbenchClientSource, /open=\{Boolean\(planPendingDelete\)\}/u)
-  assert.match(testWorkbenchClientSource, /<Button variant="outline" onClick=\{\(\) => onArchive\(selected\)\}>归档为基线<\/Button>/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /归档为基线|onArchive|caseKind|case_kind/u)
+  assert.match(testWorkbenchSource, /insert into test_cases[\s\S]*values \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13\)/u)
 })
 
 test('test subject editing uses a dedicated patch route without version or environment fields', () => {

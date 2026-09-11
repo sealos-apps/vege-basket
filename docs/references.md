@@ -289,9 +289,7 @@ must remain bound to the authorized project ID.
 - Test-case status: `draft`, `active`, `archived` remains accepted for compatibility,
   but the workbench no longer exposes case versions or archived status as the primary
   workflow.
-- Test-case kind: `functional`, `baseline`. Archiving a case promotes it from
-  `functional` to `baseline`; baseline cases remain active and serve as the reusable
-  bottom layer for each test subject. Test cases also support encrypted custom tags.
+- Test cases use `case_type` for functional, regression, smoke, security, or performance classification. The former baseline/archiving concept has been removed. Test cases also support encrypted custom tags.
 - Test-case folders/modules are scoped to one test subject. Test-space owners and editors
   can create, rename, and delete folders; deleting a folder clears `folder_id` on its
   current cases and does not delete cases or immutable plan snapshots.

@@ -2,7 +2,6 @@ import type { Priority, Project } from './types'
 import type { UserRole } from './api'
 
 export type TestCaseStatus = 'draft' | 'active' | 'archived'
-export type TestCaseKind = 'functional' | 'baseline'
 export type TestCaseType = 'functional' | 'regression' | 'smoke' | 'security' | 'performance'
 export type TestPlanStatus = 'draft' | 'in_progress' | 'completed' | 'aborted'
 export type TestResult = 'untested' | 'passed' | 'failed' | 'blocked' | 'skipped'
@@ -118,7 +117,6 @@ export type TestCaseFolder = {
 
 export type TestCase = {
   canDelete: boolean
-  caseKind: TestCaseKind
   caseType: TestCaseType
   createdAt: string
   customTags: string[]

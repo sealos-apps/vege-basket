@@ -64,7 +64,6 @@ import {
 type TestSpaceAccess = 'owner' | 'editor' | 'viewer'
 type TestSpaceMembershipStatus = 'pending' | 'active' | 'declined'
 type TestSpaceAccessRow = { access_level: TestSpaceAccess }
-type TestCaseKind = 'functional' | 'baseline'
 type TestWorkbenchNotificationKind =
   | 'test_plan_assigned'
   | 'test_bug_status_changed'
@@ -397,10 +396,6 @@ function optionalDate(value: unknown) {
     throw Object.assign(new Error('Date must use YYYY-MM-DD'), { status: 400 })
   }
   return date
-}
-
-function isTestCaseKind(value: unknown): value is TestCaseKind {
-  return value === 'functional' || value === 'baseline'
 }
 
 function customTags(value: unknown) {
@@ -862,7 +857,6 @@ type ImportFolderRow = {
 }
 
 type ImportCaseRow = {
-  case_kind: TestCaseKind
   case_type: string
   created_at: Date
   custom_tags: string
@@ -1234,14 +1228,14 @@ async function importTestSpaceData(
         `
         insert into test_cases
           (test_space_id, test_subject_id, folder_id, title, preconditions, steps, expected_result, remarks,
-           priority, case_type, case_kind, custom_tags, status, owner_user_id, version, created_by_user_id,
+           priority, case_type, custom_tags, status, owner_user_id, version, created_by_user_id,
            created_at, updated_at)
         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $14, $16, $17)
         returning id
         `,
         [targetSpaceId, targetSubjectId, targetFolderId, sourceCase.title, sourceCase.preconditions,
           sourceCase.steps, sourceCase.expected_result, sourceCase.remarks, sourceCase.priority,
-          sourceCase.case_type, sourceCase.case_kind, sourceCase.custom_tags, sourceCase.status, userId,
+          sourceCase.case_type, sourceCase.custom_tags, sourceCase.status, userId,
           sourceCase.version, sourceCase.created_at, sourceCase.updated_at],
       )
       const targetId = Number(inserted.rows[0].id)
@@ -1506,7 +1500,23 @@ function mapVerificationSubmissions(rows: readonly VerificationSubmissionRow[]) 
   return submissionsByBug
 }
 
-async function getTestWorkbench(userId: number) {
+async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subjectId?: number }) {
+  const scopeCases = scope?.spaceId && scope?.subjectId
+    ? ` and c.test_space_id = ${scope.spaceId} and c.test_subject_id = ${scope.subjectId}`
+    : ''
+  const scopeFolders = scope?.spaceId && scope?.subjectId
+    ? ` and f.test_space_id = ${scope.spaceId} and f.test_subject_id = ${scope.subjectId}`
+    : ''
+  const scopePlans = scope?.spaceId && scope?.subjectId
+    ? ` and p.test_space_id = ${scope.spaceId} and p.test_subject_id = ${scope.subjectId}`
+    : ''
+  const scopePlanCases = scope?.spaceId && scope?.subjectId
+    ? ` and p.test_space_id = ${scope.spaceId} and p.test_subject_id = ${scope.subjectId}`
+    : ''
+  const scopeBugs = scope?.spaceId && scope?.subjectId
+    ? ` and b.test_space_id = ${scope.spaceId} and b.test_subject_id = ${scope.subjectId}`
+    : ''
+
   const [
     spaces,
     testEnvironments,
@@ -1587,15 +1597,14 @@ async function getTestWorkbench(userId: number) {
       join test_spaces space on space.id = f.test_space_id
       left join test_space_memberships m
         on m.test_space_id = f.test_space_id and m.user_id = $1 and m.status = 'active'
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopeFolders}
       order by f.name, f.id
       `,
       [userId],
     ),
     query<{
       case_type: string
-      case_kind: TestCaseKind
-      created_at: Date
+          created_at: Date
       created_by_user_id: string | null
       custom_tags: string
       expected_result: string
@@ -1619,7 +1628,7 @@ async function getTestWorkbench(userId: number) {
       join test_spaces space on space.id = c.test_space_id
       left join test_space_memberships m
         on m.test_space_id = c.test_space_id and m.user_id = $1 and m.status = 'active'
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopeCases}
       order by c.updated_at desc, c.id desc
       `,
       [userId],
@@ -1646,7 +1655,7 @@ async function getTestWorkbench(userId: number) {
       join test_spaces space on space.id = p.test_space_id
       left join test_space_memberships m
         on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlans}
       order by p.updated_at desc, p.id desc
       `,
       [userId],
@@ -1659,7 +1668,7 @@ async function getTestWorkbench(userId: number) {
       join test_spaces space on space.id = p.test_space_id
       left join test_space_memberships m
         on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlans}
       order by ps.test_plan_id, ps.test_subject_id
       `,
       [userId],
@@ -1686,7 +1695,7 @@ async function getTestWorkbench(userId: number) {
       join test_spaces space on space.id = p.test_space_id
       left join test_space_memberships m
         on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlanCases}
       order by pc.id
       `,
       [userId],
@@ -1745,7 +1754,7 @@ async function getTestWorkbench(userId: number) {
         on m.test_space_id = b.test_space_id and m.user_id = $1 and m.status = 'active'
       left join users reporter on reporter.id = b.reporter_user_id
       left join users assignee on assignee.id = b.assignee_user_id
-      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopeBugs}
       order by b.updated_at desc, b.id desc
       `,
       [userId],
@@ -2082,7 +2091,6 @@ async function getTestWorkbench(userId: number) {
     cases: cases.rows.map((row) => ({
       canDelete: canDeleteTestCase(row.created_by_user_id ? Number(row.created_by_user_id) : null, userId),
       caseType: row.case_type,
-      caseKind: row.case_kind,
       createdAt: row.created_at.toISOString(),
       customTags: decryptJson<string[]>(row.custom_tags, []),
       expectedResult: decryptText(row.expected_result),
@@ -2189,7 +2197,13 @@ async function getTestWorkbench(userId: number) {
 router.get('/test-workbench', asyncRoute(async (request, response) => {
   const session = await requireActiveRole(request, response, 'tester')
   if (!session) return
-  response.json(await getTestWorkbench(session.userId))
+  const spaceId = positiveId(request.query.spaceId)
+  const subjectId = positiveId(request.query.subjectId)
+  if ((request.query.spaceId !== undefined && !spaceId) || (request.query.subjectId !== undefined && !subjectId)) {
+    response.status(400).json({ error: 'Invalid workbench scope' })
+    return
+  }
+  response.json(await getTestWorkbench(session.userId, spaceId && subjectId ? { spaceId, subjectId } : undefined))
 }))
 
 router.get('/test-spaces/settings', asyncRoute(async (request, response) => {
@@ -3063,7 +3077,7 @@ async function saveTestCaseRequest(request: express.Request, response: express.R
     const current = caseId ? (await client.query<{
       test_subject_id: string; folder_id: string | null; created_by_user_id: string | null
       title: string; preconditions: string; steps: string; expected_result: string; remarks: string
-      priority: string; case_type: string; case_kind: TestCaseKind; custom_tags: string; status: string
+      priority: string; case_type: string; custom_tags: string; status: string
     }>('select * from test_cases where id = $1 and test_space_id = $2', [caseId, spaceId])).rows[0] : undefined
     if (caseId && !current) throw new TestCaseDirectoryError('用例不存在。', 404)
     const subjectId = current ? Number(current.test_subject_id) : positiveId(request.body.testSubjectId)
@@ -3081,26 +3095,25 @@ async function saveTestCaseRequest(request: express.Request, response: express.R
     const priority = ['high', 'medium', 'low'].includes(request.body.priority) ? request.body.priority : current?.priority ?? 'medium'
     const caseType = ['functional', 'regression', 'smoke', 'security', 'performance'].includes(request.body.caseType)
       ? request.body.caseType : current?.case_type ?? 'functional'
-    const caseKind = isTestCaseKind(request.body.caseKind) ? request.body.caseKind : current?.case_kind ?? 'functional'
     const status = isTestCaseStatus(request.body.status) ? request.body.status : current?.status ?? 'active'
     const tags = request.body.customTags === undefined && current ? decryptJson<string[]>(current.custom_tags, []) : customTags(request.body.customTags)
     let folderId = requestedFolder === undefined ? (current?.folder_id ? Number(current.folder_id) : null) : requestedFolder
     createDirectoryIndex(await readCaseDirectories(client, spaceId!, subjectId)).path(folderId)
     // All input is normalized and every reference validated before creating a legacy module.
     if (modulePath !== undefined) folderId = modulePath ? await getOrCreateCaseFolder(client, spaceId!, subjectId, modulePath) : null
-    const values = [encryptText(title), ...content, priority, caseType, caseKind, encryptJson(tags), status, folderId]
+    const values = [encryptText(title), ...content, priority, caseType, encryptJson(tags), status, folderId]
     if (caseId) {
       await client.query(
         `update test_cases set title = $1, preconditions = $2, steps = $3, expected_result = $4, remarks = $5,
-         priority = $6, case_type = $7, case_kind = $8, custom_tags = $9, status = $10,
-         folder_id = $11, updated_at = now() where id = $12 and test_space_id = $13 and test_subject_id = $14`,
+         priority = $6, case_type = $7, custom_tags = $8, status = $9,
+         folder_id = $10, updated_at = now() where id = $11 and test_space_id = $12 and test_subject_id = $13`,
         [...values, caseId, spaceId, subjectId],
       )
     } else {
       await client.query(
-        `insert into test_cases (title, preconditions, steps, expected_result, remarks, priority, case_type, case_kind,
+        `insert into test_cases (title, preconditions, steps, expected_result, remarks, priority, case_type,
          custom_tags, status, folder_id, test_space_id, test_subject_id, created_by_user_id)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [...values, spaceId, subjectId, session.userId],
       )
     }
@@ -3151,8 +3164,8 @@ router.post(
         await client.query(
           `insert into test_cases
             (test_space_id, test_subject_id, folder_id, title, preconditions, steps,
-             expected_result, remarks, priority, case_type, case_kind, custom_tags, status, created_by_user_id)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'functional', 'functional', $10, 'active', $11)`,
+             expected_result, remarks, priority, case_type, custom_tags, status, created_by_user_id)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'functional', $10, 'active', $11)`,
           [spaceId, subjectId, folderId, encryptText(row.title), encryptText(row.preconditions), encryptText(row.steps),
             encryptText(row.expectedResult), encryptText(row.remarks), row.priority, encryptJson(row.customTags), session.userId],
         )

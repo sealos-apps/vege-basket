@@ -3,7 +3,6 @@ import type {
   BugSeverity,
   BugStatus,
   TestCaseStatus,
-  TestCaseKind,
   TestCaseType,
   TestCaseImportPreview,
   TestPlanStatus,
@@ -25,8 +24,12 @@ function withOrganizationContext(path: string, organizationId: OrganizationConte
   return `${path}?${params}`
 }
 
-export function fetchTestWorkbench() {
-  return request<TestWorkbenchData>('/api/test-workbench')
+export function fetchTestWorkbench(scope?: { spaceId?: number; subjectId?: number }) {
+  const params = new URLSearchParams()
+  if (scope?.spaceId) params.set('spaceId', String(scope.spaceId))
+  if (scope?.subjectId) params.set('subjectId', String(scope.subjectId))
+  const query = params.toString()
+  return request<TestWorkbenchData>(`/api/test-workbench${query ? `?${query}` : ''}`)
 }
 
 export function createTestSpace(name: string, versionLabel: string, organizationId: number) {
@@ -205,7 +208,6 @@ export function deleteTestCaseFolder(spaceId: number, folderId: number) {
 }
 
 export function createTestCase(spaceId: number, payload: {
-  caseKind?: TestCaseKind
   caseType: TestCaseType
   customTags?: string[]
   expectedResult: string
@@ -225,7 +227,6 @@ export function createTestCase(spaceId: number, payload: {
 }
 
 export function updateTestCase(spaceId: number, caseId: number, payload: Partial<{
-  caseKind: TestCaseKind
   caseType: TestCaseType
   customTags: string[]
   expectedResult: string

@@ -1746,7 +1746,6 @@ create table if not exists test_cases (
   priority text not null default 'medium' check (priority in ('high', 'medium', 'low')),
   case_type text not null default 'functional'
     check (case_type in ('functional', 'regression', 'smoke', 'security', 'performance')),
-  case_kind text not null default 'functional' check (case_kind in ('functional', 'baseline')),
   custom_tags text not null default '',
   status text not null default 'active' check (status in ('draft', 'active', 'archived')),
   owner_user_id bigint references users(id) on delete set null,
@@ -1764,23 +1763,11 @@ alter table test_cases
   add column if not exists remarks text not null default '';
 
 alter table test_cases
-  add column if not exists case_kind text not null default 'functional';
-
-alter table test_cases
   add column if not exists custom_tags text not null default '';
 
-do $$
-begin
-  alter table test_cases
-    add constraint test_cases_case_kind_check check (case_kind in ('functional', 'baseline'));
-exception
-  when duplicate_object then null;
-end $$;
+alter table test_cases drop constraint if exists test_cases_case_kind_check;
+alter table test_cases drop column if exists case_kind;
 
-update test_cases
-set case_kind = 'baseline',
-    status = 'active'
-where status = 'archived';
 
 create table if not exists test_plans (
   id bigserial primary key,
