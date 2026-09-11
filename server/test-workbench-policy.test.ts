@@ -245,6 +245,10 @@ test('Bug timeline records creation, assignment, transfer and status changes wit
   assert.match(testWorkbenchSource, /eventType: 'status_changed'/u)
   assert.match(testWorkbenchSource, /eventType: 'space_transferred'/u)
   assert.match(testWorkbenchSource, /previous_test_space_id, next_test_space_id/u)
+  assert.match(testWorkbenchSource, /previous_space\.version_label as previous_test_space_version_label/u)
+  assert.match(testWorkbenchSource, /next_space\.version_label as next_test_space_version_label/u)
+  assert.match(testWorkbenchSource, /previousSpaceVersionLabel: row\.previous_test_space_version_label/u)
+  assert.match(testWorkbenchSource, /nextSpaceVersionLabel: row\.next_test_space_version_label/u)
   assert.match(testWorkbenchSource, /events: eventsByBug\.get\(Number\(row\.id\)\) \?\? \[\]/u)
   assert.match(testWorkbenchSource, /reporter\.display_name as reporter_display_name/u)
   assert.match(testWorkbenchSource, /reporterName: row\.reporter_display_name \|\| row\.reporter_email \|\| undefined/u)
@@ -273,6 +277,9 @@ test('Bug detail header actions use icon-only buttons with accessible labels', (
   assert.match(testWorkbenchClientSource, /eventType === 'space_transferred'/u)
   assert.match(testWorkbenchClientSource, /previousSpaceName/u)
   assert.match(testWorkbenchClientSource, /nextSpaceName/u)
+  assert.match(testWorkbenchClientSource, /previousSpaceVersionLabel/u)
+  assert.match(testWorkbenchClientSource, /nextSpaceVersionLabel/u)
+  assert.match(testWorkbenchClientSource, /未设置版本/u)
 })
 
 test('test-space data import supports copied cases and plans only', () => {
