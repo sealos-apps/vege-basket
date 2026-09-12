@@ -89,7 +89,18 @@ export type Todo = {
   linkedToDeliveryEvent: boolean
   moduleId?: number
   moduleName?: string
+  subprojectId?: number
+  subprojectName?: string
   notes: TodoNote[]
+}
+
+export type ProjectSubproject = {
+  id: number
+  projectId: number
+  name: string
+  createdAt: string
+  updatedAt: string
+  taskCount?: number
 }
 
 export type ProjectModule = {
@@ -97,6 +108,8 @@ export type ProjectModule = {
   projectId: number
   name: string
   createdAt: string
+  selectable: boolean
+  unavailableReason?: 'disabled' | 'legacy'
 }
 
 export type TodoNote = {
@@ -147,6 +160,7 @@ export type ProjectTransferNotification = NotificationState & {
 }
 
 export type TodoNotification = NotificationState & {
+  subprojectName?: string
   id: number
   projectId: number
   projectName: string
@@ -498,6 +512,7 @@ export type Project = {
   canManageMembers?: boolean
   canDelete?: boolean
   canTransferOwnership?: boolean
+  moduleManagement: 'organization' | 'project'
   canManageOrganizationTodos?: boolean
   canUpdateOrganizationTodoFields?: boolean
   readOnly?: boolean
@@ -511,4 +526,5 @@ export type Project = {
   risks: string[]
   riskJournalEntryIds: number[]
   modules: ProjectModule[]
+  subprojects: ProjectSubproject[]
 }

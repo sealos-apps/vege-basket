@@ -610,6 +610,30 @@ export function updateOrganization(organizationId: number, name: string) {
   })
 }
 
+export function createOrganizationProjectModule(organizationId: number, name: string) {
+  return request<OrganizationDetail>(`/api/organizations/${organizationId}/project-modules`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function updateOrganizationProjectModule(
+  organizationId: number,
+  moduleId: number,
+  payload: { name?: string; enabled?: boolean },
+) {
+  return request<OrganizationDetail>(`/api/organizations/${organizationId}/project-modules/${moduleId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteOrganizationProjectModule(organizationId: number, moduleId: number) {
+  return request<OrganizationDetail>(`/api/organizations/${organizationId}/project-modules/${moduleId}`, {
+    method: 'DELETE',
+  })
+}
+
 export function updateOrganizationWeekStart(organizationId: number, weekStartsOn: number) {
   return request<OrganizationDetail>(`/api/organizations/${organizationId}/week-start`, {
     method: 'PATCH',
@@ -973,6 +997,22 @@ export function removeProjectModule(projectId: number, moduleId: number) {
   })
 }
 
+export function createProjectSubproject(projectId: number, payload: { name: string }) {
+  return request<WorkspaceData>(`/api/projects/${projectId}/subprojects`, { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function fetchProjectSubprojects(projectId: number) {
+  return request<import('./types').ProjectSubproject[]>(`/api/projects/${projectId}/subprojects`)
+}
+
+export function updateProjectSubproject(projectId: number, subprojectId: number, payload: { name: string }) {
+  return request<WorkspaceData>(`/api/projects/${projectId}/subprojects/${subprojectId}`, { method: 'PATCH', body: JSON.stringify(payload) })
+}
+
+export function removeProjectSubproject(projectId: number, subprojectId: number) {
+  return request<WorkspaceData>(`/api/projects/${projectId}/subprojects/${subprojectId}`, { method: 'DELETE' })
+}
+
 export function updateProject(
   projectId: number,
   payload: Partial<{ name: string; description: string; status: ProjectStatus; tags: string[] }>,
@@ -1118,6 +1158,7 @@ export async function uploadTodoImage(file: File) {
 export const uploadWorkbenchAttachment = uploadTodoImage
 
 export function createTodo(payload: {
+  subprojectId?: number | null
   assigneeUserId?: number
   watcherUserId?: number
   watcherUserIds?: number[]
@@ -1216,7 +1257,8 @@ export function markNotificationRead(
 
 export function updateTodo(
   todoId: number,
-  payload: Omit<Partial<Todo>, 'assigneeUserId' | 'moduleId' | 'reviewerUserId' | 'watcherUserId' | 'watcherUserIds'> & {
+  payload: Omit<Partial<Todo>, 'assigneeUserId' | 'moduleId' | 'subprojectId' | 'reviewerUserId' | 'watcherUserId' | 'watcherUserIds'> & {
+    subprojectId?: number | null
     assigneeUserId?: number | null
     createdAt?: string
     acceptanceNote?: string

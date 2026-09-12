@@ -1,6 +1,7 @@
 import { pool, query } from './db.ts'
 import { assertEncryptionConfigured, encryptJson, encryptText } from './crypto.ts'
 import { schemaSql } from './schema.ts'
+import { initializeProjectModules } from './project-modules.ts'
 
 const today = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
@@ -73,6 +74,7 @@ async function insertProject({
 async function main() {
   assertEncryptionConfigured()
   await query(schemaSql)
+  await initializeProjectModules(pool)
 
   const userResult = await query<{ id: string }>(
     `

@@ -2,6 +2,7 @@ import { backfillCaseDirectoryEncryption } from './test-case-directory-backfill.
 import 'dotenv/config'
 import { pool, query } from './db.ts'
 import { schemaSql } from './schema.ts'
+import { initializeProjectModules } from './project-modules.ts'
 import { blindIndex, decryptText, encryptJson, encryptText, isEncryptedText } from './crypto.ts'
 
 function maybeEncrypt(value: string) {
@@ -122,6 +123,7 @@ async function encryptTestSpaceVersionFields() {
 
 async function main() {
   await query(schemaSql)
+  await initializeProjectModules(pool, true)
   const directoryClient = await pool.connect()
   try {
     await directoryClient.query('begin')
@@ -159,6 +161,7 @@ async function main() {
   await encryptColumn('journal_entries', 'content')
   await encryptColumn('todos', 'title')
   await encryptColumn('todos', 'detail')
+  await encryptColumn('project_subprojects', 'name')
   await encryptColumn('risks', 'content')
   await encryptColumn('draft_items', 'content')
   await encryptColumn('draft_items', 'todo_title')

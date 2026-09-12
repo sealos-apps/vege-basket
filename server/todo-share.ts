@@ -34,6 +34,7 @@ export type TodoShareView = {
   dueDate: string
   mentionableMembers: Array<{ id: number; name: string }>
   moduleName: string | null
+  subprojectName: string | null
   notes: TodoShareNote[]
   priority: string
   projectName: string
@@ -57,6 +58,7 @@ type ShareTodoRow = {
   done: boolean
   due_date: Date | string
   module_name: string | null
+  subproject_name: string | null
   priority: string
   project_id: string
   project_name: string
@@ -160,12 +162,14 @@ async function readView(token: string, userId?: number | null): Promise<TodoShar
     select t.id as todo_id, t.project_id, t.title, t.detail, t.due_date, t.priority,
            t.done, t.confirmation_status, t.created_at, t.updated_at,
            p.name as project_name, module.name as module_name,
+           subproject.name as subproject_name,
            creator.id as creator_user_id, creator.display_name as creator_display_name,
            assignee.id as assignee_user_id, assignee.display_name as assignee_display_name,
            reviewer.id as reviewer_user_id, reviewer.display_name as reviewer_display_name
     from todo_share_links link
     join todos t on t.id = link.todo_id
     join projects p on p.id = t.project_id
+    left join project_subprojects subproject on subproject.id = t.subproject_id and subproject.project_id = t.project_id
     join users creator on creator.id = coalesce(t.created_by_user_id, p.user_id)
     left join project_modules module
       on module.id = t.project_module_id
@@ -258,7 +262,8 @@ async function readView(token: string, userId?: number | null): Promise<TodoShar
       ? todo.due_date.toISOString().slice(0, 10)
       : String(todo.due_date).slice(0, 10),
     mentionableMembers,
-    moduleName: todo.module_name || null,
+    moduleName: todo.module_name ? decryptText(todo.module_name) : null,
+    subprojectName: todo.subproject_name ? decryptText(todo.subproject_name) : null,
     notes: notes.rows.map((note) => ({
       authorName: publicDisplayName(note.author_display_name),
       authorUserId: note.author_user_id ? Number(note.author_user_id) : undefined,

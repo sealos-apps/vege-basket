@@ -7,6 +7,14 @@ import type { OrganizationPackageMarketPolicy } from '../shared/organization-pac
 export type { WeeklyReportRules } from '../shared/weekly-report-availability'
 
 export type OrganizationAccessRole = 'owner' | 'admin' | 'member'
+export type OrganizationProjectModule = {
+  id: number
+  name: string
+  enabled: boolean
+  usageCount: number
+  createdAt: string
+  updatedAt: string
+}
 export type OrganizationProjectStatus = 'active' | 'paused' | 'completed' | 'archived'
 export type OrganizationProjectHealthStatus = 'on_track' | 'at_risk' | 'off_track'
 export type OrganizationProjectMilestoneStatus = 'pending' | 'in_review' | 'achieved' | 'cancelled'
@@ -193,6 +201,7 @@ export type OrganizationDetail = {
   canManage: boolean
   canManageProjects: boolean
   canManageTestSpaces: boolean
+  canManageProjectModules: boolean
   canManageTestEnvironments: boolean
   canManageWeeklyReports: boolean
   canWriteWeeklyReport: boolean
@@ -211,6 +220,7 @@ export type OrganizationDetail = {
   ownerUserId: number
   packageMarketPolicy: OrganizationPackageMarketPolicy
   projects: OrganizationProject[]
+  projectModules: OrganizationProjectModule[]
   reports: OrganizationWeeklyReport[]
   summaries: OrganizationWeeklySummary[]
   tasks: OrganizationTask[]

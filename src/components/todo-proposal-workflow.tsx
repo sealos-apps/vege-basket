@@ -45,6 +45,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { projectModuleUnavailableLabel } from '../../shared/project-modules'
 
 type EditableTodoProposal = TodoProposal & { clientId: string }
 
@@ -137,6 +138,10 @@ export const TodoProposalWorkflow = forwardRef<
     [proposals, selectedIds],
   )
 
+  const unavailableSelectedModule = proposals.some(proposal => selectedIds.has(proposal.clientId)
+    && proposal.moduleId !== null
+    && !projects.find(project => project.id === proposal.projectId)?.modules.some(module => module.id === proposal.moduleId && module.selectable))
+
   function clearProposalReviewState() {
     setBatchId(null)
     setBatchStatus('pending')
@@ -193,6 +198,10 @@ export const TodoProposalWorkflow = forwardRef<
 
   async function confirmSelected() {
     if (batchId == null || confirming || selectedCount === 0) return
+    if (unavailableSelectedModule) {
+      setError('选中的提案包含已停用或不可用的模块，请重新选择模块或选择“无模块”。')
+      return
+    }
     if (invalidSelectedProposal) {
       setError('请为选中的提案填写项目、标题和有效截止日期。')
       return
@@ -343,7 +352,11 @@ export const TodoProposalWorkflow = forwardRef<
                         <SelectTrigger><SelectValue placeholder="不指定模块" /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="none">不指定模块</SelectItem>
-                          {project?.modules.map((module) => <SelectItem key={module.id} value={String(module.id)}>{module.name}</SelectItem>)}
+                          {project?.modules.filter(module => module.selectable || module.id === proposal.moduleId).map((module) => (
+                            <SelectItem key={module.id} value={String(module.id)} disabled={!module.selectable}>
+                              {module.name}{!module.selectable ? `（${projectModuleUnavailableLabel(module)}）` : ''}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </Label>
