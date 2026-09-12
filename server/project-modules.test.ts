@@ -6,6 +6,7 @@ import { canManageOrganizationProjectModules, projectModuleAvailability } from '
 import { decryptText, encryptText, isEncryptedText } from './crypto.ts'
 import {
   backfillProjectModuleNames, createOrganizationProjectModule, initializeProjectModules,
+  deleteOrganizationProjectModule,
   normalizeOrganizationModuleUpdate, parseProjectModuleId, projectModuleNameLookup,
   requirePersonalProjectModuleManagement, requireProjectModuleName, resolveProjectModuleId,
   updateOrganizationProjectModule,
@@ -123,6 +124,34 @@ test('disable changes only catalog state and never deletes historical mappings',
   assert.equal(writes(calls).length, 1)
   assert.equal(writes(calls)[0].values[2], false)
   assert.deepEqual(writes(calls)[0].values.slice(3), [2, 1])
+})
+
+test('disable rechecks current task usage and rejects modules still referenced', async () => {
+  const { client, calls } = fakeClient(({ sql }) => {
+    if (sql.includes('select name, name_lookup')) return [{ name: encryptText('支付'), name_lookup: 'lookup', enabled: true }]
+    if (sql.includes('count(t.id)')) return [{ usage_count: 2 }]
+    return []
+  })
+  await assert.rejects(updateOrganizationProjectModule(client, 1, 2, normalizeOrganizationModuleUpdate({ enabled: false })), {
+    code: 'PROJECT_MODULE_IN_USE', status: 409,
+  })
+  assert.equal(writes(calls).length, 0)
+})
+
+test('disabled modules can be deleted while preserving local history mappings', async () => {
+  const { client, calls } = fakeClient(({ sql }) => {
+    if (sql.includes('select enabled')) return [{ enabled: false }]
+    return []
+  })
+  await deleteOrganizationProjectModule(client, 1, 2)
+  assert.match(calls[1].sql, /update project_modules pm set organization_module_id = null/u)
+  assert.match(calls[2].sql, /delete from organization_project_modules/u)
+})
+
+test('enabled modules cannot be deleted', async () => {
+  await assert.rejects(deleteOrganizationProjectModule(fakeClient(({ sql }) => sql.includes('select enabled') ? [{ enabled: true }] : []).client, 1, 2), {
+    code: 'PROJECT_MODULE_ENABLED', status: 409,
+  })
 })
 
 test('legacy normalization preserves the first id and rebinds both todo and proposal references before merging', async () => {

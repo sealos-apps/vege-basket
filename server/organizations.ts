@@ -53,7 +53,7 @@ import {
 import { listPackageMarketRules } from './package-market.ts'
 import { canManageOrganizationProjectModules } from '../shared/project-modules.ts'
 import {
-  createOrganizationProjectModule, detachOrganizationProjectModules,
+  createOrganizationProjectModule, deleteOrganizationProjectModule, detachOrganizationProjectModules,
   listOrganizationProjectModules, lockOrganizationModuleCatalog, lockOrganizationModuleProjects,
   lockProjectModules, normalizeOrganizationModuleUpdate, ProjectModuleError,
   requireProjectModuleName, syncOrganizationProjectModules, updateOrganizationProjectModule,
@@ -1306,6 +1306,32 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
 
   router.patch('/organizations/:organizationId/project-modules/:moduleId', asyncRoute(async (request, response) => {
     await mutateOrganizationProjectModule(request, response, true)
+  }))
+
+  router.delete('/organizations/:organizationId/project-modules/:moduleId', asyncRoute(async (request, response) => {
+    const session = await requireSession(request, response)
+    if (!session) return
+    const organizationId = positiveId(request.params.organizationId)
+    const moduleId = positiveId(request.params.moduleId)
+    const membership = await requireOrganizationMember(response, organizationId, session.userId)
+    if (!membership || !organizationId || !moduleId) {
+      if (membership && !moduleId) response.status(400).json({ error: '请选择有效的项目模块。' })
+      return
+    }
+    if (!canManageOrganizationProjectModules(membership.access_role, await getAssignedRoles(session.userId))) {
+      response.status(403).json({ error: '需要组织管理员角色及组织 Owner/Admin 身份。' })
+      return
+    }
+    await transaction(async (client) => {
+      await lockOrganizationModuleCatalog(client, organizationId)
+      await lockOrganizationModuleProjects(client, organizationId)
+      if (!await lockManagedOrganization(client, organizationId, session.userId)) {
+        throw new ProjectModuleError('PROJECT_MODULE_FORBIDDEN', '组织管理权限已变化，请刷新后重试。', 403)
+      }
+      await deleteOrganizationProjectModule(client, organizationId, moduleId)
+      await writeAudit(client, organizationId, session.userId, 'organization.project_module.deleted', 'project_module', String(moduleId))
+    })
+    response.json(await getOrganizationDetail(organizationId, session.userId))
   }))
 
   router.patch('/organizations/:organizationId', asyncRoute(async (request, response) => {

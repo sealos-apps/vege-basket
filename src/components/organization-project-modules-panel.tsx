@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Check, Info, ListChecks, PencilSimple, Plus, Warning, X } from '@phosphor-icons/react'
-import { createOrganizationProjectModule, updateOrganizationProjectModule } from '../api'
+import { Check, Info, ListChecks, PencilSimple, Plus, Trash, Warning, X } from '@phosphor-icons/react'
+import { createOrganizationProjectModule, deleteOrganizationProjectModule, updateOrganizationProjectModule } from '../api'
 import type { OrganizationDetail, OrganizationProjectModule } from '../organization-types'
 import { normalizeProjectModuleName } from '../../shared/project-modules'
 import { Button } from './ui/button'
@@ -93,7 +93,7 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
       {error ? <p className="organization-project-modules-error" role="alert">{error}</p> : null}
       {modules.length ? (
         <div className="organization-project-modules-list">
-          <div className="organization-project-modules-columns"><span>模块名称</span><span>启用</span></div>
+          <div className="organization-project-modules-columns"><span>模块名称</span><span>使用次数</span><span>状态</span></div>
           {modules.map(module => (
             <div className="organization-project-module-row" key={module.id}>
               {editingId === module.id ? (
@@ -117,11 +117,19 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
                   <Button type="button" size="icon" variant="ghost" disabled={busy} aria-label={`编辑 ${module.name}`}
                     title={`编辑 ${module.name}`} onClick={() => {
                       setEditingId(module.id); setRenameDraft(module.name); setError(''); setNotice(''); setPendingDisable(null)
-                    }}><PencilSimple size={16} /></Button>
+                  }}><PencilSimple size={16} /></Button>
+                  {!module.enabled ? <Button type="button" size="icon" variant="ghost" disabled={busy}
+                    aria-label={`删除 ${module.name}`} title="删除已停用模块" onClick={() => {
+                      if (window.confirm(`删除已停用模块“${module.name}”？已有任务的历史归属会保留。`)) {
+                        void save(() => deleteOrganizationProjectModule(organizationId, module.id), `「${module.name}」已删除。`)
+                      }
+                    }}><Trash size={16} /></Button> : null}
                 </>
               )}
-              <button type="button" role="switch" aria-checked={module.enabled} disabled={busy}
+              <span className="organization-project-module-usage">{module.usageCount} 次</span>
+              <button type="button" role="switch" aria-checked={module.enabled} disabled={busy || (module.enabled && module.usageCount > 0)}
                 aria-label={`${module.enabled ? '停用' : '启用'} ${module.name}`} className="organization-project-module-switch"
+                title={module.enabled && module.usageCount > 0 ? `已有 ${module.usageCount} 个任务使用，不能停用` : `${module.enabled ? '停用' : '启用'} ${module.name}`}
                 onClick={() => {
                   setEditingId(null); setError(''); setNotice('')
                   if (module.enabled) setPendingDisable(module)
@@ -148,7 +156,7 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
             )}>{saving ? '保存中…' : '确认停用'}</Button>
           </div>
         </div>
-      ) : <p className="organization-project-modules-hint"><Info size={15} />停用仅影响后续选择，已有待办的模块归属会保留。</p>}
+      ) : <p className="organization-project-modules-hint"><Info size={15} />使用次数包含已完成任务。停用仅影响后续选择，已有待办的模块归属会保留。</p>}
       {notice ? <p className="organization-project-modules-notice" role="status">{notice}</p> : null}
     </section>
   )

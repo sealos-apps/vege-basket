@@ -11,6 +11,7 @@ export type OrganizationProjectModule = {
   id: number
   name: string
   enabled: boolean
+  usageCount: number
   createdAt: string
   updatedAt: string
 }

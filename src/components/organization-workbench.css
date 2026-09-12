@@ -3204,7 +3204,7 @@
 .organization-project-modules-description { font-size: 12px; line-height: 1.65; color: var(--muted-foreground); margin: 6px 0 14px; }
 .organization-project-modules-add { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; margin-bottom: 14px; }
 .organization-project-modules-list { border: 1px solid var(--line); border-radius: 7px; }
-.organization-project-modules-columns { display: flex; justify-content: space-between; padding: 9px 14px; background: color-mix(in oklch, var(--brand) 3%, var(--surface)); border-radius: 7px 7px 0 0; color: var(--muted-foreground); font-size: 11px; }
+.organization-project-modules-columns { display: grid; grid-template-columns: minmax(0, 1fr) 70px 42px; align-items: center; gap: 8px; padding: 9px 14px; background: color-mix(in oklch, var(--brand) 3%, var(--surface)); border-radius: 7px 7px 0 0; color: var(--muted-foreground); font-size: 11px; }
 .organization-project-module-row { min-height: 49px; padding: 6px 13px; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); }
 .organization-project-module-name { display: flex; align-items: center; min-width: 0; flex: 1; gap: 9px; font-size: 13px; }
 .organization-project-module-name > span:nth-child(2) { overflow-wrap: anywhere; }
@@ -3212,6 +3212,7 @@
 .organization-project-module-dot { width: 6px; height: 6px; border-radius: 2px; background: var(--border); flex-shrink: 0; }
 .organization-project-module-name[data-enabled="true"] .organization-project-module-dot { background: color-mix(in oklch, var(--brand) 70%, var(--surface)); }
 .organization-project-module-name[data-enabled="false"] > span:nth-child(2) { color: var(--muted-foreground); }
+.organization-project-module-usage { width: 70px; color: var(--muted-foreground); font-size: 11px; text-align: right; white-space: nowrap; }
 .organization-project-module-row [data-slot='button'] { min-height: 30px; color: var(--muted-foreground); }
 .organization-project-module-row [data-slot='button']:hover { background: color-mix(in oklch, var(--brand) 5%, var(--surface)); color: var(--brand); }
 .organization-project-module-edit { display: flex; gap: 4px; align-items: center; flex: 1; min-width: 0; }

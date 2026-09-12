@@ -628,6 +628,12 @@ export function updateOrganizationProjectModule(
   })
 }
 
+export function deleteOrganizationProjectModule(organizationId: number, moduleId: number) {
+  return request<OrganizationDetail>(`/api/organizations/${organizationId}/project-modules/${moduleId}`, {
+    method: 'DELETE',
+  })
+}
+
 export function updateOrganizationWeekStart(organizationId: number, weekStartsOn: number) {
   return request<OrganizationDetail>(`/api/organizations/${organizationId}/week-start`, {
     method: 'PATCH',

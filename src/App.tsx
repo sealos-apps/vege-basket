@@ -5186,12 +5186,12 @@ ${packageTimelineText}`
                     <Dialog>
                       <DialogTrigger asChild>
                         <Button className="ghost-button" type="button" variant="outline">
-                          <ListChecks size={16} /> 项目子项目
+                          <ListChecks size={16} /> 子项目管理
                         </Button>
                       </DialogTrigger>
                       <DialogContent>
                         <DialogHeader>
-                          <DialogTitle>项目子项目</DialogTitle>
+                          <DialogTitle>子项目管理</DialogTitle>
                           <DialogDescription>按客户或交付单元拆分当前大项目，任务可以归属到对应子项目。</DialogDescription>
                         </DialogHeader>
                         <ProjectSubprojectsPanel key={selectedProject.id} projectId={selectedProject.id} canManage onChange={applyWorkspace} />

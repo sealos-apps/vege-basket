@@ -42,8 +42,8 @@ export function ProjectSubprojectsPanel({ projectId, canManage, onChange }: { pr
       if (generation === requestGeneration.current) setError(failure instanceof Error ? failure.message : '保存失败')
     } finally { if (generation === requestGeneration.current) setBusy(false) }
   }
-  return <section className="project-subprojects-panel" aria-label="项目子项目" aria-busy={loading || busy}>
-    <div className="organization-project-detail-heading"><strong>项目子项目</strong><span>{items.length} 个子项目</span></div>
+  return <section className="project-subprojects-panel" aria-label="子项目管理" aria-busy={loading || busy}>
+    <div className="organization-project-detail-heading"><strong>子项目管理</strong><span>{items.length} 个子项目</span></div>
     {error && <p role="alert">{error}</p>}
     {items.map(item => <div className="organization-project-detail-heading" key={item.id}>
       <span>{item.name}</span>

@@ -67,13 +67,20 @@ export async function lockOrganizationModuleProjects(client: ModuleClient, organ
 
 export async function listOrganizationProjectModules(client: ModuleClient, organizationId: number) {
   const result = await client.query<{
-    id: string; name: string; enabled: boolean; created_at: Date; updated_at: Date
+    id: string; name: string; enabled: boolean; created_at: Date; updated_at: Date; usage_count: number
   }>(
-    `select id, name, enabled, created_at, updated_at from organization_project_modules
-     where organization_id = $1 order by created_at, id`, [organizationId],
+    `select module.id, module.name, module.enabled, module.created_at, module.updated_at,
+       (select count(t.id)::int
+          from project_modules pm
+          join projects p on p.id = pm.project_id and p.organization_id = module.organization_id
+          left join todos t on t.project_module_id = pm.id
+         where pm.organization_module_id = module.id) as usage_count
+       from organization_project_modules module
+     where module.organization_id = $1 order by module.created_at, module.id`, [organizationId],
   )
   return result.rows.map(row => ({
     id: Number(row.id), name: decryptText(row.name), enabled: row.enabled,
+    usageCount: Number(row.usage_count ?? 0),
     createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(),
   }))
 }
@@ -137,6 +144,19 @@ export async function updateOrganizationProjectModule(
   )
   const module = existing.rows[0]
   if (!module) throw new ProjectModuleError('PROJECT_MODULE_NOT_FOUND', '项目模块不存在。', 404)
+  if (input.enabled === false && module.enabled) {
+    const usage = await client.query<{ usage_count: number }>(
+      `select count(t.id)::int as usage_count
+         from project_modules pm
+         join projects p on p.id = pm.project_id and p.organization_id = $2::bigint
+         left join todos t on t.project_module_id = pm.id
+        where pm.organization_module_id = $1::bigint`, [moduleId, organizationId],
+    )
+    const usageCount = Number(usage.rows[0]?.usage_count ?? 0)
+    if (usageCount > 0) throw new ProjectModuleError(
+      'PROJECT_MODULE_IN_USE', `模块仍被 ${usageCount} 个任务使用，无法停用。请先调整任务归属。`,
+    )
+  }
   const lookup = input.name === undefined ? module.name_lookup : projectModuleNameLookup(input.name, await lookupKeyId(client))
   if (lookup !== module.name_lookup) {
     const conflict = await client.query(
@@ -164,6 +184,26 @@ export async function updateOrganizationProjectModule(
       [encryptedName, lookup, moduleId, organizationId],
     )
   }
+}
+
+export async function deleteOrganizationProjectModule(client: ModuleClient, organizationId: number, moduleId: number) {
+  const existing = await client.query<{ enabled: boolean }>(
+    `select enabled from organization_project_modules
+     where id = $1 and organization_id = $2 for update`, [moduleId, organizationId],
+  )
+  const module = existing.rows[0]
+  if (!module) throw new ProjectModuleError('PROJECT_MODULE_NOT_FOUND', '项目模块不存在。', 404)
+  if (module.enabled) throw new ProjectModuleError('PROJECT_MODULE_ENABLED', '请先停用模块后再删除。')
+  await client.query(
+    `update project_modules pm set organization_module_id = null
+       from projects p
+      where pm.organization_module_id = $1::bigint and p.id = pm.project_id
+        and p.organization_id = $2::bigint`, [moduleId, organizationId],
+  )
+  await client.query(
+    'delete from organization_project_modules where id = $1 and organization_id = $2',
+    [moduleId, organizationId],
+  )
 }
 
 export async function detachOrganizationProjectModules(client: ModuleClient, organizationId: number) {
