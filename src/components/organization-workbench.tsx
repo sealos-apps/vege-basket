@@ -77,6 +77,7 @@ import { organizationPackageMarketPolicyHasVisibleChannel } from '../../shared/o
 import {
   defaultWeeklyReportRules,
   getShanghaiDateTime,
+  getWeeklyReportRulesExample,
   getWeeklyReportTargetWeekStart,
   normalizeWeeklyReportRules,
 } from '../../shared/weekly-report-availability'
@@ -147,6 +148,13 @@ const weeklyReportDayOptions = Array.from({ length: 7 }, (_, index) => ({
   label: `第 ${index + 1} 天`,
   value: String(index + 1),
 }))
+
+function formatWeeklyRuleBoundary(value: string) {
+  const date = value.slice(0, 10)
+  const day = new Date(`${date}T00:00:00Z`).getUTCDay()
+  const weekday = organizationWeekdayOptions.find((option) => Number(option.value) === (day || 7))!.label
+  return `${date.replaceAll('-', '/')}（${weekday}）${value.slice(11, 16)}`
+}
 
 function clonePackageMarketPolicy(policy: OrganizationPackageMarketPolicy): OrganizationPackageMarketPolicy {
   return {
@@ -485,9 +493,7 @@ export function OrganizationWorkbench({
     if (detail) {
       setWeeklyRulesDraft(detail.weeklyReportRules)
       setWeeklyRulesWeekStartsOn(detail.weekStartsOn)
-      setWeeklyReportAssigneeUserIds(detail.members
-        .filter((member) => member.weeklyReportRequired && member.username.toLowerCase() !== 'admin')
-        .map((member) => member.id))
+      setWeeklyReportAssigneeUserIds(detail.weeklyReportAssigneeUserIds)
     }
   }, [detail])
 
@@ -727,6 +733,15 @@ export function OrganizationWorkbench({
   const weeklyReportAssigneeCandidates = detail?.members.filter((member) => (
     member.username.toLowerCase() !== 'admin'
   )) ?? []
+  const selectedWeeklyReportAssignees = weeklyReportAssigneeUserIds.flatMap((id) => {
+    const member = weeklyReportAssigneeCandidates.find((candidate) => candidate.id === id)
+    return member ? [member] : []
+  })
+  const weeklyRulesExample = getWeeklyReportRulesExample({
+    today: getShanghaiDateTime().slice(0, 10),
+    weekStartsOn: weeklyRulesWeekStartsOn,
+    rules: weeklyRulesDraft,
+  })
   const normalizedWeeklyReportAssigneeQuery = weeklyReportAssigneeQuery.trim().toLocaleLowerCase('zh-CN')
   const visibleWeeklyReportAssigneeCandidates = weeklyReportAssigneeCandidates.filter((member) => (
     !normalizedWeeklyReportAssigneeQuery
@@ -738,6 +753,18 @@ export function OrganizationWorkbench({
     setWeeklyReportAssigneeUserIds((current) => checked
       ? [...new Set([...current, userId])]
       : current.filter((id) => id !== userId))
+  }
+
+  function moveWeeklyReportAssignee(userId: number, direction: -1 | 1) {
+    setWeeklyReportAssigneeUserIds((current) => {
+      const index = current.indexOf(userId)
+      const target = index + direction
+      if (index < 0 || target < 0 || target >= current.length) return current
+      const next = [...current]
+      next[index] = current[target]
+      next[target] = userId
+      return next
+    })
   }
 
   const weeklyOrganizationId = detail?.id ?? 0
@@ -1359,9 +1386,7 @@ export function OrganizationWorkbench({
                     if (open) {
                       setWeeklyRulesDraft(detail.weeklyReportRules)
                       setWeeklyRulesWeekStartsOn(detail.weekStartsOn)
-                      setWeeklyReportAssigneeUserIds(detail.members
-                        .filter((member) => member.weeklyReportRequired && member.username.toLowerCase() !== 'admin')
-                        .map((member) => member.id))
+                      setWeeklyReportAssigneeUserIds(detail.weeklyReportAssigneeUserIds)
                       setWeeklyReportAssigneeQuery('')
                     }
                   }}>
@@ -1442,13 +1467,44 @@ export function OrganizationWorkbench({
                           </Label>
                         </div>
                         <p className="organization-weekly-rules-hint">
+                          T 周为报告所属周期，T+1 周为下一周期；第几天从组织周起始日算起。
                           截止时间必须早于下一轮周报的开放时间，避免两个填写时段重叠。
                         </p>
+                        <div className="organization-weekly-rules-example" aria-live="polite">
+                          {weeklyRulesExample ? (
+                            <>
+                              <strong>填写时段样例 · 北京时间</strong>
+                              <dl>
+                                <div><dt>报告周期</dt><dd>{weeklyRulesExample.weekStart.replaceAll('-', '/')}—{weeklyRulesExample.weekEnd.replaceAll('-', '/')}</dd></div>
+                                <div><dt>开放时间</dt><dd>{formatWeeklyRuleBoundary(weeklyRulesExample.opensAt)}</dd></div>
+                                <div><dt>截止时间</dt><dd>{formatWeeklyRuleBoundary(weeklyRulesExample.closesAt)}，包含该分钟</dd></div>
+                                <div><dt>下一轮开放</dt><dd>{formatWeeklyRuleBoundary(weeklyRulesExample.nextOpensAt)}</dd></div>
+                              </dl>
+                            </>
+                          ) : (
+                            <p>暂无法生成样例：请填写完整日期和时间，并确保截止时间早于下一轮开放时间。</p>
+                          )}
+                        </div>
                         <fieldset className="organization-weekly-assignees">
                           <legend>
                             <span>填写成员</span>
                             <small>已选 {weeklyReportAssigneeUserIds.length} / {weeklyReportAssigneeCandidates.length}</small>
                           </legend>
+                          <p id="weekly-assignee-order-hint">已选成员按以下顺序展示在组织周报中，新增选择追加到末尾。</p>
+                          <ol className="organization-weekly-assignee-order" aria-label="已选填写成员显示顺序" aria-describedby="weekly-assignee-order-hint">
+                            {selectedWeeklyReportAssignees.map((member, index) => (
+                              <li key={member.id}>
+                                <span className="organization-weekly-assignee-number">{index + 1}</span>
+                                <span className="organization-weekly-assignee-name"><strong>{member.displayName}</strong><small>{member.username}</small></span>
+                                <div>
+                                  <Button type="button" size="sm" variant="ghost" aria-label={`上移 ${member.displayName}`} disabled={busy || index === 0} onClick={() => moveWeeklyReportAssignee(member.id, -1)}>上移</Button>
+                                  <Button type="button" size="sm" variant="ghost" aria-label={`下移 ${member.displayName}`} disabled={busy || index === selectedWeeklyReportAssignees.length - 1} onClick={() => moveWeeklyReportAssignee(member.id, 1)}>下移</Button>
+                                  <Button type="button" size="sm" variant="ghost" aria-label={`移除 ${member.displayName}`} disabled={busy} onClick={() => toggleWeeklyReportAssignee(member.id, false)}>移除</Button>
+                                </div>
+                              </li>
+                            ))}
+                          </ol>
+                          {selectedWeeklyReportAssignees.length === 0 ? <p>尚未选择填写成员，请在下方勾选。</p> : null}
                           <div className="organization-weekly-assignee-tools">
                             <span className="organization-weekly-assignee-search">
                               <MagnifyingGlass aria-hidden="true" size={15} />

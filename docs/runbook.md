@@ -70,6 +70,40 @@ it does not prove database, OSS, Feishu, or AI workflows.
 
 ## Database Operations
 
+### Bug Case Association Migration
+
+`server/migrations/20260911_bug_test_case_association.sql` adds direct case references,
+backfills surviving plan-case links, and prevents new unlinked Bugs. Apply only with explicit
+database-write authorization and a pre-release backup. Bootstrap in `server/schema.ts` carries
+the same rules; starting the API applies them and is not a read-only check.
+
+After authorized migration, inventory unresolved IDs without decrypting content:
+
+```sql
+select id, test_space_id, test_plan_id, test_plan_case_id
+from test_bugs where test_case_id is null order by test_space_id, id;
+```
+
+Creators use the Bug editor to associate each unresolved Bug with a real case in its space.
+Do not synthesize cases or guess associations from titles. Once no unresolved rows remain,
+an authorized operator can enforce the final invariant:
+
+```sql
+alter table test_bugs alter column test_case_id set not null;
+```
+
+The next bootstrap also enables NOT NULL when there are no unresolved rows. Until then,
+the trigger permits existing unlinked Bugs to be triaged but rejects new unlinked rows,
+unlinking, and unlinked space transfers. This is a staged data migration, not proof that
+all production Bugs already have cases.
+
+Validate creation, legacy binding, mismatched execution rejection, concurrent case deletion,
+subject deletion protection, same-organization transfer, and full-space deletion in an
+authorized disposable database before production rollout. Application-only rollback to a
+version that creates unlinked Bugs is incompatible with the new constraints. Prefer a forward
+fix; any schema rollback or backup restore requires separate approval and must preserve Bug
+history and the full encryption key ring.
+
 Versioned incremental DDL is maintained in `server/migrations/`. Every table, constraint, and
 index change still requires a new forward-only SQL file; do not edit an already-applied file.
 Keep `server/schema.ts` synchronized as the idempotent bootstrap and compatibility definition.
@@ -152,6 +186,17 @@ The weekly-report assignee release adds
 requiring a report, while the reserved `admin` account is excluded. The application startup path
 applies the compatible addition idempotently; the matching forward-only migration remains the
 independent structural record and must only be run against an explicitly authorized database.
+
+Weekly-report assignee ordering adds the nullable nonnegative integer
+`organization_memberships.weekly_report_sort_order`; the forward-only record is
+`server/migrations/20260910_weekly_report_assignee_order.sql`. Startup applies the same
+idempotent addition. No backfill or encryption migration is needed: null preserves the
+existing name ordering. Take a database snapshot and retain the full encryption key ring
+before an approved deployment. An application rollback may leave the additive column in
+place; the old application ignores custom positions and uses its previous ordering.
+In an authorized disposable database, apply the DDL twice and verify ordered save/read,
+empty selections, invalid or departed member rejection without partial updates, simultaneous
+rule saves, and rejoining members appearing after explicitly ranked members.
 
 `npm run db:init` applies the current idempotent schema. `npm run db:encrypt-existing`
 applies the schema and encrypts supported legacy plaintext fields. Both are mutating
@@ -339,3 +384,32 @@ encrypted record, and the workflow that triggered rollback.
 - Unexpected users can complete Feishu OAuth: narrow the company custom application's
   availability scope before re-enabling sign-in; Veges does not maintain a second tenant
   or email-domain allowlist.
+
+## Test-case directory-tree upgrade
+
+`server/migrations/20260910_test_case_directory_tree.sql` matches the idempotent
+startup schema changes. It adds scoped parents and sibling indexes without changing
+existing folder IDs or splitting old slash-containing module names. Before an
+explicitly authorized upgrade, retain a database snapshot and every encryption key.
+Use a maintenance window: drain old API replicas before applying the schema, because
+old folder upserts target the removed global name-lookup index. Start only the new
+API version, then run the explicitly authorized `npm run db:encrypt-existing` against
+that same non-production rehearsal database first. The directory backfill detects
+normalized sibling duplicates before changing rows, preserves existing ciphertext,
+and fills or refreshes blind indexes inside one transaction. Resolve reported name
+collisions before retrying; do not discard retained encryption keys.
+
+Once nested directories or same-named directories in different branches exist,
+rolling back only the container image is not safe. Restore a compatible database
+snapshot and encryption key ring as part of a coordinated rollback, or roll forward.
+Do not attempt to recreate the old global uniqueness constraint on a populated tree.
+
+Acceptance in an authorized isolated PostgreSQL environment must exercise concurrent
+create/move/import/delete requests (including permission revocation while waiting),
+nonempty deletion rejection, wrong-subject parents/cases, and whole-batch rollback.
+Pure tests and browser tests with mocked callbacks do not establish PostgreSQL lock,
+constraint, migration or HTTP integration behavior.
+
+If pure `npm test` imports fail with `DATABASE_URL is required`, supply an inert
+loopback URL with an unused port for the test command only. The affected tests import
+pure helpers from database-aware modules but must not start the API or issue queries.

@@ -55,6 +55,13 @@ test('test spaces persist encrypted organization-scoped unique versions', () => 
   assert.match(createDialog, /<Input maxLength=\{80\} value=\{versionLabel\}/u)
 })
 
+test('test plan root directory entries reserve the correct grid columns', () => {
+  assert.match(testWorkbenchClientSource, /test-plan-directory-node-root/u)
+  assert.match(testWorkbenchClientSource, /className=\{`test-plan-directory-node test-plan-directory-node-root \$\{selected === 'all'/u)
+  assert.match(testWorkbenchClientSource, /className=\{`test-plan-directory-node test-plan-directory-node-root \$\{selected === 'uncategorized'/u)
+  assert.match(readFileSync(new URL('../src/components/test-workbench.css', import.meta.url), 'utf8'), /\.test-plan-directory-node-root\s*\{\s*grid-template-columns: 16px minmax\(0, 1fr\) auto;/u)
+})
+
 test('test-space member settings do not show unrelated departed accounts', () => {
   assert.doesNotMatch(testWorkbenchSource, /getDepartedUsers/u)
   assert.doesNotMatch(testWorkbenchClientSource, /departedUsers.*TestSpaceSettingsDialog/u)
@@ -62,25 +69,27 @@ test('test-space member settings do not show unrelated departed accounts', () =>
   assert.match(testWorkbenchClientSource, /selectedSpace\.members\.length/u)
 })
 
-test('Bug scope stays within the current space while its subject is returned as detail metadata', () => {
+test('Bug scope stays within the current space and exposes its case instead of a subject picker', () => {
+  // Scoped polling replaces the full client cache, so Bugs must span all accessible spaces.
+  assert.doesNotMatch(testWorkbenchSource, /scopeBugs/u)
   assert.match(testWorkbenchSource, /join test_subjects subject on subject\.id = b\.test_subject_id/u)
   assert.match(testWorkbenchSource, /subject\.name as test_subject_name/u)
   assert.match(testWorkbenchSource, /testSubjectName: decryptText\(row\.test_subject_name\)/u)
   assert.match(testWorkbenchClientSource, /const bugs = data\.bugs\.filter\(\s*\(bug\) => bug\.testSpaceId === spaceId,/u)
   assert.doesNotMatch(testWorkbenchClientSource, /const bugs = data\.bugs\.filter\(\s*\(bug\) => bug\.testSpaceId === spaceId && \(!subjectId/u)
   assert.match(testWorkbenchClientSource, /activeSpace && tab === 'cases' \?/u)
-  assert.match(testWorkbenchClientSource, /tab === 'cases' && !activeSubject \?/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /tab === 'cases' && !activeSubject \?/u)
   assert.match(testWorkbenchClientSource, /test-bug-detail-meta/u)
-  assert.match(testWorkbenchClientSource, /测试对象\s*<strong>\{bug\.testSubjectName/u)
+  assert.match(testWorkbenchClientSource, /测试用例\s*<strong>\{bug\.testCaseId/u)
   assert.match(testWorkbenchClientSource, /测试空间\s*<strong>\{bug\.testSpaceName \|\| '未记录'\}/u)
-  assert.match(testWorkbenchClientSource, /当前测试空间还没有测试对象，请先创建测试对象/u)
-  assert.match(testWorkbenchClientSource, /<Label>\s*测试对象[\s\S]*subjects\.map/u)
+  assert.match(testWorkbenchClientSource, /当前测试空间暂无用例，请先创建测试用例/u)
+  assert.match(testWorkbenchClientSource, /aria-label="关联测试用例"/u)
 })
 
-test('assigned Bug details include their test subject and space version label', () => {
+test('assigned Bug details include their test case and space version label', () => {
   assert.match(testWorkbenchSource, /space\.version_label as test_space_version_label/u)
   assert.match(testWorkbenchSource, /testSpaceVersionLabel: row\.test_space_version_label\s*\? decryptText\(row\.test_space_version_label\)\s*:\s*undefined/u)
-  assert.match(testWorkbenchClientSource, /selected\.testSubjectName/u)
+  assert.match(testWorkbenchClientSource, /selected\.testCaseTitle/u)
   assert.match(testWorkbenchClientSource, /selected\.testSpaceVersionLabel \|\| '未指定'/u)
   assert.match(testWorkbenchClientSource, /<small>\{bug\.testSpaceName \|\| '未知测试空间'\} · 版本号 \{bug\.testSpaceVersionLabel \|\| '未指定'\}/u)
   assert.match(testWorkbenchClientSource, /label: `\$\{bug\.testSpaceName\}\$\{bug\.testSpaceVersionLabel \? ` · \$\{bug\.testSpaceVersionLabel\}` : ''\}`/u)
@@ -245,6 +254,10 @@ test('Bug timeline records creation, assignment, transfer and status changes wit
   assert.match(testWorkbenchSource, /eventType: 'status_changed'/u)
   assert.match(testWorkbenchSource, /eventType: 'space_transferred'/u)
   assert.match(testWorkbenchSource, /previous_test_space_id, next_test_space_id/u)
+  assert.match(testWorkbenchSource, /previous_space\.version_label as previous_test_space_version_label/u)
+  assert.match(testWorkbenchSource, /next_space\.version_label as next_test_space_version_label/u)
+  assert.match(testWorkbenchSource, /previousSpaceVersionLabel: row\.previous_test_space_version_label/u)
+  assert.match(testWorkbenchSource, /nextSpaceVersionLabel: row\.next_test_space_version_label/u)
   assert.match(testWorkbenchSource, /events: eventsByBug\.get\(Number\(row\.id\)\) \?\? \[\]/u)
   assert.match(testWorkbenchSource, /reporter\.display_name as reporter_display_name/u)
   assert.match(testWorkbenchSource, /reporterName: row\.reporter_display_name \|\| row\.reporter_email \|\| undefined/u)
@@ -273,6 +286,9 @@ test('Bug detail header actions use icon-only buttons with accessible labels', (
   assert.match(testWorkbenchClientSource, /eventType === 'space_transferred'/u)
   assert.match(testWorkbenchClientSource, /previousSpaceName/u)
   assert.match(testWorkbenchClientSource, /nextSpaceName/u)
+  assert.match(testWorkbenchClientSource, /previousSpaceVersionLabel/u)
+  assert.match(testWorkbenchClientSource, /nextSpaceVersionLabel/u)
+  assert.match(testWorkbenchClientSource, /未设置版本/u)
 })
 
 test('test-space data import supports copied cases and plans only', () => {
@@ -291,14 +307,6 @@ test('test-space data import supports copied cases and plans only', () => {
   assert.match(testWorkbenchClientSource, /importTestSpaceData\(selectedSpace\.id, sources\)/u)
 })
 
-test('case workbench exports the current test-object cases and labels import as cases', () => {
-  assert.match(testWorkbenchClientSource, /function downloadTestCaseCsv\(/u)
-  assert.match(testWorkbenchClientSource, /onExport=\{\(\) => downloadTestCaseCsv\(cases, data\.folders\)\}/u)
-  assert.match(testWorkbenchClientSource, /<DownloadSimple \/> 导出用例/u)
-  assert.match(testWorkbenchClientSource, /<UploadSimple \/> 导入用例/u)
-  assert.match(testWorkbenchClientSource, /testCaseCsvTemplateHeaders, \.\.\.rows/u)
-})
-
 test('Bug details offer same-organization space transfer with the existing transfer transaction', () => {
   assert.match(testWorkbenchSource, /router\.post\('\/test-spaces\/:spaceId\/bugs\/:bugId\/transfer-space'/u)
   assert.match(testWorkbenchSource, /bugIds: \[bugId\], categories: \['bugs'\], spaceId/u)
@@ -306,11 +314,11 @@ test('Bug details offer same-organization space transfer with the existing trans
   assert.match(testWorkbenchSource, /transferSpaceCandidates: ownedSpaces/u)
   assert.match(testWorkbenchSource, /space\.organization_id === row\.organization_id/u)
   assert.match(testWorkbenchSource, /allowBugCreatorTransfer: true/u)
-  assert.match(testWorkbenchSource, /目标测试空间还没有测试对象，请先创建测试对象/u)
+  assert.match(testWorkbenchSource, /目标用例不存在或不属于目标测试空间/u)
   assert.match(testWorkbenchClientSource, /bug\.canTransferSpace/u)
   assert.match(testWorkbenchClientSource, /<BugSpaceTransferDialog/u)
   assert.match(testWorkbenchClientSource, /<DialogTitle>转移 Bug 到其他空间<\/DialogTitle>/u)
-  assert.match(testWorkbenchClientSource, /transferTestBugToSpace\(bug\.testSpaceId, bug\.id, targetSpaceId\)/u)
+  assert.match(testWorkbenchClientSource, /transferTestBugToSpace\(bug\.testSpaceId, bug\.id, targetSpaceId, targetTestCaseId\)/u)
 })
 
 test('assigned Bug selection keeps the current item when parent callbacks refresh counts', () => {
@@ -437,7 +445,8 @@ test('test case deletion is exposed only when allowed and requires confirmation'
   assert.match(testWorkbenchClientSource, /<Dialog open=\{planDeleteDialogOpen\} onOpenChange=\{setPlanDeleteDialogOpen\}>/u)
   assert.match(testWorkbenchClientSource, /if \(planDeleteDialogOpen \|\| !planPendingDelete\) return[\s\S]*setTimeout[\s\S]*setPlanPendingDelete\(undefined\)/u)
   assert.doesNotMatch(testWorkbenchClientSource, /open=\{Boolean\(planPendingDelete\)\}/u)
-  assert.match(testWorkbenchClientSource, /<Button variant="outline" onClick=\{\(\) => onArchive\(selected\)\}>归档为基线<\/Button>/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /归档为基线|onArchive|caseKind|case_kind/u)
+  assert.match(testWorkbenchSource, /insert into test_cases[\s\S]*values \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13\)/u)
 })
 
 test('test subject editing uses a dedicated patch route without version or environment fields', () => {

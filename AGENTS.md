@@ -160,12 +160,23 @@ historical product context; current code and these operational docs take precede
   Keep names encrypted and retain the lookup key recorded in `project_module_settings`
   across active encryption-key rotation. Initialization imports the organization name union
   once; workspace reads must never backfill it.
+- Test-case directory and assignment writes must lock the test space, then test subject,
+  then resources, and recheck access in the transaction. Lock multiple spaces and subjects
+  in numeric order for space imports. Directories may be deleted only when they have no
+  child directories or directly assigned cases; never silently reassign their contents.
+  Preserve encrypted names, sibling-scoped blind indexes, and existing case/plan snapshots.
 - Concurrency invariants belong in PostgreSQL unique indexes plus conflict-safe SQL, not
   select-before-insert checks alone.
 - Todo completion and reopen transitions must lock the todo row inside the same
   transaction before updating `completed_at`, `completed_by_user_id`, or activity events.
 
 ## Database Safety
+
+New Bugs must reference a canonical case in the same test space; derive the subject from
+the case and keep the composite database FK. Never infer legacy case associations from
+titles. Referenced cases and subjects with Bugs cannot be deleted individually. Bug directory
+filters use the case's current folder, and Bug lists must not be scoped by selected subject.
+Single-Bug space transfers require an existing destination case and clear execution links.
 
 Never execute database writes unless the user explicitly authorizes them. Starting
 `server/index.ts`, `npm run dev:api`, `npm run db:init`, and

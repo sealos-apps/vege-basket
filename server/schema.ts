@@ -277,6 +277,10 @@ create table if not exists organization_memberships (
 alter table organization_memberships
   add column if not exists weekly_report_required boolean not null default true;
 
+alter table organization_memberships
+  add column if not exists weekly_report_sort_order integer
+    check (weekly_report_sort_order >= 0);
+
 update organization_memberships membership
 set weekly_report_required = false
 from users
@@ -1757,6 +1761,33 @@ create table if not exists test_case_folders (
 alter table test_case_folders
   add column if not exists name_lookup text;
 
+alter table test_case_folders add column if not exists parent_id bigint;
+alter table test_case_folders drop constraint if exists test_case_folders_test_subject_id_name_key;
+drop index if exists idx_test_case_folders_subject_name_lookup;
+
+do $$ begin
+  alter table test_case_folders add constraint test_case_folders_parent_scope_fk
+    foreign key (parent_id, test_space_id, test_subject_id)
+    references test_case_folders(id, test_space_id, test_subject_id);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table test_case_folders add constraint test_case_folders_not_self_parent
+    check (parent_id is null or parent_id <> id);
+exception when duplicate_object then null; end $$;
+
+create unique index if not exists idx_test_case_folders_root_name_lookup
+  on test_case_folders(test_subject_id, name_lookup)
+  where parent_id is null and name_lookup is not null;
+create unique index if not exists idx_test_case_folders_child_name_lookup
+  on test_case_folders(test_subject_id, parent_id, name_lookup)
+  where parent_id is not null and name_lookup is not null;
+create unique index if not exists idx_test_case_folders_root_name
+  on test_case_folders(test_subject_id, name) where parent_id is null;
+create unique index if not exists idx_test_case_folders_child_name
+  on test_case_folders(test_subject_id, parent_id, name) where parent_id is not null;
+create index if not exists idx_test_case_folders_parent
+  on test_case_folders(test_space_id, test_subject_id, parent_id);
+
 create table if not exists test_cases (
   id bigserial primary key,
   test_space_id bigint not null references test_spaces(id) on delete cascade,
@@ -1770,7 +1801,6 @@ create table if not exists test_cases (
   priority text not null default 'medium' check (priority in ('high', 'medium', 'low')),
   case_type text not null default 'functional'
     check (case_type in ('functional', 'regression', 'smoke', 'security', 'performance')),
-  case_kind text not null default 'functional' check (case_kind in ('functional', 'baseline')),
   custom_tags text not null default '',
   status text not null default 'active' check (status in ('draft', 'active', 'archived')),
   owner_user_id bigint references users(id) on delete set null,
@@ -1788,23 +1818,11 @@ alter table test_cases
   add column if not exists remarks text not null default '';
 
 alter table test_cases
-  add column if not exists case_kind text not null default 'functional';
-
-alter table test_cases
   add column if not exists custom_tags text not null default '';
 
-do $$
-begin
-  alter table test_cases
-    add constraint test_cases_case_kind_check check (case_kind in ('functional', 'baseline'));
-exception
-  when duplicate_object then null;
-end $$;
+alter table test_cases drop constraint if exists test_cases_case_kind_check;
+alter table test_cases drop column if exists case_kind;
 
-update test_cases
-set case_kind = 'baseline',
-    status = 'active'
-where status = 'archived';
 
 create table if not exists test_plans (
   id bigserial primary key,
@@ -1829,6 +1847,10 @@ create table if not exists test_plans (
 
 alter table test_plans
   add column if not exists project_id bigint references projects(id) on delete set null;
+
+alter table test_plans
+  add column if not exists test_environment_id bigint references test_environments(id) on delete set null,
+  add column if not exists environment_access_url text not null default '';
 
 do $$
 begin
@@ -1953,6 +1975,59 @@ create table if not exists test_bugs (
 
 alter table test_bugs
   drop constraint if exists test_bugs_test_plan_id_test_space_id_test_subject_id_fkey;
+
+alter table test_bugs add column if not exists test_case_id bigint;
+create unique index if not exists test_cases_bug_scope_unique
+  on test_cases (id, test_space_id, test_subject_id);
+do $$
+begin
+  alter table test_bugs add constraint test_bugs_case_scope_fkey
+    foreign key (test_case_id, test_space_id, test_subject_id)
+    references test_cases (id, test_space_id, test_subject_id);
+exception when duplicate_object then null;
+end $$;
+create index if not exists test_bugs_case_idx on test_bugs(test_case_id);
+
+-- Only execution records with a surviving canonical case can be backfilled.
+update test_bugs b set test_case_id = c.id
+from test_plan_cases pc join test_cases c on c.id = pc.test_case_id
+where b.test_case_id is null and b.test_plan_case_id = pc.id
+  and b.test_space_id = c.test_space_id and b.test_subject_id = c.test_subject_id;
+
+-- Legacy unlinked rows may still be triaged, but new rows and transfers require a case.
+create or replace function enforce_test_bug_case() returns trigger as $$
+begin
+  if new.test_case_id is null then
+    if tg_op = 'INSERT' then
+      raise exception 'Bug test case is required' using errcode = '23514';
+    elsif old.test_case_id is not null or new.test_space_id <> old.test_space_id then
+      raise exception 'Bug test case is required' using errcode = '23514';
+    end if;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+drop trigger if exists test_bugs_require_case on test_bugs;
+create trigger test_bugs_require_case before insert or update on test_bugs
+for each row execute function enforce_test_bug_case();
+create or replace function protect_bug_subject_deletion() returns trigger as $$
+begin
+  if exists (select 1 from test_spaces where id = old.test_space_id)
+     and exists (select 1 from test_bugs where test_subject_id = old.id) then
+    raise exception 'Remove linked Bugs before deleting this test subject' using errcode = '23503';
+  end if;
+  return old;
+end;
+$$ language plpgsql;
+drop trigger if exists test_subjects_protect_bugs on test_subjects;
+create trigger test_subjects_protect_bugs before delete on test_subjects
+for each row execute function protect_bug_subject_deletion();
+do $$
+begin
+  if not exists (select 1 from test_bugs where test_case_id is null) then
+    alter table test_bugs alter column test_case_id set not null;
+  end if;
+end $$;
 
 do $$
 begin
@@ -2394,9 +2469,8 @@ create index if not exists idx_test_subjects_space_id
 create unique index if not exists idx_test_subjects_space_name_lookup
   on test_subjects(test_space_id, name_lookup)
   where name_lookup is not null;
-create unique index if not exists idx_test_case_folders_subject_name_lookup
-  on test_case_folders(test_subject_id, name_lookup)
-  where name_lookup is not null;
+create index if not exists idx_test_cases_subject_folder
+  on test_cases(test_subject_id, folder_id, updated_at desc);
 create index if not exists idx_test_cases_subject_id
   on test_cases(test_subject_id, updated_at desc);
 create index if not exists idx_test_plans_subject_id

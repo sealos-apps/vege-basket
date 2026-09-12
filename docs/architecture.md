@@ -273,6 +273,14 @@ The membership row also stores the organization's long-lived weekly-report assig
 changes replace that assignee set immediately: only current assignees may create, generate, save,
 or submit reports, while prior personal reports remain readable. Collection, reminders, and
 organization summaries derive from the same active assignee set.
+Weekly-report display order is organization-scoped and stored separately in the nullable
+`organization_memberships.weekly_report_sort_order` column. Saving rules replaces both
+assignment and position in one transaction. Collection and the ordered assignee DTO use
+position, then the existing lowercased display-name/username key, then user ID; unranked
+members sort last. Rejoining members have their old position cleared. General organization
+membership lists retain their role-based order. Rule examples use the shared report-window
+calculation, with day numbers relative to the organization's week start and deadlines in the
+following period; invalid drafts never fall back to an example of the default rules.
 
 External entry points have separate trust boundaries:
 
@@ -403,9 +411,22 @@ The schema is normalized around these groups:
   link to an accessible project after project access is checked, and also record their
   creator. Only that creator may edit plan metadata, change the selected test-subject
   scope, append current active cases as new immutable snapshots, remove an unexecuted
-  snapshot, or delete the plan. Test-case archiving means promoting a functional case
-  into a baseline case; it no longer creates a new case version. Deleting a plan
+  snapshot, or delete the plan. Test cases use hierarchical directories; the former
+  baseline/archiving concept has been removed. Deleting a plan
   preserves existing bugs while clearing their plan association.
+  Every new Bug directly references a canonical test case. A composite foreign key
+  enforces case/space/subject consistency; subject is derived from the case and is not
+  a Bug selection boundary. Existing execution-backed Bugs are backfilled only when
+  the source case survives. Other legacy Bugs remain readable and support creator-owned
+  one-time case binding. New inserts, unlinking, and space transfers without a case are
+  rejected by a database trigger; NOT NULL is enabled when no unlinked rows remain.
+  Referenced cases cannot be deleted. Subject deletion is also rejected while Bugs remain;
+  deleting the entire test space retains its existing explicit cascade behavior.
+  Case folder metadata is read from the current case, including its ancestor path for
+  parent-directory filters. Assigned Bugs and share views expose only that path, without
+  granting access to the rest of the case catalog. Single-Bug
+  transfers select an existing destination case and clear plan/execution links; encrypted
+  collaboration text retains the previous case, plan, and execution IDs.
   Test environments belong to one organization, store encrypted names and access URLs,
   and are assigned to one or more organization-owned test spaces through an explicit
   relation. A Bug may reference only an environment assigned to its own space; database
@@ -540,3 +561,26 @@ five minutes. Digest runs are unique per subscription/date, claimed with row loc
 a lease, retried at most three times, and terminally failed when the last lease expires.
 Build receipts and deployment state under `.sealos/` are historical evidence; all three
 template image references and both live workload images are deployment sources of truth.
+
+### Test-case directory trees
+
+`test_case_folders.parent_id` is an adjacency list within one test space and test
+subject. A composite foreign key prevents cross-scope parents; separate root/child
+unique indexes enforce sibling name lookups. Names stay encrypted; full paths are
+computed after decryption and are never persisted. Legacy module strings, including
+literal slashes, remain root directory names with their original IDs.
+
+`shared/test-case-directories.ts` owns path escaping, depth (32 levels), sibling
+validation and import planning. `server/test-case-directories.ts` owns scoped writes.
+All directory/assignment writers lock the space, then the subject, then resources;
+space imports lock all spaces and subjects in numeric order. Permissions are checked
+again inside the transaction. Creator-only case/subject deletion retains its existing
+read-access policy; directory management and case reassignment require editor access.
+Only directories with no children and no directly assigned cases can be deleted.
+Case migration changes assignment and update time only, preserving plan snapshots.
+
+The case workbench keeps tree expansion separate from the desktop panel preference.
+Mobile uses an independent drawer. Directory selection clears batch selection;
+collapsing the panel or the whole tree preserves case scope and selection. Filtering
+and export share the same result set, including every matching page. Import captures
+its target on opening and invalidates asynchronous previews when closed or changed.

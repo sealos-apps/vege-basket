@@ -639,6 +639,7 @@ export function updateOrganizationWeeklyReportRules(
   organizationId: number,
   payload: {
     weekStartsOn: number
+    /** Ordered user IDs; new selections are appended by the client. */
     weeklyReportAssigneeUserIds: number[]
     weeklyReportRules: WeeklyReportRules
   },

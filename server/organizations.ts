@@ -416,6 +416,7 @@ export async function acceptOrganizationInviteTokenWithClient(
            end,
            status = 'active',
            weekly_report_required = excluded.weekly_report_required,
+           weekly_report_sort_order = null,
            invited_by_user_id = excluded.invited_by_user_id,
            joined_at = now(),
            removed_at = null`,
@@ -475,9 +476,14 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       roles: string[]
       user_id: string
       weekly_report_required: boolean
+      weekly_report_position: string
     }>(
       `
       select m.user_id, m.access_role, m.joined_at, m.weekly_report_required,
+        row_number() over (
+          order by m.weekly_report_sort_order asc nulls last,
+            lower(coalesce(nullif(u.display_name, ''), u.email)), m.user_id
+        ) as weekly_report_position,
         u.email, u.display_name,
         coalesce(nullif(u.feishu_user_id, ''), nullif(u.feishu_email, '')) is not null as feishu_bound,
         coalesce(array_agg(distinct ur.role order by ur.role) filter (where ur.role is not null), '{}') as roles
@@ -485,7 +491,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       join users u on u.id = m.user_id
       left join user_roles ur on ur.user_id = u.id
       where m.organization_id = $1 and m.status = 'active'
-      group by m.user_id, m.access_role, m.joined_at, m.weekly_report_required, u.id
+      group by m.user_id, m.access_role, m.joined_at, m.weekly_report_required,
+        m.weekly_report_sort_order, u.id
       order by case m.access_role when 'owner' then 0 when 'admin' then 1 else 2 end,
         lower(coalesce(nullif(u.display_name, ''), u.email))
       `,
@@ -749,7 +756,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
         )
         or r.user_id = $3
       )
-      order by r.week_start desc, lower(coalesce(nullif(u.display_name, ''), u.email))
+      order by r.week_start desc, report_membership.weekly_report_sort_order asc nulls last,
+        lower(coalesce(nullif(u.display_name, ''), u.email)), r.user_id
       limit 200
       `,
       [organizationId, canManageWeeklyReports, userId],
@@ -927,6 +935,10 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
     canManageTestEnvironments: canManageTestEnvironments(membership.access_role, assignedRoles),
     canManageWeeklyReports,
     canWriteWeeklyReport: membership.weekly_report_required,
+    weeklyReportAssigneeUserIds: members.rows
+      .filter((member) => member.weekly_report_required && member.email.toLowerCase() !== 'admin')
+      .sort((left, right) => Number(left.weekly_report_position) - Number(right.weekly_report_position))
+      .map((member) => Number(member.user_id)),
     createdAt: row.created_at.toISOString(),
     id: Number(row.id),
     invitations: invitations.rows.map((invite) => ({
@@ -1423,6 +1435,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
          join user_roles role
            on role.user_id = $2 and role.role = 'organization_admin'
          where o.id = $1
+           and membership.access_role in ('owner', 'admin')
          for update of o, membership, role`,
         [organizationId, session.userId],
       )
@@ -1468,7 +1481,8 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       )
       await client.query(
         `update organization_memberships membership
-         set weekly_report_required = (membership.user_id = any($2::bigint[]))
+         set weekly_report_required = (membership.user_id = any($2::bigint[])),
+             weekly_report_sort_order = array_position($2::bigint[], membership.user_id) - 1
          from users
          where membership.organization_id = $1
            and membership.status = 'active'
@@ -1692,6 +1706,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
                end,
                status = 'active',
                weekly_report_required = excluded.weekly_report_required,
+               weekly_report_sort_order = null,
                invited_by_user_id = excluded.invited_by_user_id,
                joined_at = now(),
                removed_at = null
@@ -3394,6 +3409,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
              set access_role = case when organization_memberships.access_role = 'owner' then 'owner' else 'member' end,
                status = 'active',
                weekly_report_required = excluded.weekly_report_required,
+               weekly_report_sort_order = null,
                removed_at = null, joined_at = now()`,
           [organizationId, respondedByUserId, invitationId],
         )
