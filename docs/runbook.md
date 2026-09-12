@@ -70,6 +70,40 @@ it does not prove database, OSS, Feishu, or AI workflows.
 
 ## Database Operations
 
+### Bug Case Association Migration
+
+`server/migrations/20260911_bug_test_case_association.sql` adds direct case references,
+backfills surviving plan-case links, and prevents new unlinked Bugs. Apply only with explicit
+database-write authorization and a pre-release backup. Bootstrap in `server/schema.ts` carries
+the same rules; starting the API applies them and is not a read-only check.
+
+After authorized migration, inventory unresolved IDs without decrypting content:
+
+```sql
+select id, test_space_id, test_plan_id, test_plan_case_id
+from test_bugs where test_case_id is null order by test_space_id, id;
+```
+
+Creators use the Bug editor to associate each unresolved Bug with a real case in its space.
+Do not synthesize cases or guess associations from titles. Once no unresolved rows remain,
+an authorized operator can enforce the final invariant:
+
+```sql
+alter table test_bugs alter column test_case_id set not null;
+```
+
+The next bootstrap also enables NOT NULL when there are no unresolved rows. Until then,
+the trigger permits existing unlinked Bugs to be triaged but rejects new unlinked rows,
+unlinking, and unlinked space transfers. This is a staged data migration, not proof that
+all production Bugs already have cases.
+
+Validate creation, legacy binding, mismatched execution rejection, concurrent case deletion,
+subject deletion protection, same-organization transfer, and full-space deletion in an
+authorized disposable database before production rollout. Application-only rollback to a
+version that creates unlinked Bugs is incompatible with the new constraints. Prefer a forward
+fix; any schema rollback or backup restore requires separate approval and must preserve Bug
+history and the full encryption key ring.
+
 Versioned incremental DDL is maintained in `server/migrations/`. Every table, constraint, and
 index change still requires a new forward-only SQL file; do not edit an already-applied file.
 Keep `server/schema.ts` synchronized as the idempotent bootstrap and compatibility definition.
