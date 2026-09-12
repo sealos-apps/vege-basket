@@ -151,6 +151,15 @@ historical product context; current code and these operational docs take precede
   same-site URL built from validated `APP_PUBLIC_URL` and its positive canonical todo ID.
   Escape current user-controlled item text for Lark Markdown, and render legacy `Veges
   待办日报 | YYYY-MM-DD` bodies as Markdown literals before retrying them.
+- Organization project modules are managed only by active organization owner/admin members
+  with the `organization_admin` account role. Keep project-local module IDs as stable todo/AI
+  foreign keys; disabled/unmatched history may be retained, never newly selected. Catalog
+  changes and attachment/deletion take the organization advisory lock, then sorted project
+  locks, then manager membership/role locks. Do not strengthen the initial organization
+  `FOR KEY SHARE` lock before project locks: governance audit foreign keys would deadlock.
+  Keep names encrypted and retain the lookup key recorded in `project_module_settings`
+  across active encryption-key rotation. Initialization imports the organization name union
+  once; workspace reads must never backfill it.
 - Test-case directory and assignment writes must lock the test space, then test subject,
   then resources, and recheck access in the transaction. Lock multiple spaces and subjects
   in numeric order for space imports. Directories may be deleted only when they have no

@@ -667,6 +667,57 @@ create table if not exists project_modules (
   unique (project_id, name)
 );
 
+create table if not exists project_subprojects (
+  id bigserial primary key,
+  project_id bigint not null references projects(id) on delete cascade,
+  name text not null,
+  name_lookup text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (project_id, name_lookup)
+);
+
+alter table todos add column if not exists subproject_id bigint;
+create unique index if not exists idx_subproject_project_identity on project_subprojects(project_id, id);
+alter table todos drop constraint if exists todos_subproject_id_fkey;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'todos_project_subproject_fkey' and conrelid = 'todos'::regclass) then
+    alter table todos add constraint todos_project_subproject_fkey
+      foreign key (project_id, subproject_id) references project_subprojects(project_id, id)
+      on delete no action deferrable initially immediate;
+  end if;
+end $$;
+create index if not exists idx_project_subprojects_project on project_subprojects(project_id, created_at, id);
+create index if not exists idx_todos_project_subproject on todos(project_id, subproject_id);
+
+create table if not exists project_module_settings (
+  id smallint primary key check (id = 1),
+  lookup_key_id text not null,
+  initialized_at timestamptz
+);
+
+create table if not exists organization_project_modules (
+  id bigserial primary key,
+  organization_id bigint not null references organizations(id) on delete cascade,
+  name text not null,
+  name_lookup text not null,
+  enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (organization_id, name_lookup)
+);
+
+alter table project_modules
+  add column if not exists organization_module_id bigint references organization_project_modules(id) on delete set null,
+  add column if not exists name_lookup text;
+
+create unique index if not exists idx_project_modules_name_lookup
+  on project_modules(project_id, name_lookup);
+create unique index if not exists idx_project_modules_organization_module
+  on project_modules(project_id, organization_module_id);
+create index if not exists idx_project_modules_catalog_id
+  on project_modules(organization_module_id) where organization_module_id is not null;
+
 create table if not exists collaborators (
   id bigserial primary key,
   user_id bigint not null references users(id) on delete cascade,
@@ -2453,4 +2504,10 @@ create unique index if not exists idx_test_spaces_organization_version_lookup
   where organization_id is not null and version_label_lookup is not null;
 create index if not exists idx_test_bug_comments_bug_id
   on test_bug_comments(test_bug_id, created_at);
+`
+
+// Applied only after the encrypted, idempotent module-name backfill has succeeded.
+export const projectModulesFinalizeSql = `
+alter table project_modules alter column name_lookup set not null;
+alter table project_modules drop constraint if exists project_modules_project_id_name_key;
 `

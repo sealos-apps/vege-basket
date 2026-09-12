@@ -140,6 +140,30 @@ psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
   --file=server/migrations/20260908_weekly_report_assignees.sql
 ```
 
+The organization project-module release requires an approved maintenance window, a database
+snapshot, and the complete encryption key ring. Stop all old application replicas and writers
+before applying `server/migrations/20260910_organization_project_modules.sql` and starting the
+new application. The SQL file adds structures only; startup completes the encrypted name backfill,
+normalizes same-project duplicates (rebinding todo and proposal references), imports each
+organization's existing module-name union, fills project mappings, makes lookups non-null and
+removes the old plaintext-name uniqueness constraint before accepting requests. Failure rolls
+back the backfill transaction and prevents startup; repair the cause before retrying.
+`db:init` and `db:encrypt-existing` use the same initializer and are also database mutations.
+
+The initialization receipt prevents repeated imports on later startup. `db:encrypt-existing`
+can re-run name encryption without importing unmatched modules from newly attached personal
+projects. Module lookup digests use the key ID stored in `project_module_settings`, not the
+current active encryption key; retain that original key even after every text envelope has been
+re-encrypted. Missing that retained key fails startup closed. The first import enables the union
+of all existing organization project names, so projects may gain additional available categories.
+
+Do not run old plaintext-only application images against the upgraded database. Roll back with
+a version compatible with encrypted module snapshots and organization mappings, or use an
+explicitly approved, tested reverse migration / pre-release snapshot restore during maintenance.
+A snapshot restore loses writes since the snapshot. Before deployment, verify idempotence,
+uniqueness/FKs, concurrent catalog/todo writes, and rollback against an authorized isolated test
+database; unit tests and a frontend mock do not establish those database properties.
+
 Future changes that need data transformation, destructive cleanup, or incompatible behavior
 still require an explicit migration and release plan; `schemaSql` is not a substitute for those
 operations.

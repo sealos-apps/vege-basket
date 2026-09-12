@@ -57,7 +57,7 @@ export async function getMyWork(
     `
     select * from (
       select 'todo'::text as kind, t.id as source_id, t.project_id, p.organization_id,
-        p.name as project_name, null::text as context_name,
+        p.name as project_name, subproject.name as context_name,
         coalesce(nullif(todo_creator.display_name, ''), todo_creator.email)::text as creator_name,
         (
           t.reviewer_user_id = $1::bigint
@@ -83,6 +83,7 @@ export async function getMyWork(
         ) as offboarding_transferred_from_name
       from todos t
       join projects p on p.id = t.project_id
+      left join project_subprojects subproject on subproject.id = t.subproject_id and subproject.project_id = t.project_id
       left join users todo_creator on todo_creator.id = t.created_by_user_id
       left join project_memberships mine
         on mine.project_id = p.id and mine.invited_user_id = $1 and mine.status = 'active'

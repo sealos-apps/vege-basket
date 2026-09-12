@@ -51,6 +51,13 @@ import {
   validatePackageMarketPolicyInput,
 } from './organization-package-market.ts'
 import { listPackageMarketRules } from './package-market.ts'
+import { canManageOrganizationProjectModules } from '../shared/project-modules.ts'
+import {
+  createOrganizationProjectModule, deleteOrganizationProjectModule, detachOrganizationProjectModules,
+  listOrganizationProjectModules, lockOrganizationModuleCatalog, lockOrganizationModuleProjects,
+  lockProjectModules, normalizeOrganizationModuleUpdate, ProjectModuleError,
+  requireProjectModuleName, syncOrganizationProjectModules, updateOrganizationProjectModule,
+} from './project-modules.ts'
 
 type OrganizationRouterDependencies = {
   generateWeeklySummary: (userId: number, source: string) => Promise<{
@@ -441,7 +448,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
   const canManage = canManageOrganization(membership.access_role, assignedRoles)
   const canManageProjects = canManageOrganizationProjects(membership.access_role, assignedRoles)
   const canManageWeeklyReports = canManageOrganizationWeeklyReports(membership.access_role, assignedRoles)
-  const [organization, members, projects, projectMemberships, milestones, testSpaces, testEnvironments, todos, packageEvents, bugs, reports, summaries, invitations, attachableProjects, attachableTestSpaces, packageMarketPolicy] = await Promise.all([
+  const [organization, members, projects, projectMemberships, milestones, testSpaces, testEnvironments, todos, packageEvents, bugs, reports, summaries, invitations, attachableProjects, attachableTestSpaces, packageMarketPolicy, projectModules] = await Promise.all([
     query<{
       created_at: Date
       id: string
@@ -790,6 +797,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       [userId],
     ),
     getOrganizationPackageMarketPolicy(organizationId),
+    listOrganizationProjectModules(pool, organizationId),
   ])
   const row = organization.rows[0]
   if (!row) return null
@@ -922,6 +930,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
     })),
     canManage,
     canManageProjects,
+    canManageProjectModules: canManageOrganizationProjectModules(membership.access_role, assignedRoles),
+    projectModules,
     canManageTestEnvironments: canManageTestEnvironments(membership.access_role, assignedRoles),
     canManageWeeklyReports,
     canWriteWeeklyReport: membership.weekly_report_required,
@@ -1258,6 +1268,72 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     response.json(detail)
   }))
 
+  async function mutateOrganizationProjectModule(request: express.Request, response: express.Response, editing: boolean) {
+    const session = await requireSession(request, response)
+    if (!session) return
+    const organizationId = positiveId(request.params.organizationId)
+    const membership = await requireOrganizationMember(response, organizationId, session.userId)
+    if (!membership || !organizationId) return
+    if (!canManageOrganizationProjectModules(membership.access_role, await getAssignedRoles(session.userId))) {
+      response.status(403).json({ error: '需要组织管理员角色及组织 Owner/Admin 身份。' })
+      return
+    }
+    const moduleId = editing ? positiveId(request.params.moduleId) : null
+    if (editing && !moduleId) {
+      response.status(400).json({ error: '请选择有效的项目模块。' })
+      return
+    }
+    const input = editing ? normalizeOrganizationModuleUpdate(request.body)
+      : { name: requireProjectModuleName(request.body?.name), enabled: undefined }
+    await transaction(async (client) => {
+      await lockOrganizationModuleCatalog(client, organizationId)
+      await lockOrganizationModuleProjects(client, organizationId)
+      if (!await lockManagedOrganization(client, organizationId, session.userId)) {
+        throw new ProjectModuleError('PROJECT_MODULE_FORBIDDEN', '组织管理权限已变化，请刷新后重试。', 403)
+      }
+      const id = moduleId ?? await createOrganizationProjectModule(client, organizationId, input.name!)
+      if (moduleId) await updateOrganizationProjectModule(client, organizationId, moduleId, input)
+      await writeAudit(client, organizationId, session.userId,
+        moduleId ? 'organization.project_module.updated' : 'organization.project_module.created',
+        'project_module', String(id), JSON.stringify(input))
+    })
+    response.status(editing ? 200 : 201).json(await getOrganizationDetail(organizationId, session.userId))
+  }
+
+  router.post('/organizations/:organizationId/project-modules', asyncRoute(async (request, response) => {
+    await mutateOrganizationProjectModule(request, response, false)
+  }))
+
+  router.patch('/organizations/:organizationId/project-modules/:moduleId', asyncRoute(async (request, response) => {
+    await mutateOrganizationProjectModule(request, response, true)
+  }))
+
+  router.delete('/organizations/:organizationId/project-modules/:moduleId', asyncRoute(async (request, response) => {
+    const session = await requireSession(request, response)
+    if (!session) return
+    const organizationId = positiveId(request.params.organizationId)
+    const moduleId = positiveId(request.params.moduleId)
+    const membership = await requireOrganizationMember(response, organizationId, session.userId)
+    if (!membership || !organizationId || !moduleId) {
+      if (membership && !moduleId) response.status(400).json({ error: '请选择有效的项目模块。' })
+      return
+    }
+    if (!canManageOrganizationProjectModules(membership.access_role, await getAssignedRoles(session.userId))) {
+      response.status(403).json({ error: '需要组织管理员角色及组织 Owner/Admin 身份。' })
+      return
+    }
+    await transaction(async (client) => {
+      await lockOrganizationModuleCatalog(client, organizationId)
+      await lockOrganizationModuleProjects(client, organizationId)
+      if (!await lockManagedOrganization(client, organizationId, session.userId)) {
+        throw new ProjectModuleError('PROJECT_MODULE_FORBIDDEN', '组织管理权限已变化，请刷新后重试。', 403)
+      }
+      await deleteOrganizationProjectModule(client, organizationId, moduleId)
+      await writeAudit(client, organizationId, session.userId, 'organization.project_module.deleted', 'project_module', String(moduleId))
+    })
+    response.json(await getOrganizationDetail(organizationId, session.userId))
+  }))
+
   router.patch('/organizations/:organizationId', asyncRoute(async (request, response) => {
     const session = await requireSession(request, response)
     if (!session) return
@@ -1468,6 +1544,8 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     const client = await pool.connect()
     try {
       await client.query('begin')
+      await lockOrganizationModuleCatalog(client, organizationId!)
+      await lockOrganizationModuleProjects(client, organizationId!)
       const organization = await lockManagedOrganization(client, organizationId!, session.userId)
       if (!organization) {
         await client.query('rollback')
@@ -1484,6 +1562,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         return
       }
 
+      await detachOrganizationProjectModules(client, organizationId!)
       const projects = await client.query(
         `update projects set organization_id = null, updated_at = now()
          where organization_id = $1 returning id`,
@@ -2121,22 +2200,29 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     const organizationId = positiveId(request.params.organizationId)
     const projectId = positiveId(request.params.projectId)
     if (!(await requireOrganizationMember(response, organizationId, session.userId)) || !projectId) return
-    const outsideMembers = await query<{ count: string }>(
-      `select count(*)::text as count from project_memberships pm
-       where pm.project_id = $1 and pm.status in ('pending', 'active')
-         and (pm.invited_user_id is null or not exists (
-           select 1 from organization_memberships om
-           where om.organization_id = $2 and om.user_id = pm.invited_user_id and om.status = 'active'
-         ))`,
-      [projectId, organizationId],
-    )
-    if (Number(outsideMembers.rows[0]?.count ?? 0) > 0) {
-      response.status(409).json({ error: 'All active project members must join the organization first' })
-      return
-    }
     const client = await pool.connect()
     try {
       await client.query('begin')
+      await lockOrganizationModuleCatalog(client, organizationId!)
+      await lockProjectModules(client, projectId)
+      const activeMembership = await client.query(
+        `select organization_id from organization_memberships
+         where organization_id = $1 and user_id = $2 and status = 'active' for share`,
+        [organizationId, session.userId],
+      )
+      if (!activeMembership.rows[0]) throw new ProjectModuleError('ORGANIZATION_ACCESS_CHANGED', '组织成员身份已变化，请刷新后重试。', 403)
+      const outsideMembers = await client.query<{ count: string }>(
+        `select count(*)::text as count from project_memberships pm
+         where pm.project_id = $1 and pm.status in ('pending', 'active')
+           and (pm.invited_user_id is null or not exists (
+             select 1 from organization_memberships om
+             where om.organization_id = $2 and om.user_id = pm.invited_user_id and om.status = 'active'
+           ))`,
+        [projectId, organizationId],
+      )
+      if (Number(outsideMembers.rows[0]?.count ?? 0) > 0) {
+        throw new ProjectModuleError('PROJECT_MEMBERS_OUTSIDE_ORGANIZATION', 'All active project members must join the organization first')
+      }
       const updated = await client.query(
         `update projects set organization_id = $1, updated_at = now()
          where id = $2 and user_id = $3 and organization_id is null returning id`,
@@ -2152,6 +2238,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
          where project_id = $1 and revoked_at is null`,
         [projectId],
       )
+      await syncOrganizationProjectModules(client, organizationId!, projectId)
       await writeAudit(client, organizationId!, session.userId, 'project.attached', 'project', String(projectId))
       await client.query('commit')
     } catch (error) {

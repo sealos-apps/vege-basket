@@ -109,7 +109,7 @@ export function TodoShareView({ authUser, onBackToShare, onLogin, onOpenTodo, to
           <div>
             <span className="eyebrow">Veges · 待办分享</span>
             <h1>{data?.title || '待办'}</h1>
-            <p>TODO-{data?.todoId} · {data?.projectName || '项目待办'}</p>
+            <p>TODO-{data?.todoId} · {data?.projectName || '项目待办'}{data?.subprojectName ? ` / ${data.subprojectName}` : ''}</p>
           </div>
           {data?.viewer === 'member' ? (
             <Button className="bug-share-return-button" variant="outline" onClick={() => onOpenTodo(data.todoId)}>

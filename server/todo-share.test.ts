@@ -60,7 +60,7 @@ test('Only project members receive mentionable project members', () => {
   assert.doesNotMatch(todoShareSource, /mentionableMembers: await listMentionableMembers/u)
   assert.match(todoShareSource, /authorName: publicDisplayName\(note\.author_display_name\)/u)
   assert.match(todoShareSource, /creatorName: publicDisplayName\(todo\.creator_display_name\)/u)
-  assert.match(todoShareSource, /moduleName: todo\.module_name \|\| null/u)
+  assert.match(todoShareSource, /moduleName: todo\.module_name \? decryptText\(todo\.module_name\) : null/u)
   const publicViewStart = todoShareSource.indexOf('async function readView')
   const createLinkStart = todoShareSource.indexOf('export async function createTodoShareLink')
   assert.doesNotMatch(todoShareSource.slice(publicViewStart, createLinkStart), /\.email|_email/u)

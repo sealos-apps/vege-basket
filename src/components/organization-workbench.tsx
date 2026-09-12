@@ -110,7 +110,9 @@ import {
 import { Textarea } from './ui/textarea'
 import { UserName } from './user-name'
 import { OrganizationPackageMarketPanel } from './organization-package-market-panel'
+import { OrganizationProjectModulesPanel } from './organization-project-modules-panel'
 import './organization-workbench.css'
+import { ProjectSubprojectsPanel } from './project-subprojects-panel'
 
 type OrganizationTab = 'overview' | 'projects' | 'testSpaces' | 'testEnvironments' | 'members' | 'reports' | 'packageMarket'
 
@@ -316,11 +318,15 @@ function buildOrganizationInviteUrl(token: string) {
 export function OrganizationWorkbench({
   currentUser,
   onOrganizationsChanged,
+  onProjectModulesChanged,
+  onSubprojectsChanged,
   onPackageMarketVisibilityChange,
   refreshToken = 0,
 }: {
   currentUser: AuthUser
   onOrganizationsChanged?: () => void
+  onProjectModulesChanged?: () => void
+  onSubprojectsChanged?: () => void
   onPackageMarketVisibilityChange?: (organizationId: number, enabled: boolean) => void
   refreshToken?: number
 }) {
@@ -898,10 +904,10 @@ export function OrganizationWorkbench({
                   <GearSix size={17} />
                 </Button>
               </DialogTrigger>
-              <DialogContent className="organization-settings-dialog">
+              <DialogContent className="organization-settings-dialog" fixedHeader>
                 <DialogHeader>
                   <DialogTitle>组织设置</DialogTitle>
-                  <DialogDescription>修改组织名称，或处理不可逆的组织删除操作。</DialogDescription>
+                  <DialogDescription>管理组织名称、项目模块与组织删除。</DialogDescription>
                 </DialogHeader>
                 {organizationSettingsError ? (
                   <div className="organization-error" role="alert">{organizationSettingsError}</div>
@@ -925,6 +931,18 @@ export function OrganizationWorkbench({
                     </Button>
                   </div>
                 </form>
+                {detail.canManageProjectModules ? (
+                  <OrganizationProjectModulesPanel
+                    key={detail.id}
+                    organizationId={detail.id}
+                    modules={detail.projectModules}
+                    disabled={busy}
+                    onSaved={(nextDetail) => {
+                      setDetail(current => current?.id === nextDetail.id ? nextDetail : current)
+                      onProjectModulesChanged?.()
+                    }}
+                  />
+                ) : null}
                 <section className="organization-danger-zone" aria-labelledby="organization-danger-title">
                   <div>
                     <strong id="organization-danger-title">删除组织</strong>
@@ -1079,6 +1097,8 @@ export function OrganizationWorkbench({
                 <OrganizationProjectRow
                   busy={busy}
                   canManage={detail.canManageProjects}
+                  canManageSubprojects={detail.canManageProjects || project.ownerUserId === currentUser.id}
+                  onSubprojectsChanged={onSubprojectsChanged}
                   detail={detail}
                   key={project.id}
                   onMutate={mutate}
@@ -1763,12 +1783,16 @@ function TestEnvironmentEditorDialog({ busy, environment, onOpenChange, onSave, 
 }
 
 function OrganizationProjectRow({
+  canManageSubprojects,
+  onSubprojectsChanged,
   busy,
   canManage,
   detail,
   onMutate,
   project,
 }: {
+  canManageSubprojects: boolean
+  onSubprojectsChanged?: () => void
   busy: boolean
   canManage: boolean
   detail: OrganizationDetail
@@ -1871,6 +1895,7 @@ function OrganizationProjectRow({
       <div className={`organization-project-reveal${expanded ? ' open' : ''}`}>
         <div>
           <div className="organization-project-detail">
+            {expanded && <ProjectSubprojectsPanel key={project.id} projectId={project.id} canManage={canManageSubprojects} onChange={onSubprojectsChanged} />}
             <div className="organization-project-detail-heading">
               <div>
                 <Target size={17} weight="duotone" />

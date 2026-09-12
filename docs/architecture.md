@@ -26,6 +26,15 @@ The production image builds `src/` into `dist/`, copies `server/`, and starts
 
 ## Module Boundaries
 
+- `server/project-subprojects.ts`: parent-project-scoped subproject names, encrypted
+  name lookups, strict identifiers, and transactional governance checks. Subproject
+  maintenance and task selection share the existing project advisory lock. A composite
+  foreign key binds each task's subproject to the same project; deleting a referenced
+  subproject fails, while deleting the parent cascades its tasks and subprojects.
+- `src/components/project-subprojects-panel.tsx`: shared maintenance surface used by
+  the project Owner dialog and expanded organization project rows. Mutations refresh
+  the workspace so task selectors observe new or renamed subprojects.
+
 - `src/App.tsx`, `src/components/`: UI state and user workflows. They must not hold
   database, OSS credential, or authorization decisions.
 - `src/ai-attachments.ts`: browser-side text attachment format checks, display sizing,
@@ -97,6 +106,27 @@ The production image builds `src/` into `dist/`, copies `server/`, and starts
   workflow `run-name`, encrypted user-owned run records, bounded Run/Job/Step
   synchronization, per-user admission, successful artifact URI derivation, and
   owner-scoped failed-record cleanup.
+- `server/project-modules.ts`, `shared/project-modules.ts`: organization-owned todo module
+  catalogs and project-local compatibility mappings. Organization catalog writes require
+  the account `organization_admin` role and active owner/admin membership; this grants no
+  additional project-content permissions. Each todo/proposal retains its project module ID.
+  Organization add/rename updates all project mappings in one transaction; disable preserves
+  historical associations and forbids new selection. Personal projects keep owner-managed
+  modules. Attaching a personal project binds exact matching names and keeps unmatched rows
+  as unselectable history; deleting an organization preserves names and restores personal mode.
+  Catalog mutations/attachment/deletion acquire the organization advisory lock first, then
+  sorted project advisory locks. The initial organization row lock is only `FOR KEY SHARE`;
+  mutation/deletion rechecks and locks manager membership/roles after the project locks to
+  avoid inversion with project governance and audit foreign-key locks. Todo writes and AI
+  confirmation revalidate selected modules under the project lock in their write transaction.
+  AI generation exposes only selectable modules; confirmation parsing retains all project
+  modules so unavailable selections receive the explicit conflict from transactional validation.
+  Names are encrypted snapshots with exact trimmed, case-sensitive keyed lookup uniqueness.
+  `project_module_settings` retains the original lookup-key ID across encryption-key rotation
+  and records the one-time import; that key must remain in the encryption key ring. Startup
+  encrypts legacy names, merges normalized duplicates within each project while rebinding
+  references, imports the organization-wide name union and fills missing mappings before
+  listening. Repeated startup never imports later unmatched legacy rows; workspace GET is read-only.
 - `server/schema.ts`: idempotent PostgreSQL DDL and integrity indexes. Versioned
   incremental statements live in `server/migrations/` and must accompany every
   table, constraint, or index change.
@@ -320,7 +350,7 @@ The schema is normalized around these groups:
   local row and never calls GitHub or OSS deletion.
   Project health fields, `project_milestones`, their todo links, and milestone audit events
   are also stored with the project collaboration data.
-- Project knowledge: `journal_entries`, `todos`, `project_modules`,
+- Project knowledge: `journal_entries`, `todos`, `project_modules`, `organization_project_modules`, `project_module_settings`,
   `todo_activity_events`, `todo_notes`, `todo_note_mentions`, `risks`, `draft_items`,
   `summaries`, `ai_todo_proposal_batches`, `ai_todo_proposals`. Draft items distinguish
   Markdown journal drafts from structured todo drafts. A Feishu confirmation can atomically
