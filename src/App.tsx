@@ -5189,7 +5189,7 @@ ${packageTimelineText}`
                           <ListChecks size={16} /> 子项目管理
                         </Button>
                       </DialogTrigger>
-                      <DialogContent>
+                      <DialogContent className="project-subprojects-dialog">
                         <DialogHeader>
                           <DialogTitle>子项目管理</DialogTitle>
                           <DialogDescription>按客户或交付单元拆分当前大项目，任务可以归属到对应子项目。</DialogDescription>

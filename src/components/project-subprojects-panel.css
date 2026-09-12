@@ -5,6 +5,7 @@
 }
 
 .project-subprojects-panel .organization-project-detail-heading {
+  min-height: 46px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -25,17 +26,55 @@
 }
 
 .project-subprojects-panel form {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
 }
 
 .project-subprojects-panel form input {
-  flex: 1 1 160px;
   min-width: 0;
 }
 
 .project-subprojects-panel form button {
   flex-shrink: 0;
+}
+
+.project-subprojects-panel > p:not([role='alert']):not([role='status']) {
+  margin: 0 0 10px;
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.project-subprojects-dialog {
+  width: min(92vw, 560px);
+}
+
+.project-subprojects-dialog .project-subprojects-panel {
+  padding-bottom: 2px;
+  border-bottom: 0;
+}
+
+.project-subprojects-dialog .project-subprojects-panel > .organization-project-detail-heading {
+  display: none;
+}
+
+.project-subprojects-dialog .project-subprojects-panel form button {
+  min-width: 126px;
+}
+
+@media (min-width: 641px) {
+  .organization-project-reveal .project-subprojects-panel {
+    max-width: 760px;
+  }
+}
+
+@media (max-width: 560px) {
+  .project-subprojects-panel form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .project-subprojects-panel form button {
+    width: 100%;
+  }
 }
