@@ -2344,6 +2344,58 @@
   gap: 12px;
 }
 
+.test-bug-case-picker {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+
+.bug-filter-case-scope,
+.bug-filter-case-scope label {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bug-filter-case-row {
+  align-items: start;
+}
+
+.bug-filter-case-row .todo-filter-value-control {
+  grid-column: 2 / -2;
+  grid-row: 2;
+}
+
+.bug-filter-case-scope [data-slot="select-trigger"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.bug-filter-case-scope [data-slot="select-value"] {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 640px) {
+  .bug-filter-case-row .todo-filter-value-control {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+}
+
+.test-bug-case-picker [data-slot="select-trigger"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.test-bug-case-picker [data-slot="select-value"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .test-bug-controls {
   margin-top: 18px;
 }

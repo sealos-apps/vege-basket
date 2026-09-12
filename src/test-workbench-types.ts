@@ -205,8 +205,10 @@ export type TestBugEvent = {
   eventType: 'created' | 'assigned' | 'transferred' | 'status_changed' | 'space_transferred'
   id: number
   nextSpaceName?: string
+  nextSpaceVersionLabel?: string
   nextStatus?: BugStatus
   previousSpaceName?: string
+  previousSpaceVersionLabel?: string
   previousStatus?: BugStatus
   transferSource?: 'manual' | 'offboarding'
 }
@@ -265,6 +267,11 @@ export type TestBug = {
   reproductionSteps: string
   severity: BugSeverity
   status: BugStatus
+  testCaseId?: number
+  testCaseTitle?: string
+  testCaseFolderId?: number
+  testCaseFolderName?: string
+  testCaseDirectoryPath?: Array<{ id: number; name: string }>
   testPlanCaseId?: number
   testPlanId?: number
   testPlanName?: string

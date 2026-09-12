@@ -35,13 +35,15 @@ import {
 } from '@/components/bug-filter'
 
 export type BugFilterOption = { label: string; value: string }
+export type BugFilterCaseOption = BugFilterOption & { folderIds: string[] }
 
 export type BugFilterOptions = {
   assignees: BugFilterOption[]
   plans: BugFilterOption[]
   reporters: BugFilterOption[]
   spaces: BugFilterOption[]
-  subjects: BugFilterOption[]
+  cases: BugFilterCaseOption[]
+  folders: BugFilterOption[]
 }
 
 const statusOptions: BugFilterOption[] = [
@@ -68,8 +70,10 @@ const priorityOptions: BugFilterOption[] = [
 ]
 
 function optionsForField(field: BugFilterField, options: BugFilterOptions) {
+  if (field === 'caseLink') return [{ label: '待补关联', value: 'unlinked' }, { label: '已关联', value: 'linked' }]
   if (field === 'testSpace') return options.spaces
-  if (field === 'testSubject') return options.subjects
+  if (field === 'testCase') return options.cases
+  if (field === 'caseFolder') return options.folders
   if (field === 'testPlan') return options.plans
   if (field === 'reporter') return options.reporters
   if (field === 'assignee') return options.assignees
@@ -77,6 +81,39 @@ function optionsForField(field: BugFilterField, options: BugFilterOptions) {
   if (field === 'severity') return severityOptions
   if (field === 'priority') return priorityOptions
   return []
+}
+
+function CaseScopeValue({ condition, options, onChange }: {
+  condition: BugFilterCondition
+  options: BugFilterOptions
+  onChange: (patch: Partial<BugFilterCondition>) => void
+}) {
+  const [search, setSearch] = useState('')
+  const folderId = condition.folderId || 'all'
+  const inFolder = (item: BugFilterCaseOption, folder: string) => folder === 'all'
+    || (folder === 'uncategorized' ? item.folderIds.length === 0 : item.folderIds.includes(folder))
+  const available = options.cases.filter((item) => inFolder(item, folderId)
+    && item.label.toLocaleLowerCase('zh-CN').includes(search.trim().toLocaleLowerCase('zh-CN')))
+  const selected = options.cases.find((item) => item.value === condition.value)
+  return <div className="bug-filter-case-scope">
+    <label>用例目录
+      <Select value={folderId} onValueChange={(value) => {
+        setSearch('')
+        onChange({ folderId: value, value: selected && inFolder(selected, value) ? selected.value : 'all' })
+      }}>
+        <SelectTrigger aria-label="筛选用例目录"><SelectValue /></SelectTrigger>
+        <SelectContent><SelectItem value="all">全部目录</SelectItem><SelectItem value="uncategorized">未分类</SelectItem>{options.folders.filter((item) => /^\d+$/.test(item.value)).map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent>
+      </Select>
+    </label>
+    <Input aria-label="搜索筛选用例" placeholder="搜索用例编号或标题" value={search} onChange={(event) => setSearch(event.target.value)} />
+    <label>测试用例
+      <Select value={condition.value || 'all'} onValueChange={(value) => onChange({ value })}>
+        <SelectTrigger aria-label="筛选测试用例"><SelectValue>{condition.value === 'all' ? '全部用例' : selected?.label || '用例已不可用'}</SelectValue></SelectTrigger>
+        <SelectContent><SelectItem value="all">全部用例</SelectItem>{available.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent>
+      </Select>
+    </label>
+    {!available.length ? <span className="todo-filter-value-hint">没有符合条件的用例</span> : null}
+  </div>
 }
 
 export function BugFilterBuilderDialog({
@@ -108,7 +145,14 @@ export function BugFilterBuilderDialog({
     const visibleConditions = includeTestSpace
       ? conditions
       : conditions.filter((condition) => condition.field !== 'testSpace')
-    setDraftConditions(visibleConditions.length > 0 ? visibleConditions : [createBugFilterCondition()])
+    setDraftConditions(visibleConditions.length > 0 ? visibleConditions.map((condition) => {
+      const normalized = normalizeBugFilterCondition(condition)
+      if (normalized.field === 'caseFolder') return { ...normalized, field: 'caseScope' as const, folderId: normalized.value, value: 'all' }
+      if (normalized.field === 'testCase') return normalized.operator === 'is_empty' || normalized.operator === 'is_not_empty'
+        ? { ...normalized, field: 'caseLink' as const, operator: 'equals' as const, value: normalized.operator === 'is_empty' ? 'unlinked' : 'linked' }
+        : { ...normalized, field: 'caseScope' as const, folderId: 'all' }
+      return normalized
+    }) : [createBugFilterCondition()])
   }, [conditions, includeTestSpace, join, open])
 
   function updateCondition(id: string, patch: Partial<BugFilterCondition>) {
@@ -116,6 +160,7 @@ export function BugFilterBuilderDialog({
       if (condition.id !== id) return condition
       const next = { ...condition, ...patch }
       if (patch.field) {
+        next.folderId = undefined
         next.operator = bugFilterOperatorsByField[patch.field][0]
         next.value = getDefaultBugFilterValue(next.field, next.operator)
       } else if (patch.operator) {
@@ -128,16 +173,18 @@ export function BugFilterBuilderDialog({
   function applyFilters() {
     onApply({
       conditions: draftConditions.map(normalizeBugFilterCondition).filter((condition) => (
+        !(condition.field === 'caseScope' && condition.value === 'all' && (!condition.folderId || condition.folderId === 'all')) && (
         condition.operator === 'is_empty' ||
         condition.operator === 'is_not_empty' ||
         Boolean(condition.value.trim())
-      )),
+      ))),
       join: draftJoin,
     })
     onOpenChange(false)
   }
 
   function renderConditionValue(condition: BugFilterCondition) {
+    if (condition.field === 'caseScope') return <CaseScopeValue condition={condition} options={options} onChange={(patch) => updateCondition(condition.id, patch)} />
     if (condition.operator === 'is_empty' || condition.operator === 'is_not_empty') {
       return <span className="todo-filter-value-hint">无需填写</span>
     }
@@ -242,7 +289,7 @@ export function BugFilterBuilderDialog({
             <div className="todo-filter-empty">还没有筛选条件。</div>
           ) : draftConditions.map((condition, index) => (
             <div
-              className={condition.field === 'createdAt' && condition.operator === 'between'
+              className={condition.field === 'caseScope' ? 'todo-filter-condition-row bug-filter-case-row' : condition.field === 'createdAt' && condition.operator === 'between'
                 ? 'todo-filter-condition-row date-range'
                 : 'todo-filter-condition-row'}
               key={condition.id}
