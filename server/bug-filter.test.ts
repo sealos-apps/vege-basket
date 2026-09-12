@@ -52,6 +52,19 @@ function condition(
   return { field, id: `${field}-${operator}`, operator, value }
 }
 
+test('linked directory and case filters are one atomic group under OR', () => {
+  const scope: BugFilterCondition = { id: 'scope', field: 'caseScope', operator: 'equals', folderId: '50', value: '41' }
+  assert.equal(matchesBugFilterConditions(baseBug, [scope], 'and'), true)
+  assert.equal(matchesBugFilterConditions({ ...baseBug, testCaseId: 42 }, [scope], 'and'), false)
+  assert.equal(matchesBugFilterConditions(baseBug, [{ ...scope, folderId: '99' }], 'and'), false)
+  assert.equal(matchesBugFilterConditions(baseBug, [{ ...scope, value: 'all' }], 'and'), true)
+  assert.equal(matchesBugFilterConditions(baseBug, [{ ...scope, value: '42' }, condition('status', 'equals', 'closed')], 'or'), false)
+  assert.equal(matchesBugFilterConditions(baseBug, [{ ...scope, value: '42' }, condition('status', 'equals', 'assigned')], 'or'), true)
+  assert.equal(matchesBugFilterConditions(baseBug, [{ ...scope, value: 'all', folderId: 'all' }, condition('status', 'equals', 'closed')], 'or'), false)
+  assert.equal(matchesBugFilterConditions({ ...baseBug, testCaseId: undefined }, [condition('caseLink', 'equals', 'unlinked')], 'and'), true)
+  assert.equal(matchesBugFilterConditions(baseBug, [condition('caseLink', 'equals', 'unlinked')], 'and'), false)
+})
+
 test('bug filters match linked test fields and people by stable ids', () => {
   assert.equal(matchesBugFilterConditions(baseBug, [
     condition('testCase', 'equals', '41'),

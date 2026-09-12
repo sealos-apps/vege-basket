@@ -6,6 +6,8 @@ export type BugFilterField =
   | 'testSpace'
   | 'testCase'
   | 'caseFolder'
+  | 'caseScope'
+  | 'caseLink'
   | 'testPlan'
   | 'reporter'
   | 'assignee'
@@ -29,6 +31,7 @@ export type BugFilterCondition = {
   id: string
   operator: BugFilterOperator
   value: string
+  folderId?: string
 }
 
 export const bugFilterFieldLabels: Record<BugFilterField, string> = {
@@ -36,6 +39,8 @@ export const bugFilterFieldLabels: Record<BugFilterField, string> = {
   testSpace: '测试空间',
   testCase: '测试用例',
   caseFolder: '用例目录',
+  caseScope: '用例目录与用例',
+  caseLink: '用例关联状态',
   testPlan: '测试计划',
   reporter: '创建人',
   assignee: '指派人',
@@ -61,8 +66,8 @@ export const bugFilterOperatorLabels: Record<BugFilterOperator, string> = {
 export const bugFilterFields: BugFilterField[] = [
   'title',
   'testSpace',
-  'testCase',
-  'caseFolder',
+  'caseScope',
+  'caseLink',
   'testPlan',
   'reporter',
   'assignee',
@@ -78,6 +83,8 @@ export const bugFilterOperatorsByField: Record<BugFilterField, BugFilterOperator
   testSpace: ['equals', 'not_equals'],
   testCase: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
   caseFolder: ['equals', 'not_equals'],
+  caseScope: ['equals', 'not_equals'],
+  caseLink: ['equals', 'not_equals'],
   testPlan: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
   reporter: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
   assignee: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
@@ -105,6 +112,8 @@ export function getDefaultBugFilterValue(
   if (field === 'status') return 'new'
   if (field === 'severity') return 'major'
   if (field === 'priority') return 'medium'
+  if (field === 'caseScope') return 'all'
+  if (field === 'caseLink') return 'unlinked'
   return ''
 }
 
@@ -138,6 +147,9 @@ export function parseBugFilterDateRange(value: string) {
 export function normalizeBugFilterCondition(
   condition: BugFilterCondition,
 ): BugFilterCondition {
+  if (condition.field === 'caseFolder' && condition.value === 'unlinked') {
+    return { ...condition, field: 'caseLink' }
+  }
   const allowedOperators = bugFilterOperatorsByField[condition.field]
   const operator = allowedOperators.includes(condition.operator)
     ? condition.operator
@@ -155,6 +167,7 @@ export function normalizeBugFilterCondition(
 }
 
 function getFieldValue(bug: TestBug, field: BugFilterField) {
+  if (field === 'caseLink') return bug.testCaseId ? 'linked' : 'unlinked'
   if (field === 'title') return bug.title
   if (field === 'testSpace') return String(bug.testSpaceId)
   if (field === 'testCase') return bug.testCaseId ? String(bug.testCaseId) : ''
@@ -169,8 +182,17 @@ function getFieldValue(bug: TestBug, field: BugFilterField) {
   return bug.environment
 }
 
-function matchesCondition(bug: TestBug, condition: BugFilterCondition) {
+function matchesCondition(bug: TestBug, condition: BugFilterCondition): boolean {
   const normalized = normalizeBugFilterCondition(condition)
+  if (normalized.field === 'caseScope') {
+    const folder = normalized.folderId || 'all'
+    const directoryMatches = folder === 'all' || matchesCondition(bug, {
+      id: normalized.id, field: 'caseFolder', operator: 'equals', value: folder,
+    })
+    const caseMatches = normalized.value === 'all' || String(bug.testCaseId ?? '') === normalized.value
+    const matches = directoryMatches && caseMatches
+    return normalized.operator === 'not_equals' ? !matches : matches
+  }
   const fieldValue = getFieldValue(bug, normalized.field)
   const targetValue = normalized.value
 
@@ -205,6 +227,7 @@ export function matchesBugFilterConditions(
 ) {
   const activeConditions = conditions.filter((condition) => {
     const normalized = normalizeBugFilterCondition(condition)
+    if (normalized.field === 'caseScope' && normalized.value === 'all' && (!normalized.folderId || normalized.folderId === 'all')) return false
     return normalized.operator === 'is_empty' ||
       normalized.operator === 'is_not_empty' ||
       Boolean(normalized.value.trim())

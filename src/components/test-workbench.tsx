@@ -838,11 +838,21 @@ export function TestWorkbench({
       ? { label: bug.reporterName, value: String(bug.reporterUserId) }
       : undefined),
     spaces: [],
-    cases: uniqueBugFilterOptions(bugs, (bug) => bug.testCaseId
-      ? { label: `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}`, value: String(bug.testCaseId) }
-      : undefined),
-    folders: bugFolderOptions(bugs),
-  }), [bugs])
+    ...(() => {
+      const folders = data.folders.filter((folder) => folder.testSpaceId === spaceId)
+      const index = createDirectoryIndex(folders)
+      return {
+        cases: data.cases.filter((item) => item.testSpaceId === spaceId).map((item) => ({
+          label: `CASE-${item.id} ${item.title}`, value: String(item.id),
+          folderIds: index.path(item.folderId ?? null).map((folder) => String(folder.id)),
+        })),
+        folders: folders.map((folder) => ({
+          label: `${data.subjects.find((subject) => subject.id === folder.testSubjectId)?.name || ''} / ${index.path(folder.id).map((item) => item.name).join(' / ')}`,
+          value: String(folder.id),
+        })),
+      }
+    })(),
+  }), [bugs, data.cases, data.folders, data.subjects, spaceId])
   const returnedBugs: BugReturnNotification[] = data.notifications.flatMap((notification) => {
     if (notification.kind !== 'test_bug_status_changed') return []
     const bug = data.bugs.find((candidate) => candidate.id === notification.sourceId)
@@ -5471,7 +5481,7 @@ export function AssignedTestBugs({
     spaces: [],
     cases: uniqueBugFilterOptions(spaceBugs, (bug) => bug.testCaseId
       ? { label: `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}`, value: String(bug.testCaseId) }
-      : undefined),
+      : undefined).map((item) => ({ ...item, folderIds: spaceBugs.find((bug) => String(bug.testCaseId) === item.value)?.testCaseDirectoryPath?.map((folder) => String(folder.id)) ?? [] })),
     folders: bugFolderOptions(spaceBugs),
   }), [spaceBugs])
 
