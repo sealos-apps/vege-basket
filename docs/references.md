@@ -633,6 +633,11 @@ column and the complete encryption key ring.
 `POST /api/test-space-transfers/:transferId/respond` accepts `{ action: 'accept' | 'decline' }`
 and returns `{ settings, workbench }`. `GET /api/test-spaces/settings` includes recipient-only
 `ownershipTransfers`; managed space DTOs expose `canTransferOwnership` separately from access level.
+`POST /api/organizations/:organizationId/test-spaces/:spaceId/transfer` accepts `{ targetUserId }`
+and immediately transfers an attached space when the caller is an active organization Owner/Admin
+with the `organization_admin` role. Its target must be another active organization member with a
+`tester` or `organization_admin` role; it returns the caller's updated test-space settings and
+cancels any pending request for that space.
 
 ### Test-case directory and CSV contracts
 

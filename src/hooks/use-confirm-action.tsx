@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { ConfirmActionDialog, type ConfirmActionOptions } from '../components/confirm-action-dialog'
+import type { ActionReconciliation } from '../confirmed-action'
 
-type Request = ConfirmActionOptions & {
+type ConfirmRequestOptions = ConfirmActionOptions & {
+  reconcile?: () => Promise<ActionReconciliation>
+}
+
+type Request = ConfirmRequestOptions & {
   scope: string | number | null
   run: () => Promise<boolean>
   resolve: (succeeded: boolean) => void
@@ -19,7 +24,7 @@ export function useConfirmAction(scope: string | number | null) {
     }
   }, [scope])
 
-  function confirmAction(options: ConfirmActionOptions, run: () => Promise<boolean>): Promise<boolean> {
+  function confirmAction(options: ConfirmRequestOptions, run: () => Promise<boolean>): Promise<boolean> {
     if (active.current) return Promise.resolve(false)
     return new Promise((resolve) => {
       const next = { ...options, actionKey: options.actionKey ?? `${scope}:${options.title}:${typeof options.description === 'string' ? options.description : ''}`, scope, run, resolve }

@@ -1,4 +1,9 @@
-import { requestTestSpaceOwnership, respondTestSpaceOwnership, TestSpaceTransferError } from './test-space-transfer.ts'
+import {
+  requestTestSpaceOwnership,
+  respondTestSpaceOwnership,
+  TestSpaceTransferError,
+  transferOrganizationTestSpaceOwnership,
+} from './test-space-transfer.ts'
 import { shareOrganizationTestEnvironments } from './test-environment-sharing.ts'
 import { lockResourceManager, lockOrganizationResourceManager, type ManagedResource } from './resource-management.ts'
 import crypto from 'node:crypto'
@@ -2317,6 +2322,25 @@ router.post('/test-spaces/:spaceId/transfer', asyncRoute(async (request,response
   const client=await pool.connect()
   try{await client.query('begin');const transferId=await requestTestSpaceOwnership(client,spaceId,session.userId,targetId);await client.query('commit');response.status(201).json({transferId})}
   catch(error){await client.query('rollback');if(error instanceof TestSpaceTransferError){response.status(error.status).json({error:error.message});return}throw error}finally{client.release()}
+}))
+router.post('/organizations/:organizationId/test-spaces/:spaceId/transfer', asyncRoute(async (request,response)=>{
+  const session=await requireTestSpaceManagementSession(request,response)
+  if(!session)return
+  const organizationId=positiveId(request.params.organizationId)
+  const spaceId=positiveId(request.params.spaceId)
+  const targetId=positiveId(request.body?.targetUserId)
+  if(!organizationId||!spaceId||!targetId){response.status(400).json({error:'请选择有效的组织、测试空间和新所有者。'});return}
+  const client=await pool.connect()
+  try{
+    await client.query('begin')
+    await transferOrganizationTestSpaceOwnership(client,organizationId,spaceId,session.userId,targetId)
+    await client.query('commit')
+  }catch(error){
+    await client.query('rollback')
+    if(error instanceof TestSpaceTransferError){response.status(error.status).json({error:error.message});return}
+    throw error
+  }finally{client.release()}
+  response.json(await getTestSpaceSettings(session.userId))
 }))
 router.post('/test-space-transfers/:transferId/respond', asyncRoute(async(request,response)=>{
   const session=await requireTestSpaceManagementSession(request,response)

@@ -162,7 +162,9 @@ Organization management exposes complete project and test-space administration i
 Projects and Test Spaces tabs. Project editing saves name, description, tags, lifecycle and
 health in one transaction. Test Spaces contains Organization Test Spaces and Test Environments
 child tabs; environment configuration is shared once per organization. Space member management
-selects existing active members; the space menu offers ownership transfer and deletion. Test-space administration
+selects eligible active organization members and can add them directly. Organization-space ownership
+transfer immediately changes ownership after the administrator's confirmation; the ordinary test-workbench
+transfer request remains recipient-confirmed. The space menu also offers deletion. Test-space administration
 accepts the assigned organization-admin role without changing the active persona; the
 workbench, import, case, plan and Bug routes still require their original active persona.
 The role check only admits the request: transactional resource authorization still decides

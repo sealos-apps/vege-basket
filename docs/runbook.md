@@ -418,6 +418,9 @@ restricted assignments become organization-wide intentionally; old clients canno
 through `testSpaceIds`. Startup backfill takes organization locks, so perform production rollout
 only in an explicitly approved maintenance window. No separate manual migration is needed after
 successful normal startup. Application rollback does not undo expanded assignments.
+Organization-management direct test-space transfers use the existing request and membership
+tables without a migration. They complete immediately after administrator confirmation, cancel
+any pending request for that space, and cannot be undone by rolling back application code.
 
 ## Test-case directory-tree upgrade
 

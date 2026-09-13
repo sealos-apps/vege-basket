@@ -17,11 +17,12 @@ import type {
   OrganizationProject,
 } from '../organization-types'
 import {
-  requestTestSpaceTransfer,
+  addTestSpaceMember,
   createTestSpace,
   deleteTestSpace,
   fetchTestSpaceSettings,
   removeTestSpaceMember,
+  transferOrganizationTestSpaceOwnership,
   updateTestSpace,
   updateTestSpaceMember,
 } from '../test-workbench-api'
@@ -57,6 +58,8 @@ import {
   SelectValue,
 } from './ui/select'
 import { Textarea } from './ui/textarea'
+import { ConfirmActionDialog } from './confirm-action-dialog'
+import { useConfirmAction } from '../hooks/use-confirm-action'
 
 function message(error: unknown) {
   return error instanceof Error ? error.message : '操作失败，请重试。'
@@ -552,9 +555,6 @@ function SpaceActionDialog({
   const [name, setName] = useState('')
   const [version, setVersion] = useState('')
   const [target, setTarget] = useState('')
-  const [acknowledged, setAcknowledged] = useState(false)
-  const [sent, setSent] = useState(false)
-  const [removing, setRemoving] = useState<number | null>(null)
   const [username, setUsername] = useState('')
   const [access, setAccess] = useState<'editor' | 'viewer'>('editor')
   const [confirmation, setConfirmation] = useState('')
@@ -564,6 +564,18 @@ function SpaceActionDialog({
   const [notice, setNotice] = useState('')
   const space = settings?.spaces.find(
     (item) => item.id === spaceId && item.organizationId === detail.id,
+  )
+  const eligibleOrganizationMembers = detail.members.filter(
+    (member) =>
+      member.id !== space?.ownerUserId &&
+      (member.roles.includes('tester') ||
+        member.roles.includes('organization_admin')),
+  )
+  const transferTarget = eligibleOrganizationMembers.find(
+    (member) => String(member.id) === target,
+  )
+  const { confirmAction, confirmationDialog } = useConfirmAction(
+    `${detail.id}:${spaceId ?? 'new'}:${action}`,
   )
   useEffect(() => {
     let active = true
@@ -603,7 +615,11 @@ function SpaceActionDialog({
                   ? space.canTransferOwnership
                   : space.canManageSettings),
         )
-  async function mutate(operation: () => Promise<unknown>, close = false) {
+  async function mutate(
+    operation: () => Promise<unknown>,
+    close = false,
+    rethrowFailure = false,
+  ): Promise<boolean> {
     setBusy(true)
     setError('')
     setNotice('')
@@ -616,6 +632,7 @@ function SpaceActionDialog({
       return true
     } catch (failure) {
       setError(message(failure))
+      if (rethrowFailure) throw failure
       return false
     } finally {
       setBusy(false)
@@ -633,14 +650,37 @@ function SpaceActionDialog({
       if (action === 'delete')
         await mutate(() => deleteTestSpace(space.id, confirmation), true)
       else if (action === 'transfer') {
-        if (
-          acknowledged &&
-          target &&
-          (await mutate(() =>
-            requestTestSpaceTransfer(space.id, Number(target)),
-          ))
-        )
-          setSent(true)
+        if (target && transferTarget)
+          await confirmAction(
+            {
+              title: `立即转移测试空间“${space.name}”？`,
+              description: `所有权将立即转移给 ${transferTarget.displayName}，无需对方确认。${space.members.find((member) => member.userId === space.ownerUserId)?.displayName ?? '原所有者'}将保留可编辑权限。`,
+              confirmLabel: '立即转移所有权',
+              variant: 'default',
+              reconcile: async () => {
+                const next = await fetchTestSpaceSettings()
+                const transferred = next.spaces.find(
+                  (item) => item.id === space.id,
+                )?.ownerUserId === Number(target)
+                if (!transferred) return 'unchanged'
+                setSettings(next)
+                await onRefresh()
+                onClose()
+                return 'succeeded'
+              },
+            },
+            () =>
+              mutate(
+                () =>
+                  transferOrganizationTestSpaceOwnership(
+                    detail.id,
+                    space.id,
+                    Number(target),
+                  ),
+                true,
+                true,
+              ),
+          )
       } else
         await mutate(
           () =>
@@ -654,13 +694,14 @@ function SpaceActionDialog({
     }
   }
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !busy) onClose()
-      }}
-    >
-      <DialogContent className="organization-resource-dialog" fixedHeader>
+    <>
+      <Dialog
+        open
+        onOpenChange={(open) => {
+          if (!open && !busy) onClose()
+        }}
+      >
+        <DialogContent className="organization-resource-dialog" fixedHeader>
         <DialogHeader>
           <DialogTitle>{spaceTitles[action]}</DialogTitle>
           <DialogDescription>
@@ -678,23 +719,33 @@ function SpaceActionDialog({
           <p role="status">正在加载…</p>
         ) : action === 'members' && space ? (
           <>
-            <p>仅管理已加入当前空间的成员，所有者权限不可直接修改。</p>
+            <p>选择当前组织的有效测试成员加入空间或调整权限，所有者权限不可直接修改。</p>
             <form
               className="organization-resource-member-form"
               onSubmit={async (event) => {
                 event.preventDefault()
+                const selected = eligibleOrganizationMembers.find(
+                  (member) => String(member.id) === username,
+                )
+                const current = space.members.find(
+                  (member) =>
+                    member.userId === Number(username) &&
+                    member.status === 'active',
+                )
                 if (
                   canAct &&
-                  username &&
+                  selected &&
                   (await mutate(() =>
-                    updateTestSpaceMember(space.id, Number(username), access),
+                    current
+                      ? updateTestSpaceMember(space.id, selected.id, access)
+                      : addTestSpaceMember(space.id, selected.username, access),
                   ))
                 )
-                  setNotice('成员权限已保存。')
+                  setNotice(current ? '成员权限已保存。' : '成员已加入测试空间。')
               }}
             >
               <Label>
-                空间成员
+                组织成员
                 <Select
                   value={username}
                   onValueChange={(value) => {
@@ -706,28 +757,25 @@ function SpaceActionDialog({
                           ? 'viewer'
                           : 'editor',
                       )
-                      setRemoving(null)
                     }
                   }}
                 >
-                  <SelectTrigger aria-label="选择当前空间成员">
-                    <SelectValue placeholder="选择当前空间的成员" />
+                  <SelectTrigger aria-label="选择当前组织成员">
+                    <SelectValue placeholder="选择当前组织成员" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      {space.members
-                        .filter(
-                          (m) =>
-                            m.status === 'active' && m.accessLevel !== 'owner',
-                        )
-                        .map((m) => (
-                          <SelectItem key={m.userId} value={String(m.userId)}>
-                            {m.displayName}（{m.username}）
+                      {eligibleOrganizationMembers.map((member) => (
+                          <SelectItem key={member.id} value={String(member.id)}>
+                            {member.displayName}（{member.username}）
                           </SelectItem>
                         ))}
                     </SelectGroup>
                   </SelectContent>
                 </Select>
+                {eligibleOrganizationMembers.length === 0 ? (
+                  <small>组织内没有具备测试空间资格的其他成员。</small>
+                ) : null}
               </Label>
               <Label>
                 成员权限
@@ -784,48 +832,50 @@ function SpaceActionDialog({
                         >
                           管理
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          disabled={busy || !canAct}
-                          aria-label={`移除成员 ${member.displayName}`}
-                          onClick={() => setRemoving(member.userId)}
-                        >
-                          <Trash />
-                        </Button>
+                        <ConfirmActionDialog
+                          actionKey={`organization-test-space-member-remove:${detail.id}:${space.id}:${member.userId}`}
+                          title={`移除测试空间成员“${member.displayName}”？`}
+                          description={`该成员将失去“${space.name}”的测试空间访问权限，已有测试数据保留。`}
+                          confirmLabel="移除成员"
+                          onConfirm={async () => {
+                            const removed = await mutate(() =>
+                              removeTestSpaceMember(space.id, member.userId),
+                              false,
+                              true,
+                            )
+                            if (removed) setUsername('')
+                            return removed
+                          }}
+                          reconcile={async () => {
+                            const next = await fetchTestSpaceSettings()
+                            const current = next.spaces.find(
+                              (item) => item.id === space.id,
+                            )
+                            if (!current) return 'unknown'
+                            setSettings(next)
+                            await onRefresh()
+                            return current.members.some(
+                              (item) => item.userId === member.userId,
+                            )
+                              ? 'unchanged'
+                              : 'succeeded'
+                          }}
+                          trigger={(
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              disabled={busy || !canAct}
+                              aria-label={`移除成员 ${member.displayName}`}
+                            >
+                              <Trash />
+                            </Button>
+                          )}
+                        />
                       </div>
                     )}
                   </div>
                 ))}
             </div>
-            {removing ? (
-              <div role="alert">
-                <p>确认移除此成员？移除后将无法访问当前空间。</p>
-                <Button
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => setRemoving(null)}
-                >
-                  取消
-                </Button>
-                <Button
-                  variant="destructive"
-                  disabled={busy}
-                  onClick={async () => {
-                    if (
-                      await mutate(() =>
-                        removeTestSpaceMember(space.id, removing),
-                      )
-                    ) {
-                      setRemoving(null)
-                      setUsername('')
-                    }
-                  }}
-                >
-                  确认移除
-                </Button>
-              </div>
-            ) : null}
             <DialogFooter>
               <Button variant="outline" disabled={busy} onClick={onClose}>
                 关闭
@@ -864,57 +914,34 @@ function SpaceActionDialog({
               </Label>
             ) : null}
             {action === 'transfer' ? (
-              sent ? (
-                <p role="status">
-                  转移申请已发送，请接收人在测试工作台的通知中心确认，申请 72
-                  小时内有效。
-                </p>
-              ) : (
-                <>
-                  <Label>
-                    新所有者
-                    <Select
-                      value={target}
-                      onValueChange={(value) => {
-                        if (value) setTarget(value)
-                      }}
-                    >
-                      <SelectTrigger aria-label="空间新所有者">
-                        <SelectValue placeholder="选择当前空间成员" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {space?.members
-                            .filter(
-                              (m) =>
-                                m.status === 'active' &&
-                                m.userId !== space.ownerUserId,
-                            )
-                            .map((m) => (
-                              <SelectItem
-                                key={m.userId}
-                                value={String(m.userId)}
-                              >
-                                {m.displayName}（{m.username}）
-                              </SelectItem>
-                            ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Label>
-                  <p>
-                    接收人确认后生效，原所有者保留可编辑权限，组织归属与空间数据不变。
-                  </p>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={acknowledged}
-                      onChange={(e) => setAcknowledged(e.target.checked)}
-                    />{' '}
-                    我已确认接收人及所有权变更影响
-                  </label>
-                </>
-              )
+              <>
+                <Label>
+                  新所有者
+                  <Select
+                    value={target}
+                    onValueChange={(value) => {
+                      if (value) setTarget(value)
+                    }}
+                  >
+                    <SelectTrigger aria-label="空间新所有者">
+                      <SelectValue placeholder="选择当前组织成员" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {eligibleOrganizationMembers.map((member) => (
+                          <SelectItem key={member.id} value={String(member.id)}>
+                            {member.displayName}（{member.username}）
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  {eligibleOrganizationMembers.length === 0 ? (
+                    <small>组织内没有具备测试空间资格的其他成员。</small>
+                  ) : null}
+                </Label>
+                <p>确认后立即生效，无需接收人申请或确认。原所有者保留可编辑权限，组织归属与空间数据不变。</p>
+              </>
             ) : null}
             {action === 'delete' ? (
               <>
@@ -938,7 +965,7 @@ function SpaceActionDialog({
                 disabled={busy}
                 onClick={onClose}
               >
-                {sent ? '关闭' : '取消'}
+                取消
               </Button>
               <Button
                 type="submit"
@@ -949,7 +976,7 @@ function SpaceActionDialog({
                   (action === 'delete'
                     ? confirmation !== space?.name
                     : action === 'transfer'
-                      ? !target || !acknowledged || sent
+                      ? !transferTarget
                       : !name.trim() ||
                         ((action === 'create' || action === 'edit') &&
                           !version.trim()))
@@ -960,9 +987,7 @@ function SpaceActionDialog({
                   : action === 'create'
                     ? '创建测试空间'
                     : action === 'transfer'
-                      ? sent
-                        ? '已发送'
-                        : '发送转移申请'
+                      ? '确认转移'
                       : action === 'delete'
                         ? '确认删除'
                         : '保存修改'}
@@ -970,8 +995,10 @@ function SpaceActionDialog({
             </DialogFooter>
           </form>
         )}
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+      {confirmationDialog}
+    </>
   )
 }
 
