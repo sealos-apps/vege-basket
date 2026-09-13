@@ -135,23 +135,17 @@ export type OrganizationWeeklySummary = {
   weekStart: string
 }
 
-export type WeeklyReportSourceKind = 'delivery' | 'milestone' | 'todo'
-
-export type WeeklyReportSourceRef = {
-  id: number
-  kind: WeeklyReportSourceKind
-  projectId: number
-}
-
-export type WeeklyReportSourceCandidate = WeeklyReportSourceRef & {
-  date: string
-  projectName: string
-  relatedToMe: boolean
-  status: string
-  title: string
-}
+export type { WeeklyReportSourceKind, WeeklyReportSourceRef, WeeklyReportSourceCandidate } from '../shared/weekly-report-profile'
+import type { WeeklyReportProfile, WeeklyReportSourceKind, WeeklyReportSourceRef } from '../shared/weekly-report-profile'
+import type { WeeklyReportProgressSummary } from '../shared/weekly-report-document'
 
 export type PersonalWeeklyReport = {
+  activeProfile: WeeklyReportProfile
+  reportProfile: WeeklyReportProfile | null
+  allowedSourceKinds: WeeklyReportSourceKind[]
+  readOnlyReason: string | null
+  progressSummary: WeeklyReportProgressSummary | null
+  publishedProgressSummary: WeeklyReportProgressSummary | null
   content: string
   draftVersion: number
   publishedContent: string
@@ -164,6 +158,7 @@ export type PersonalWeeklyReport = {
 }
 
 export type PersonalWeeklyReportListItem = {
+  reportProfile: WeeklyReportProfile | null
   publishedRevision: number | null
   sourceCount: number
   state: Exclude<PersonalWeeklyReport['state'], 'empty'>
@@ -180,6 +175,8 @@ export type PersonalWeeklyReportList = {
 }
 
 export type WeeklyReportCollectionMember = {
+  reportProfile: WeeklyReportProfile | null
+  progressSummary: WeeklyReportProgressSummary | null
   content: string
   feishuBound: boolean
   memberName: string

@@ -527,12 +527,16 @@ type TestSpaceOrganizationGroup = {
 }
 
 export function TestWorkbench({
+  weeklyReportRef,
+  navigationBusy = false,
   accountMenu,
   currentUserId,
   projects,
   refreshToken = 0,
   workspaceContent,
 }: {
+  navigationBusy?: boolean
+  weeklyReportRef?: { current: WeeklyReportWorkbenchHandle | null }
   accountMenu: ReactNode
   currentUserId?: number
   projects: TestWorkbenchProjectOption[]
@@ -603,7 +607,12 @@ export function TestWorkbench({
   const acceptingInviteTokenRef = useRef('')
   const refreshInFlightRef = useRef(false)
   const viewStateReadyRef = useRef(false)
-  const weeklyReportWorkbenchRef = useRef<WeeklyReportWorkbenchHandle>(null)
+  const localWeeklyReportRef = useRef<WeeklyReportWorkbenchHandle>(null)
+  const weeklyReportWorkbenchRef = weeklyReportRef ?? localWeeklyReportRef
+  async function changeTab(next: WorkbenchTab) {
+    if (tab === 'weekly_report' && !(await weeklyReportWorkbenchRef.current?.prepareOrganizationChange() ?? true)) return
+    setTab(next)
+  }
 
   useEffect(() => {
     setSeenBugCommentIds(readSeenBugCommentIds(currentUserId))
@@ -1143,7 +1152,7 @@ export function TestWorkbench({
             type="button"
             aria-label="通知中心"
             title="通知中心"
-            onClick={() => setTab('notifications')}
+            onClick={() => void changeTab('notifications')}
           >
             <Bell size={18} weight="duotone" />
             {notificationUnreadCount > 0 ? <span className="sidebar-notifications-dot" aria-hidden /> : null}
@@ -1215,10 +1224,10 @@ export function TestWorkbench({
         </div>
           <div className="test-workbench-nav-main">
             <nav className="test-workbench-nav-actions" aria-label="测试工作台模块">
-              <button className={tab === 'cases' ? 'active' : ''} onClick={() => setTab('cases')}><ClipboardText /><span className="test-nav-label">用例管理</span><span className="test-nav-count">{cases.length}</span></button>
-              <button className={tab === 'plans' ? 'active' : ''} onClick={() => setTab('plans')}><ListChecks /><span className="test-nav-label">测试计划</span><span className="test-nav-count">{plans.length}</span></button>
-              <button className={tab === 'bugs' ? 'active' : ''} onClick={() => setTab('bugs')}><Bug /><span className="test-nav-label">Bug 追踪</span><span className="test-nav-count">{bugs.length}</span></button>
-              <button className={tab === 'weekly_report' ? 'active' : ''} onClick={() => setTab('weekly_report')}><FileText /><span className="test-nav-label">周报管理</span><span className="test-nav-count" /></button>
+              <button className={tab === 'cases' ? 'active' : ''} onClick={() => void changeTab('cases')}><ClipboardText /><span className="test-nav-label">用例管理</span><span className="test-nav-count">{cases.length}</span></button>
+              <button className={tab === 'plans' ? 'active' : ''} onClick={() => void changeTab('plans')}><ListChecks /><span className="test-nav-label">测试计划</span><span className="test-nav-count">{plans.length}</span></button>
+              <button className={tab === 'bugs' ? 'active' : ''} onClick={() => void changeTab('bugs')}><Bug /><span className="test-nav-label">Bug 追踪</span><span className="test-nav-count">{bugs.length}</span></button>
+              <button className={tab === 'weekly_report' ? 'active' : ''} onClick={() => void changeTab('weekly_report')}><FileText /><span className="test-nav-label">周报管理</span><span className="test-nav-count" /></button>
             </nav>
             {activeSpace && tab === 'cases' ? (
               <section className="test-subject-browser" aria-label="测试对象">
@@ -1293,6 +1302,8 @@ export function TestWorkbench({
           ) : tab === 'weekly_report' ? (
             <div className="test-workbench-weekly-report">
               <WeeklyReportWorkbench
+                navigationBusy={navigationBusy}
+                activeProfile="tester"
                 ref={weeklyReportWorkbenchRef}
                 embedded
                 organizationId={activeWeeklyReportOrganizationId}

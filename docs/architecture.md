@@ -301,10 +301,31 @@ Personal organization weekly reports use a separate draft-and-publish lifecycle.
 submitted report changes only its encrypted draft; organization management continues to read the
 latest immutable submitted revision until the member confirms another submission. AI generation
 uses only organization-scoped sources the current user may read and never submits a report
-automatically. A genuinely empty editor presents a shared two-item Markdown template; each item has
-the ordered `本周进展`, `风险问题`, and `下周计划` fields and is not persisted until the user changes
-the draft. AI generation uses the same item-based contract. Selected work sources insert at the active editor selection;
-when the selection is inside a heading, insertion occurs immediately below that heading.
+automatically. New reports fix a `developer` or `tester` profile on the first actual save,
+with one report per organization, user, and week. The stepwise form stores a versioned Markdown
+string in the existing encrypted content columns: items contain multiple named tasks, progress
+notes, and nullable draft percentages. Integer percentages derive task state; submitted tasks must
+have a name, note, and 0–100 percentage. Personal and organization progress sums every task before
+dividing by the task count (including zero), never averages item/member averages. This progress is
+independent of real todo/Bug state and test execution/pass rates. Administrators read only immutable
+submitted revisions and group them by the saved profile. Blank placeholder rows are omitted from
+published content. Old Markdown stays editable as raw content; strictly recognizable legacy templates
+may be explicitly previewed and converted, with cancellation before the profile is fixed. Existing
+submitted revisions remain unchanged. The former unversioned organization report PUT returns 410.
+
+`shared/weekly-report-document.ts` owns lossless field quoting, parsing, validation, and progress;
+`shared/weekly-report-profile.ts` owns persona/source contracts. `server/weekly-report-sources.ts`
+filters authorization, Shanghai week intervals `[start, nextStart)`, and source eligibility before
+candidate limits. Testers receive only authorized test plans and Bugs; developers receive project
+work and their assigned Bugs (plus the existing organization-admin read scope). Bug candidates must
+currently be `in_progress` or `closed`, supported by an overlapping repair interval or latest closure
+within the report period. Test-plan statistics count the user's retained latest executed case records
+within the period, not an event history. Candidate limits are explicit; submitted references are checked
+by ID independently of those limits. New references and AI inputs require period eligibility; existing
+draft references retain text while access is rechecked, and submission revalidates all new-format refs.
+Canonical Bug/plan rows are locked before the final eligibility check and revision write. Task/source
+edits freeze while leaving, generating, or submitting; failed saves retain the editor and draft.
+
 Organization collection and reminder actions require both owner/admin organization
 membership and the additive `organization_admin` role.
 The membership row also stores the organization's long-lived weekly-report assignment. Rule

@@ -1,3 +1,4 @@
+import { weeklyReportProfiles, type WeeklyReportProfile } from '../shared/weekly-report-profile.ts'
 import { shareOrganizationTestEnvironments } from './test-environment-sharing.ts'
 import { lockTransferProject, canCompleteProjectTransfer } from './project-transfer.ts'
 import crypto from 'node:crypto'
@@ -2917,61 +2918,10 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     response.json(await getOrganizationDetail(organizationId!, session.userId))
   }))
 
+  // All writes use the versioned draft/submit endpoints, including profile validation.
   router.put('/organizations/:organizationId/weekly-reports/:weekStart', asyncRoute(async (request, response) => {
-    const session = await requireSession(request, response)
-    if (!session) return
-    const organizationId = positiveId(request.params.organizationId)
-    if (!organizationId) {
-      response.status(400).json({ error: 'Valid organization is required' })
-      return
-    }
-    const weekStart = normalizeOrganizationWeekStart(
-      request.params.weekStart,
-      await getOrganizationWeekStartsOn(organizationId),
-    )
-    const content = String(request.body.content ?? '').trim().slice(0, 12_000)
-    const status = request.body.status === 'submitted' ? 'submitted' : 'draft'
-    if (!weekStart || (status === 'submitted' && !content)) {
-      response.status(400).json({ error: 'Valid week and report content are required' })
-      return
-    }
-    const client = await pool.connect()
-    try {
-      await client.query('begin')
-      const membership = await client.query<{ weekly_report_required: boolean }>(
-        `select weekly_report_required
-         from organization_memberships
-         where organization_id = $1 and user_id = $2 and status = 'active'
-         for update`,
-        [organizationId, session.userId],
-      )
-      if (!membership.rows[0]) {
-        await client.query('rollback')
-        response.status(404).json({ error: 'Organization not found' })
-        return
-      }
-      if (!membership.rows[0].weekly_report_required) {
-        await client.query('rollback')
-        response.status(403).json({ error: '当前无需填写周报' })
-        return
-      }
-      await client.query(
-        `insert into organization_weekly_reports
-          (organization_id, user_id, week_start, content, status, submitted_at)
-         values ($1, $2, $3, $4, $5, case when $5 = 'submitted' then now() else null end)
-         on conflict (organization_id, user_id, week_start) do update
-           set content = excluded.content, status = excluded.status, updated_at = now(),
-             submitted_at = case when excluded.status = 'submitted' then now() else null end`,
-        [organizationId, session.userId, weekStart, encryptText(content), status],
-      )
-      await client.query('commit')
-    } catch (error) {
-      await client.query('rollback')
-      throw error
-    } finally {
-      client.release()
-    }
-    response.json(await getOrganizationDetail(organizationId, session.userId))
+    if (!await requireSession(request, response)) return
+    response.status(410).json({ error: '旧周报写入接口已停用，请通过周报工作台保存草稿并提交' })
   }))
 
   router.post('/organizations/:organizationId/weekly-summaries/:weekStart', asyncRoute(async (request, response) => {
@@ -2989,11 +2939,14 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     }
     const reports = await query<{
       content: string
+      report_profile: WeeklyReportProfile | null
+      revision_number: number
       display_name: string
       email: string
     }>(
-      `select r.content, u.email, u.display_name
+      `select revision.content, revision.report_profile, revision.revision_number, u.email, u.display_name
        from organization_weekly_reports r join users u on u.id = r.user_id
+       join organization_weekly_report_revisions revision on revision.id = r.published_revision_id and revision.report_id = r.id
        join organization_memberships membership
          on membership.organization_id = r.organization_id
         and membership.user_id = r.user_id
@@ -3008,8 +2961,8 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       response.status(409).json({ error: 'No submitted weekly reports are available for this week' })
       return
     }
-    const source = reports.rows.map((report) => (
-      `成员：${displayName(report)}\n周报：\n${decryptText(report.content)}`
+    const source = '分别整理开发进展、测试结果、共同风险和下周重点，保留来源姓名及修订号。只使用已提交事实，不把可能重复的用例数叠加，不将任务进度或通过率推断为版本可发布。每条总结标注对应来源，不虚构百分比。\n' + reports.rows.map((report) => (
+      `来源：${displayName(report)} · 第 ${report.revision_number} 版 · ${report.report_profile ? weeklyReportProfiles[report.report_profile].label : '历史周报'}\n周报：\n${decryptText(report.content)}`
     )).join('\n\n---\n\n')
     const generated = await dependencies.generateWeeklySummary(session.userId, source)
     if (!generated.message) {

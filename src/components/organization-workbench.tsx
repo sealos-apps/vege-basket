@@ -1,3 +1,6 @@
+import { WeeklyReportProgress, WeeklyReportReading } from './weekly-report-form'
+import { combineWeeklyReportProgress, formatWeeklyReportPercent } from '../../shared/weekly-report-document'
+import { weeklyReportProfiles, type WeeklyReportProfile } from '../../shared/weekly-report-profile'
 import { OrganizationTestEnvironmentPanel } from './organization-test-environments'
 import { ConfirmActionDialog } from './confirm-action-dialog'
 import { useConfirmAction } from '../hooks/use-confirm-action'
@@ -367,6 +370,9 @@ export function OrganizationWorkbench({
   const [newProjectName, setNewProjectName] = useState('')
   const [newProjectTags, setNewProjectTags] = useState('')
   const [topbarActionHost, setTopbarActionHost] = useState<HTMLElement | null>(null)
+  const [reportMemberQuery, setReportMemberQuery] = useState('')
+  const [reportMemberRole, setReportMemberRole] = useState<WeeklyReportProfile | 'all'>('all')
+  const [reportMemberStatus, setReportMemberStatus] = useState('all')
   const [weeklyCollection, setWeeklyCollection] = useState<WeeklyReportCollection | null>(null)
   const [weeklyCollectionLoading, setWeeklyCollectionLoading] = useState(false)
   const [weeklyCollectionRefresh, setWeeklyCollectionRefresh] = useState(0)
@@ -1523,14 +1529,18 @@ export function OrganizationWorkbench({
                     )}
                   ><PaperPlaneTilt size={16} /> 提醒未提交成员</Button>
                 </div>
+                <div className="wr-org-progress">{(['all', 'developer', 'tester'] as const).map(profile => <WeeklyReportProgress key={profile} title={profile === 'all' ? '已提交任务平均进度' : `${profile === 'developer' ? '开发' : '测试'}任务平均进度`} summary={combineWeeklyReportProgress((weeklyCollection?.members ?? []).filter(member => member.revision != null && (profile === 'all' || member.reportProfile === profile)).map(member => member.progressSummary))} />)}</div>
+                <p className="wr-source-note">仅统计已提交任务记录；未提交成员及个人草稿不计入。已记录进度 {weeklyCollection?.members.filter(member => member.revision && member.progressSummary).length ?? 0} / {weeklyCollection?.members.filter(member => member.revision).length ?? 0} 份提交周报；历史无进度报告不纳入均值。各组按全部任务等权计算，列表筛选不改变组织统计范围。</p>
+                <div className="wr-org-filters"><Input aria-label="搜索周报成员" placeholder="搜索成员" value={reportMemberQuery} onChange={e => setReportMemberQuery(e.target.value)} /><select aria-label="筛选周报身份" value={reportMemberRole} onChange={e => setReportMemberRole(e.target.value as typeof reportMemberRole)}><option value="all">全部身份</option><option value="developer">开发</option><option value="tester">测试</option></select><select aria-label="筛选周报提交状态" value={reportMemberStatus} onChange={e => setReportMemberStatus(e.target.value)}><option value="all">全部提交状态</option><option value="submitted">已有提交版</option><option value="pending">尚未提交</option></select></div>
                 <div className="organization-weekly-collection">
                   {weeklyCollectionLoading && !weeklyCollection ? <EmptyRow text="正在加载周报收集状态..." /> : null}
-                  {weeklyCollection?.members.map((member) => (
+                  {weeklyCollection?.members.filter(member => member.memberName.includes(reportMemberQuery) && (reportMemberRole === 'all' || member.reportProfile === reportMemberRole) && (reportMemberStatus === 'all' || (reportMemberStatus === 'submitted' ? member.revision !== null : member.revision === null))).map((member) => (
                     <details className="organization-weekly-member" key={member.userId}>
                       <summary>
                         <span>
                           <UserName departedUserIds={detail.departedUserIds} name={member.memberName} userId={member.userId} />
-                          <small>{member.submittedAt ? `最近提交 ${formatDateTime(member.submittedAt)}` : '尚未提交本周周报'}</small>
+                          <small>{member.reportProfile ? weeklyReportProfiles[member.reportProfile].label : '历史或尚未创建'} · {member.submittedAt ? `最近提交 ${formatDateTime(member.submittedAt)}` : '尚未提交本周周报'}</small>
+                          <small>任务平均进度 {formatWeeklyReportPercent(member.progressSummary?.averagePercent ?? null)}{member.progressSummary ? ` · ${member.progressSummary.taskCount} 项任务` : ''}</small>
                         </span>
                         <span className={`organization-weekly-state ${member.state}`}>
                           {weeklyReportStateLabel[member.state]}
@@ -1555,7 +1565,8 @@ export function OrganizationWorkbench({
                       </summary>
                       {member.content ? (
                         <div className="organization-weekly-content">
-                          <MarkdownPreview content={member.content} />
+                          {member.state === 'modified' ? <p className="wr-source-note">该成员有未提交修改，以下仍为上次提交的内容和进度。</p> : null}
+                          <WeeklyReportReading content={member.content} />
                         </div>
                       ) : <EmptyRow text="该成员还没有可查看的提交版本" />}
                     </details>

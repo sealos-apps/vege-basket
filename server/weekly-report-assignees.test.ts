@@ -89,10 +89,10 @@ test('personal weekly-report mutations require a current assignee before writing
     generateSource.indexOf('requireWeeklyReportAssignee')
       < generateSource.indexOf('dependencies.generateWeeklyReport'),
   )
-  assert.match(
-    organizationsSource,
-    /router\.put\('\/organizations\/:organizationId\/weekly-reports\/:weekStart'[\s\S]+if \(!membership\.rows\[0\]\.weekly_report_required\)/u,
-  )
+  const legacyRoute = organizationsSource.slice(organizationsSource.indexOf("router.put('/organizations/:organizationId/weekly-reports/:weekStart'"), organizationsSource.indexOf("router.post('/organizations/:organizationId/weekly-summaries"))
+  assert.match(legacyRoute, /requireSession/u)
+  assert.match(legacyRoute, /response.status\(410\)/u)
+  assert.doesNotMatch(legacyRoute, /insert into|update organization_weekly_reports/u)
 })
 
 test('collection, reminders, and organization summaries use only current assignees', () => {
@@ -137,7 +137,8 @@ test('the client saves assignees and keeps non-assignees on a read-only history 
   assert.match(organizationWorkbenchSource, /weeklyReportAssigneeUserIds/u)
   assert.match(organizationWorkbenchSource, /setWeeklyReportAssigneeUserIds\(\[\]\)/u)
   assert.match(weeklyReportWorkbenchSource, /detail\.canWriteWeeklyReport/u)
-  assert.match(weeklyReportWorkbenchSource, /readOnly=\{!canWriteWeeklyReport\}/u)
+  assert.match(weeklyReportWorkbenchSource, /canEdit = Boolean\(canWriteWeeklyReport && !report\?\.readOnlyReason\)/u)
+  assert.match(weeklyReportWorkbenchSource, /readOnly=\{!canEdit \|\| busy\}/u)
   assert.match(weeklyReportWorkbenchSource, /当前无需填写本组织周报/u)
 })
 
