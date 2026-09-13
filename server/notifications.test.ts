@@ -83,7 +83,7 @@ test('suppresses notifications caused by the recipient own actions', () => {
 
 test('in-app project invitations keep accept and ignore actions in the notification feed', () => {
   assert.match(appSource, /const result = await acceptProjectInvitation\(membershipId\)/u)
-  assert.match(appSource, /const result = await declineProjectInvitation\(membershipId\)/u)
+  assert.match(appSource, /reconcileAction\(\(\) => declineProjectInvitation\(membershipId\)/u)
   assert.match(appSource, /onAcceptInvitation=\{acceptInvitation\}/u)
   assert.match(appSource, /onIgnoreInvitation=\{ignoreInvitation\}/u)
   assert.match(appSource, /inviteId: invite\.id/u)

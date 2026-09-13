@@ -82,6 +82,9 @@ import {
   UserSwitch,
   UserPlus,
 } from '@phosphor-icons/react'
+import { ConfirmActionDialog as ConfirmDialog } from './components/confirm-action-dialog'
+import { useConfirmAction } from './hooks/use-confirm-action'
+import { reconcileAction } from './confirmed-action'
 import { JournalDatePicker } from '@/components/journal-date-picker'
 import { AccountSettingsDialog } from '@/components/account-settings-dialog'
 import { Badge } from '@/components/ui/badge'
@@ -1094,87 +1097,46 @@ const todoConfirmationCopy: Record<Todo['confirmationStatus'], string> = {
 
 type TodoAcceptanceDecision = 'passed' | 'failed'
 
-function TodoAcceptanceDialog({
-  open,
-  onOpenChange,
-  onSubmit,
-}: {
+function TodoAcceptanceDialog({ open, onOpenChange, onSubmit, title }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (decision: TodoAcceptanceDecision, note: string) => Promise<boolean> | boolean | void
+  onSubmit: (decision: TodoAcceptanceDecision, note: string) => Promise<boolean>
+  title: string
 }) {
   const [decision, setDecision] = useState<TodoAcceptanceDecision>('passed')
   const [note, setNote] = useState('')
-  const normalizedNote = note.trim()
-
-  useEffect(() => {
-    if (open) {
-      setDecision('passed')
-      setNote('')
-    }
-  }, [open])
-
-  async function submit() {
-    if (decision === 'failed' && !normalizedNote) return
-    const saved = await onSubmit(decision, normalizedNote)
-    if (saved !== false) onOpenChange(false)
-  }
-
+  useEffect(() => { if (open) { setDecision('passed'); setNote('') } }, [open])
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>验收待办</DialogTitle>
-          <DialogDescription>请选择验收结果，并补充验收备注。</DialogDescription>
-        </DialogHeader>
-        <div className="todo-acceptance-decision" role="radiogroup" aria-label="验收结果">
-          {([
-            ['passed', '通过'],
-            ['failed', '不通过'],
-          ] as const).map(([value, label]) => (
-            <label
-              className={decision === value ? 'todo-acceptance-choice is-selected' : 'todo-acceptance-choice'}
-              key={value}
-            >
-              <input
-                checked={decision === value}
-                name="todo-acceptance-decision"
-                type="radio"
-                value={value}
-                onChange={() => setDecision(value)}
-              />
-              <span>{label}</span>
-            </label>
-          ))}
-        </div>
-        <Label className="todo-acceptance-note-field">
-          验收备注{decision === 'failed' ? '（必填）' : '（可选）'}
-          <Textarea
-            autoFocus={decision === 'failed'}
-            placeholder={decision === 'failed' ? '请填写未通过原因...' : '可补充验收说明...'}
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-          />
-        </Label>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            取消
-          </Button>
-          <Button
-            className={decision === 'failed' ? 'destructive-button' : 'solid-button'}
-            disabled={decision === 'failed' && !normalizedNote}
-            type="button"
-            onClick={() => { void submit() }}
-          >
-            提交验收
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={`验收待办「${title}」`}
+      description={decision === 'passed'
+        ? '验收通过后，待办将完成并退出未完成列表。可在项目待办的已完成筛选中查看。'
+        : '验收不通过后，待办保持未完成，并记录未通过原因。可在原项目待办中查看。'}
+      confirmLabel={decision === 'passed' ? '确认验收通过' : '确认验收不通过'}
+      variant={decision === 'passed' ? 'default' : 'destructive'}
+      confirmDisabled={decision === 'failed' && !note.trim()}
+      onConfirm={() => onSubmit(decision, note.trim())}
+    >
+      <div className="todo-acceptance-decision" role="radiogroup" aria-label="验收结果">
+        {([['passed', '通过'], ['failed', '不通过']] as const).map(([value, label]) => (
+          <label className={decision === value ? 'todo-acceptance-choice is-selected' : 'todo-acceptance-choice'} key={value}>
+            <input checked={decision === value} name="todo-acceptance-decision" type="radio" value={value} onChange={() => setDecision(value)} />
+            <span>{label}</span>
+          </label>
+        ))}
+      </div>
+      <Label className="todo-acceptance-note-field">
+        验收备注{decision === 'failed' ? '（必填）' : '（可选）'}
+        <Textarea placeholder={decision === 'failed' ? '请填写未通过原因...' : '可补充验收说明...'} value={note} onChange={(event) => setNote(event.target.value)} />
+      </Label>
+    </ConfirmDialog>
   )
 }
 
 function TodoConfirmSelect({
+  title,
   done,
   status,
   disabled = false,
@@ -1182,18 +1144,21 @@ function TodoConfirmSelect({
   onReject,
   onRequestAcceptance,
 }: {
+  title: string
   done: boolean
   status: Todo['confirmationStatus']
   disabled?: boolean
-  onChange: (status: Todo['confirmationStatus']) => void
-  onReject: (reason: string) => void
+  onChange: (status: Todo['confirmationStatus']) => Promise<boolean>
+  onReject: (reason: string) => Promise<boolean>
   onRequestAcceptance: () => void
 }) {
+  const { confirmAction, confirmationDialog } = useConfirmAction(title)
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const normalizedRejectReason = rejectReason.trim()
 
   function handleStatusChange(nextStatus: Todo['confirmationStatus']) {
+    if (nextStatus === status) return
     if (nextStatus === 'rejected') {
       setRejectReason('')
       setRejectDialogOpen(true)
@@ -1203,7 +1168,12 @@ function TodoConfirmSelect({
       onRequestAcceptance()
       return
     }
-    onChange(nextStatus)
+    if (nextStatus === 'pending_review') {
+      void confirmAction({
+        title: `提交验收“${title}”？`, description: '待办将进入待验收状态，由验收人继续处理，可在原项目按待验收查看。',
+        confirmLabel: '提交验收', variant: 'default',
+      }, () => onChange(nextStatus))
+    } else void onChange(nextStatus)
   }
 
   if (done) {
@@ -1231,39 +1201,20 @@ function TodoConfirmSelect({
           <SelectItem value="acceptance_failed">{todoConfirmationCopy.acceptance_failed}</SelectItem>
         </SelectContent>
       </Select>
-      <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>填写驳回理由</DialogTitle>
-            <DialogDescription>需求不合理时可以驳回，请说明驳回原因。</DialogDescription>
-          </DialogHeader>
-          <Label className="todo-reject-reason-field">
-            驳回理由（必填）
-            <Textarea
-              autoFocus
-              placeholder="请填写驳回原因..."
-              value={rejectReason}
-              onChange={(event) => setRejectReason(event.target.value)}
-            />
-          </Label>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setRejectDialogOpen(false)}>
-              取消
-            </Button>
-            <Button
-              className="destructive-button"
-              disabled={!normalizedRejectReason}
-              type="button"
-              onClick={() => {
-                onReject(normalizedRejectReason)
-                setRejectDialogOpen(false)
-              }}
-            >
-              确认驳回
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {confirmationDialog}
+      <ConfirmDialog
+        open={rejectDialogOpen}
+        onOpenChange={setRejectDialogOpen}
+        title={`驳回待办「${title}」`}
+        description="驳回后，待办将退出我的待办。可在原项目待办中按已驳回查看。"
+        confirmLabel="确认驳回"
+        confirmDisabled={!normalizedRejectReason}
+        onConfirm={() => onReject(normalizedRejectReason)}
+      >
+        <Label>驳回理由（必填）
+          <Textarea placeholder="请填写驳回原因..." value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} />
+        </Label>
+      </ConfirmDialog>
     </>
   )
 }
@@ -1853,6 +1804,10 @@ function App() {
   const [workspaceRefreshVersion, setWorkspaceRefreshVersion] = useState(0)
   const [organizationRefreshVersion, setOrganizationRefreshVersion] = useState(0)
   const [workspaceError, setWorkspaceError] = useState('')
+  const confirmationScope = `${authUser?.id}:${selectedOrganizationId}:${selectedProjectId}:${view}`
+  const { confirmAction, confirmationDialog } = useConfirmAction(confirmationScope)
+  const confirmationScopeRef = useRef(confirmationScope)
+  useEffect(() => { confirmationScopeRef.current = confirmationScope }, [confirmationScope])
   const [projectDetailTab, setProjectDetailTab] = useState<ProjectDetailTab>('journal')
   const [journalDraft, setJournalDraft] = useState('')
   const [inboxDraft, setInboxDraft] = useState('')
@@ -3190,7 +3145,7 @@ function App() {
   }
 
   async function disconnectFeishuBinding() {
-    const result = await disconnectFeishuAccount()
+    const result = await reconcileAction(disconnectFeishuAccount, fetchCurrentUser, (data) => !data.user.feishuLinked)
     setAuthUser(result.user)
     setWorkspaceError('')
     return result.user
@@ -3211,6 +3166,21 @@ function App() {
         : '操作没有写入数据库，请确认后端服务和数据库连接正常。')
       return null
     }
+  }
+
+  async function runConfirmedMutation(
+    operation: () => Promise<WorkspaceData>,
+    matches: (data: WorkspaceData) => boolean = () => false,
+  ) {
+    const scope = confirmationScope
+    workspaceMutationEpochRef.current += 1
+    setWorkspaceError('')
+    const data = await reconcileAction(operation, fetchWorkspace, matches)
+    if (confirmationScopeRef.current !== scope) return false
+    applyWorkspace(data)
+    setWorkspaceRefreshVersion((current) => current + 1)
+    void refreshNotifications()
+    return true
   }
 
   function setOrganizationContextForProject(projectId: number) {
@@ -3396,12 +3366,26 @@ function App() {
   }
 
   async function updateProjectStatus(projectId: number, status: ProjectStatus) {
+    const project = projects.find((item) => item.id === projectId)
+    if (!project || project.status === status) return
+    if (status === 'completed' || status === 'archived') {
+      await confirmAction({
+        title: `确认${status === 'archived' ? '归档' : '结束'}项目？`,
+        description: `「${project.name}」将变为${statusCopy[status]}。项目内容保留，可在项目篮子选择全部或对应状态查看。`,
+        confirmLabel: status === 'archived' ? '确认归档' : '确认结束', variant: 'default',
+      }, () => runConfirmedMutation(() => updateProject(projectId, { status }),
+        (data) => data.projects.some((item) => item.id === projectId && item.status === status)))
+      return
+    }
     await runMutation(() => updateProject(projectId, { status }))
   }
 
   async function deleteProject(projectId: number) {
     const nextProject = scopedProjects.find((project) => project.id !== projectId)
-    await runMutation(() => removeProject(projectId))
+    const saved = await runConfirmedMutation(() => removeProject(projectId),
+      (data) => !data.projects.some((item) => item.id === projectId))
+    if (!saved) return false
+    if (selectedProjectId !== projectId) return true
     clearTodoCreateDraft(projectId, authUser?.id)
     setSelectedProjectId(nextProject?.id ?? 0)
     setJournalDraft('')
@@ -3414,10 +3398,12 @@ function App() {
     setTodoReviewerUserId(null)
     setTodoModuleId(null)
     setView('project')
+    return true
   }
 
   async function deleteJournalEntry(projectId: number, entryId: number) {
-    await runMutation(() => removeJournalEntry(projectId, entryId))
+    return runConfirmedMutation(() => removeJournalEntry(projectId, entryId),
+      (data) => data.projects.some((item) => item.id === projectId && !item.journals.some((entry) => entry.id === entryId)))
   }
 
   async function editJournalEntry(projectId: number, entryId: number, content: string) {
@@ -3436,11 +3422,18 @@ function App() {
   }
 
   async function toggleJournalRisk(projectId: number, entryId: number, isRiskEntry: boolean) {
-    await runMutation(() =>
-      isRiskEntry
-        ? resolveRiskFromJournal(projectId, entryId)
-        : createRiskFromJournal(projectId, entryId),
-    )
+    if (!isRiskEntry) {
+      await runMutation(() => createRiskFromJournal(projectId, entryId))
+      return
+    }
+    const project = projects.find((item) => item.id === projectId)
+    const entry = project?.journals.find((item) => item.id === entryId)
+    await confirmAction({
+      title: '确认取消风险标记？',
+      description: `「${project?.name}」的日记「${entry?.content.slice(0, 80) ?? entryId}」将退出当前风险列表，原日记仍保留。`,
+      confirmLabel: '取消风险标记', variant: 'default',
+    }, () => runConfirmedMutation(() => resolveRiskFromJournal(projectId, entryId),
+      (data) => data.projects.some((item) => item.id === projectId && !item.riskJournalEntryIds.includes(entryId))))
   }
 
   async function addInboxItem() {
@@ -3471,7 +3464,14 @@ function App() {
   }
 
   async function deleteMember(projectId: number, membershipId: number) {
-    await runMutation(() => removeProjectMember(projectId, membershipId))
+    const member = memberships.find((item) => item.id === membershipId)
+    if (!member) return false
+    return confirmAction({
+      title: member.status === 'pending' ? '确认撤回邀请？' : '确认移除项目成员？',
+      description: `「${member.memberName || member.invitedUsername}」${member.status === 'pending' ? '的待接受邀请将被撤回' : '将失去当前项目的成员权限，相关待办负责人、验收人、关注关系和交付指派将按项目规则清理'}。当前项目的旧邀请链接也会失效。`,
+      confirmLabel: member.status === 'pending' ? '撤回邀请' : '移除成员',
+    }, () => runConfirmedMutation(() => removeProjectMember(projectId, membershipId),
+      (data) => !data.memberships.some((item) => item.id === membershipId)))
   }
 
   async function saveProjectFeishuSettings(projectId: number, payload: {
@@ -3528,19 +3528,30 @@ function App() {
   }
 
   async function deleteProjectModule(projectId: number, moduleId: number) {
-    const data = await runMutation(() => removeProjectModule(projectId, moduleId))
-    if (!data) return
+    const saved = await runConfirmedMutation(() => removeProjectModule(projectId, moduleId),
+      (data) => data.projects.some((item) => item.id === projectId && !item.modules.some((module) => module.id === moduleId)))
+    if (!saved) return false
     if (todoModuleId === moduleId) {
       setTodoModuleId(null)
     }
+    return true
   }
 
   async function archiveInboxItem(item: InboxItem, projectId: number) {
-    await runMutation(() => archiveDraft(item.id, projectId))
+    const project = projects.find((candidate) => candidate.id === projectId)
+    if (!project) return false
+    return confirmAction({
+      actionKey: `archive-draft:${authUser?.id}:${item.id}`,
+      title: item.itemType === 'todo' ? '确认从草稿创建待办？' : '确认归档草稿？',
+      description: `「${item.content.slice(0, 100)}」将移入「${project.name}」的${item.itemType === 'todo' ? '待办' : '日记'}，并退出草稿箱。`,
+      confirmLabel: item.itemType === 'todo' ? '确认创建待办' : '确认归档', variant: 'default',
+    }, () => runConfirmedMutation(() => archiveDraft(item.id, projectId),
+      (data) => !data.inbox.some((draft) => draft.id === item.id)))
   }
 
   async function deleteInboxItem(itemId: number) {
-    await runMutation(() => removeDraft(itemId))
+    return runConfirmedMutation(() => removeDraft(itemId),
+      (data) => !data.inbox.some((item) => item.id === itemId))
   }
 
   async function addTodo(projectId?: number) {
@@ -3594,6 +3605,11 @@ function App() {
   }
 
   async function updateTodoDetails(todoId: number, payload: TodoUpdatePayload) {
+    if (payload.done === true || (payload.confirmationStatus !== undefined && payload.confirmationStatus !== 'confirmed')) {
+      return runConfirmedMutation(() => updateTodo(todoId, payload), (data) => data.todos.some((todo) =>
+        todo.id === todoId && !payload.acceptanceNote && !payload.rejectionReason && (payload.done === undefined || todo.done === payload.done) &&
+        (payload.confirmationStatus === undefined || todo.confirmationStatus === payload.confirmationStatus)))
+    }
     return Boolean(await runMutation(() => updateTodo(todoId, payload)))
   }
 
@@ -3618,15 +3634,22 @@ function App() {
   }
 
   async function ignoreInvitation(membershipId: number) {
-    try {
-      const result = await declineProjectInvitation(membershipId)
+    const invitation = notifications.invites.find((item) => item.id === membershipId)
+    await confirmAction({
+      actionKey: `decline-project:${authUser?.id}:${membershipId}`,
+      title: '确认忽略项目邀请？',
+      description: `“${invitation?.projectName ?? `项目邀请 #${membershipId}`}”的邀请将退出待处理列表，你不会因此加入项目。`,
+      confirmLabel: '忽略邀请',
+    }, async () => {
+      const result = await reconcileAction(() => declineProjectInvitation(membershipId),
+        async () => ({ workspace: await fetchWorkspace(), ...await fetchNotifications() }),
+        (data) => !data.notifications.invites.some((item) => item.id === membershipId))
+      if (confirmationScopeRef.current !== confirmationScope) return false
       applyWorkspace(result.workspace)
       setNotifications(result.notifications)
       setWorkspaceRefreshVersion((current) => current + 1)
-      setWorkspaceError('')
-    } catch {
-      setWorkspaceError('邀请处理失败，请稍后再试。')
-    }
+      return true
+    })
   }
 
   async function respondProjectTransfer(transferId: number, action: 'accept' | 'decline') {
@@ -3642,7 +3665,8 @@ function App() {
   }
 
   async function deleteTodo(todoId: number) {
-    await runMutation(() => removeTodo(todoId))
+    return runConfirmedMutation(() => removeTodo(todoId),
+      (data) => !data.todos.some((item) => item.id === todoId))
   }
 
   async function generateSummary(projectId: number, type: SummaryPeriodType) {
@@ -3682,19 +3706,18 @@ function App() {
 
   async function completeInstallEvent(eventId: number) {
     if (!selectedProject) return false
-    try {
-      const timeline = await completeProjectPackageEvent(selectedProject.id, eventId)
-      setProjectPackageTimelines((current) => ({
-        ...current,
-        [selectedProject.id]: timeline,
-      }))
-      await refreshNotifications()
-      setWorkspaceError('')
-      return true
-    } catch {
-      setWorkspaceError('交付事件状态更新失败，请稍后再试。')
-      return false
-    }
+    setWorkspaceError('')
+    const timeline = await reconcileAction(
+      () => completeProjectPackageEvent(selectedProject.id, eventId),
+      () => fetchProjectPackageTimeline(selectedProject.id),
+      (data) => data.events.some((event) => event.id === eventId && event.status === 'delivered'),
+    )
+    if (confirmationScopeRef.current !== confirmationScope) return false
+    setProjectPackageTimelines((current) => ({ ...current, [selectedProject.id]: timeline }))
+    // The mutation is committed; refresh errors must not invite another write.
+    try { const data = await fetchWorkspace(); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
+    void refreshNotifications()
+    return true
   }
 
   async function addInstallEventComment(eventId: number, content: string) {
@@ -3731,40 +3754,34 @@ function App() {
 
   async function deleteInstallEventComment(eventId: number, commentId: number) {
     if (!selectedProject) return false
-    try {
-      const timeline = await deletePackageEventComment(selectedProject.id, eventId, commentId)
-      setProjectPackageTimelines((current) => ({
-        ...current,
-        [selectedProject.id]: timeline,
-      }))
-      setWorkspaceError('')
-      return true
-    } catch {
-      setWorkspaceError('交付反馈删除失败，请稍后再试。')
-      return false
-    }
+    setWorkspaceError('')
+    const timeline = await reconcileAction(
+      () => deletePackageEventComment(selectedProject.id, eventId, commentId),
+      () => fetchProjectPackageTimeline(selectedProject.id),
+      (data) => data.events.some((event) => event.id === eventId && !event.comments.some((comment) => comment.id === commentId)),
+    )
+    if (confirmationScopeRef.current !== confirmationScope) return false
+    setProjectPackageTimelines((current) => ({ ...current, [selectedProject.id]: timeline }))
+    // The mutation is committed; refresh errors must not invite another write.
+    try { const data = await fetchWorkspace(); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
+    void refreshNotifications()
+    return true
   }
 
   async function deleteInstallEvent(eventId: number) {
     if (!selectedProject) return false
-    try {
-      const timeline = await removeProjectPackageEvent(selectedProject.id, eventId)
-      setProjectPackageTimelines((current) => ({
-        ...current,
-        [selectedProject.id]: timeline,
-      }))
-      try {
-        const workspace = await fetchWorkspace()
-        applyWorkspace(workspace)
-      } catch {
-        // The event is already deleted, so keep the timeline result if workspace refresh fails.
-      }
-      setWorkspaceError('')
-      return true
-    } catch {
-      setWorkspaceError('安装事件删除失败，请稍后再试。')
-      return false
-    }
+    setWorkspaceError('')
+    const timeline = await reconcileAction(
+      () => removeProjectPackageEvent(selectedProject.id, eventId),
+      () => fetchProjectPackageTimeline(selectedProject.id),
+      (data) => !data.events.some((event) => event.id === eventId),
+    )
+    if (confirmationScopeRef.current !== confirmationScope) return false
+    setProjectPackageTimelines((current) => ({ ...current, [selectedProject.id]: timeline }))
+    // The mutation is committed; refresh errors must not invite another write.
+    try { const data = await fetchWorkspace(); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
+    void refreshNotifications()
+    return true
   }
 
   async function loadInstallItemDownloadUrl(itemId: number) {
@@ -3780,23 +3797,19 @@ function App() {
   }
 
   async function deleteInstallGroup(groupId: number) {
-    if (!selectedProject) return
-    try {
-      const timeline = await removeProjectPackageGroup(selectedProject.id, groupId)
-      setProjectPackageTimelines((current) => ({
-        ...current,
-        [selectedProject.id]: timeline,
-      }))
-      try {
-        const workspace = await fetchWorkspace()
-        applyWorkspace(workspace)
-      } catch {
-        // The package group is already deleted, so keep the timeline result if workspace refresh fails.
-      }
-      setWorkspaceError('')
-    } catch {
-      setWorkspaceError('安装包删除失败，请稍后再试。')
-    }
+    if (!selectedProject) return false
+    setWorkspaceError('')
+    const timeline = await reconcileAction(
+      () => removeProjectPackageGroup(selectedProject.id, groupId),
+      () => fetchProjectPackageTimeline(selectedProject.id),
+      (data) => !data.events.some((event) => event.groups.some((group) => group.id === groupId)),
+    )
+    if (confirmationScopeRef.current !== confirmationScope) return false
+    setProjectPackageTimelines((current) => ({ ...current, [selectedProject.id]: timeline }))
+    // The mutation is committed; refresh errors must not invite another write.
+    try { const data = await fetchWorkspace(); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
+    void refreshNotifications()
+    return true
   }
 
   async function createInstallOperation(payload: {
@@ -3847,10 +3860,18 @@ function App() {
       relatedTodoIds: number[]
       relatedTodoNotes: Record<number, string>
     }>,
+    confirmed?: boolean,
   ) {
     if (!selectedProject) return false
     try {
-      const timeline = await updateProjectPackageOperation(selectedProject.id, operationId, payload)
+      const timeline = await reconcileAction(
+        () => updateProjectPackageOperation(selectedProject.id, operationId, payload),
+        () => fetchProjectPackageTimeline(selectedProject.id),
+        (data) => {
+          const operation = data.events.flatMap((event) => [...event.operations, ...event.groups.flatMap((group) => group.operations)]).find((item) => item.id === operationId)
+          return Boolean(operation && Object.entries(payload).every(([key, value]) => JSON.stringify(operation[key as keyof typeof operation]) === JSON.stringify(value)))
+        },
+      )
       setProjectPackageTimelines((current) => ({
         ...current,
         [selectedProject.id]: timeline,
@@ -3864,33 +3885,30 @@ function App() {
         // background workspace sync temporarily fails.
       }
       if (payload.completed !== undefined) {
-        await refreshNotifications()
+        void refreshNotifications()
       }
       return true
-    } catch {
+    } catch (error) {
+      if (confirmed) throw error
       setWorkspaceError('安装记录更新失败，请稍后再试。')
       return false
     }
   }
 
   async function deleteInstallOperation(operationId: number) {
-    if (!selectedProject) return
-    try {
-      const timeline = await removeProjectPackageOperation(selectedProject.id, operationId)
-      setProjectPackageTimelines((current) => ({
-        ...current,
-        [selectedProject.id]: timeline,
-      }))
-      try {
-        const workspace = await fetchWorkspace()
-        applyWorkspace(workspace)
-      } catch {
-        // The operation is already deleted, so keep the timeline result if workspace refresh fails.
-      }
-      setWorkspaceError('')
-    } catch {
-      setWorkspaceError('安装记录删除失败，请稍后再试。')
-    }
+    if (!selectedProject) return false
+    setWorkspaceError('')
+    const timeline = await reconcileAction(
+      () => removeProjectPackageOperation(selectedProject.id, operationId),
+      () => fetchProjectPackageTimeline(selectedProject.id),
+      (data) => !data.events.some((event) => event.operations.some((operation) => operation.id === operationId) || event.groups.some((group) => group.operations.some((operation) => operation.id === operationId))),
+    )
+    if (confirmationScopeRef.current !== confirmationScope) return false
+    setProjectPackageTimelines((current) => ({ ...current, [selectedProject.id]: timeline }))
+    // The mutation is committed; refresh errors must not invite another write.
+    try { const data = await fetchWorkspace(); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
+    void refreshNotifications()
+    return true
   }
 
   async function exportInstallTimeline(eventId?: number) {
@@ -4173,7 +4191,7 @@ function App() {
     if (deletingActive) await stopActiveAiTurn()
     if (activeAiTurnRef.current?.conversationId === conversationId) {
       deletingAiConversationIdsRef.current.delete(conversationId)
-      return
+      throw new Error('对话仍在处理中，请停止生成后重试删除。')
     }
     if (deletedCurrent) aiRequestIdRef.current += 1
     try {
@@ -4183,7 +4201,7 @@ function App() {
       throw error
     }
     dispatchAiHistory({ type: 'conversation/deleted', conversationId })
-    if (deletedCurrent) {
+    if (currentAiConversationId(aiSelectionRef.current) === conversationId) {
       aiTurnsRequestIdRef.current += 1
       setAiTurns([])
       setAiTurnLiveStates({})
@@ -4848,6 +4866,7 @@ ${packageTimelineText}`
 
   return (
     <main className={hideSidebar ? 'app-shell sidebar-hidden' : 'app-shell'}>
+      {confirmationDialog}
       {roleSelectionDialog}
       {!hideSidebar && (
         <aside className="sidebar" aria-label="主导航">
@@ -6284,8 +6303,8 @@ function ProjectDetail({
   }) => Promise<boolean>
   onDeleteInstallEvent: (eventId: number) => Promise<boolean>
   onDeleteInstallEventComment: (eventId: number, commentId: number) => Promise<boolean>
-  onDeleteInstallGroup: (groupId: number) => Promise<void>
-  onDeleteInstallOperation: (operationId: number) => Promise<void>
+  onDeleteInstallGroup: (groupId: number) => Promise<boolean>
+  onDeleteInstallOperation: (operationId: number) => Promise<boolean>
   onDraftChange: (value: string) => void
   onExportInstallTimeline: () => Promise<{ fileName: string; markdown: string }>
   onInstallLoadMarketDetail: (payload: {
@@ -6326,10 +6345,11 @@ function ProjectDetail({
       relatedTodoIds: number[]
       relatedTodoNotes: Record<number, string>
     }>,
+    confirmed?: boolean,
   ) => Promise<boolean>
   onUpdateInstallEventComment: (eventId: number, commentId: number, content: string) => Promise<boolean>
   onSaveJournal: (createdAt?: string) => Promise<boolean>
-  onDeleteJournalEntry: (projectId: number, entryId: number) => void
+  onDeleteJournalEntry: (projectId: number, entryId: number) => Promise<boolean>
   onEditJournalEntry: (
     projectId: number,
     entryId: number,
@@ -6347,7 +6367,7 @@ function ProjectDetail({
   ) => void
   onCreateTodoNote: (todoId: number, content: string) => void
   onCreateTodoModule: (projectId: number, name: string) => Promise<ProjectModule | null>
-  onDeleteTodo: (todoId: number) => void
+  onDeleteTodo: (todoId: number) => Promise<boolean>
   onUpdateTodo: (id: number, payload: TodoUpdatePayload) => Promise<boolean>
   onUpdateTodoNote: (todoId: number, noteId: number, content: string) => void
   onTodoCreateDraftClear: (projectId?: number) => void
@@ -6662,8 +6682,9 @@ function ProjectDetail({
                           )}
                           {canDeleteEntry && (
                             <ConfirmDialog
+                              actionKey={`delete-journal:${project.id}:${entry.id}`}
                               confirmLabel="删除日记"
-                              description={`这条 ${entry.createdAt} 的日记删除后将无法在当前预览数据中恢复。`}
+                              description={`“${entry.content.slice(0, 120)}”（${entry.createdAt}）将永久删除，无法恢复。`}
                               onConfirm={() => onDeleteJournalEntry(project.id, entry.id)}
                               title="确认删除这条日记？"
                               trigger={
@@ -7195,7 +7216,7 @@ function ProjectModulesPanel({
   draft: string
   modules: ProjectModule[]
   onCreate: () => void
-  onDelete: (moduleId: number) => void
+  onDelete: (moduleId: number) => Promise<boolean>
   onDraftChange: (value: string) => void
 }) {
   const modulePageSize = 5
@@ -7244,6 +7265,7 @@ function ProjectModulesPanel({
                   <small>创建于 {module.createdAt.slice(0, 16)}</small>
                 </span>
                 <ConfirmDialog
+                  actionKey={`delete-module:${module.id}`}
                   confirmLabel="删除模块"
                   description={`删除「${module.name}」后，已关联待办会保留，但模块归属会被清空。`}
                   onConfirm={() => onDelete(module.id)}
@@ -7293,51 +7315,6 @@ function ProjectModulesPanel({
   )
 }
 
-function ConfirmDialog({
-  confirmLabel,
-  description,
-  onConfirm,
-  title,
-  trigger,
-}: {
-  confirmLabel: string
-  description: string
-  onConfirm: () => void
-  title: string
-  trigger: ReactNode
-}) {
-  const [open, setOpen] = useState(false)
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        {trigger}
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" type="button" onClick={() => setOpen(false)}>
-            取消
-          </Button>
-          <Button
-            className="destructive-button"
-            type="button"
-            onClick={() => {
-              onConfirm()
-              setOpen(false)
-            }}
-          >
-            {confirmLabel}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function ProjectActionsMenu({
   exportProject,
   generateDailySummary,
@@ -7352,7 +7329,7 @@ function ProjectActionsMenu({
   exportProject: () => void
   generateDailySummary: () => void
   generateWeeklySummary: () => void
-  onDeleteProject: () => void
+  onDeleteProject: () => Promise<boolean>
   onEditDescriptionClick: () => void
   onRenameClick: () => void
   onTransferClick: () => void
@@ -8594,7 +8571,7 @@ function InboxView({
   inbox: InboxItem[]
   inboxDraft: string
   onAddInboxItem: () => void
-  onDeleteInboxItem: (itemId: number) => void
+  onDeleteInboxItem: (itemId: number) => Promise<boolean>
   onDraftChange: (value: string) => void
   projects: Project[]
 }) {
@@ -8709,7 +8686,7 @@ function ArchiveControl({
 }: {
   item: InboxItem
   onArchive: (item: InboxItem, projectId: number) => void
-  onDelete: (itemId: number) => void
+  onDelete: (itemId: number) => Promise<boolean>
   projects: Project[]
 }) {
   const suggestedProjectExists = projects.some(
@@ -8730,8 +8707,9 @@ function ArchiveControl({
           {item.itemType === 'todo' ? '先创建项目后再创建待办。' : '先创建项目后再归档。'}
         </p>
         <ConfirmDialog
+          actionKey={`delete-draft:${item.id}`}
           confirmLabel="删除草稿"
-          description="删除后，这条待归档内容会从今日草稿箱移除。"
+          description={`“${item.content.slice(0, 120)}”将从今日草稿箱永久删除。`}
           onConfirm={() => onDelete(item.id)}
           title="确认删除这条草稿？"
           trigger={
@@ -8777,8 +8755,9 @@ function ArchiveControl({
         {item.itemType === 'todo' ? '创建待办' : '确认归档'}
       </Button>
       <ConfirmDialog
-        confirmLabel="删除草稿"
-        description="删除后，这条待归档内容会从今日草稿箱移除。"
+        actionKey={`delete-draft:${item.id}`}
+          confirmLabel="删除草稿"
+        description={`“${item.content.slice(0, 120)}”将从今日草稿箱永久删除。`}
         onConfirm={() => onDelete(item.id)}
         title="确认删除这条草稿？"
         trigger={
@@ -8816,7 +8795,7 @@ function SearchView({
   exportMarkdown: (projectId?: number) => Promise<void>
   filteredResults: Project[]
   generateSummary: (projectId: number, type: SummaryPeriodType) => Promise<boolean>
-  onDeleteProject: (projectId: number) => void
+  onDeleteProject: (projectId: number) => Promise<boolean>
   onEditProjectDescription: (projectId: number, description: string) => void
   onProjectClick: (id: number) => void
   onRenameProject: (projectId: number, name: string) => void
@@ -9861,12 +9840,15 @@ function VegesAiView({
       documentRequestGenerationRef.current += 1
       todoOutcomeRequestIdRef.current += 1
       setAttachmentReading(false)
+    }
+    const generation = documentRequestGenerationRef.current
+    await onDeleteConversation(conversationId)
+    if (conversationId === currentConversationId && documentRequestGenerationRef.current === generation) {
       setAttachments([])
       setAttachmentError('')
       setGenerationError('')
       todoWorkflowRef.current?.reset()
     }
-    await onDeleteConversation(conversationId)
   }
 
   const showPromptExamples =
@@ -11151,10 +11133,10 @@ function TodoPropertiesPanel({
   onAssigneeUserIdChange: (value: number | null) => void
   onCreatedAtChange: (value: string) => void
   onDueDateChange: (value: string) => void
-  onInlineUpdate: (payload: TodoUpdatePayload) => void
+  onInlineUpdate: (payload: TodoUpdatePayload) => Promise<boolean>
   onModuleIdChange: (value: number | null) => void
   onPriorityChange: (value: Priority) => void
-  onReject: (reason: string) => void
+  onReject: (reason: string) => Promise<boolean>
   onRequestAcceptance: () => void
   onReviewerUserIdChange: (value: number | null) => void
   onWatcherUserIdsChange: (value: number[]) => void
@@ -11314,6 +11296,7 @@ function TodoPropertiesPanel({
         <div className="todo-property-row">
           <span>验收状态</span>
           <TodoConfirmSelect
+            title={todo.title}
             done={todo.done}
             status={todo.confirmationStatus}
             disabled={!canRespondToTodo}
@@ -11418,13 +11401,13 @@ function TodoEditorDialog({
   onModuleIdChange: (value: number | null) => void
   onOpenChange: (open: boolean) => void
   onPriorityChange: (value: Priority) => void
-  onReject?: (reason: string) => void
+  onReject?: (reason: string) => Promise<boolean>
   onRequestAcceptance?: () => void
   onStartEdit?: () => void
   onSubmit: () => void
   onTitleChange: (value: string) => void
   onUpdateTodoNote?: (todoId: number, noteId: number, content: string) => void
-  onInlineUpdate?: (payload: TodoUpdatePayload) => void
+  onInlineUpdate?: (payload: TodoUpdatePayload) => Promise<boolean>
   open: boolean
   priority: Priority
   project: Project
@@ -11736,10 +11719,10 @@ function TodoEditorDialog({
             onAssigneeUserIdChange={onAssigneeUserIdChange}
             onCreatedAtChange={onCreatedAtChange}
             onDueDateChange={onDueDateChange}
-            onInlineUpdate={onInlineUpdate ?? (() => undefined)}
+            onInlineUpdate={onInlineUpdate ?? (() => Promise.resolve(false))}
             onModuleIdChange={onModuleIdChange}
             onPriorityChange={onPriorityChange}
-            onReject={onReject ?? (() => undefined)}
+            onReject={onReject ?? (() => Promise.resolve(false))}
             onRequestAcceptance={onRequestAcceptance ?? (() => undefined)}
             onReviewerUserIdChange={onReviewerUserIdChange}
             onWatcherUserIdsChange={onWatcherUserIdsChange}
@@ -11851,15 +11834,16 @@ function TodoList({
   initialTodoId?: number | null
   onCreateTodoNote?: (todoId: number, content: string) => void
   onDetailBack?: () => void
-  onDeleteTodo?: (id: number) => void
+  onDeleteTodo?: (id: number) => Promise<boolean>
   onDetailModeChange?: (active: boolean) => void
   onUpdateTodoNote?: (todoId: number, noteId: number, content: string) => void
-  onUpdateTodo?: (id: number, payload: TodoUpdatePayload) => Promise<boolean> | void
+  onUpdateTodo?: (id: number, payload: TodoUpdatePayload) => Promise<boolean>
   memberships: ProjectMembership[]
   project: Project
   projects: Project[]
   todos: Todo[]
 }) {
+  const { confirmAction: confirmTodoAction, confirmationDialog: todoConfirmationDialog } = useConfirmAction(`${currentUserId}:${project.id}`)
   const defaultTodoFilterState = useMemo(
     () => getDefaultProjectTodoFilterState(project, currentUserId),
     [currentUserId, project],
@@ -12126,7 +12110,16 @@ function TodoList({
         setTodoAcceptanceTarget(todo)
         return
       }
-      onUpdateTodo?.(todo.id, { done: !todo.done })
+      if (!todo.done) {
+        void confirmTodoAction({
+          actionKey: `complete-todo:${todo.id}`,
+          title: '确认完成待办？',
+          description: `「${project.name}」的「${todo.title}」将退出未完成列表。可在项目待办的已完成筛选中查看。`,
+          confirmLabel: '确认完成', variant: 'default',
+        }, () => onUpdateTodo ? onUpdateTodo(todo.id, { done: true }) : Promise.resolve(false))
+      } else {
+        void onUpdateTodo?.(todo.id, { done: false })
+      }
       return
     }
     if (canSubmitTodoForReview(todo)) {
@@ -12202,6 +12195,7 @@ function TodoList({
         ref={containerRef}
       >
         <TodoAcceptanceDialog
+          title={todoAcceptanceTarget?.title ?? "待办"}
           open={Boolean(todoAcceptanceTarget)}
           onOpenChange={(open) => {
             if (!open) setTodoAcceptanceTarget(null)
@@ -12256,12 +12250,10 @@ function TodoList({
             if (!open) closeEditDialog()
           }}
           onPriorityChange={setTodoEditPriority}
-          onReject={(rejectionReason) => {
-            void onUpdateTodo?.(editingTodo.id, {
+          onReject={(rejectionReason) => onUpdateTodo ? onUpdateTodo(editingTodo.id, {
               confirmationStatus: 'rejected',
               rejectionReason,
-            })
-          }}
+            }) : Promise.resolve(false)}
           onRequestAcceptance={() => {
             if (canToggleTodoDone(editingTodo)) setTodoAcceptanceTarget(editingTodo)
           }}
@@ -12269,8 +12261,8 @@ function TodoList({
           onSubmit={saveTodoEdit}
           onTitleChange={setTodoEditDraft}
           onInlineUpdate={(payload) => {
-            if ((!editingCanManageTodoFields && !editingCanRespondToTodo) || !onUpdateTodo) return
-            onUpdateTodo(editingTodo.id, payload)
+            if ((!editingCanManageTodoFields && !editingCanRespondToTodo) || !onUpdateTodo) return Promise.resolve(false)
+            return onUpdateTodo(editingTodo.id, payload)
           }}
           onUpdateTodoNote={onUpdateTodoNote}
         />
@@ -12280,6 +12272,7 @@ function TodoList({
 
   return (
     <div className={compact ? 'todo-list-shell compact' : 'todo-list-shell'} ref={containerRef}>
+      {todoConfirmationDialog}
       <div className="todo-list-filters" aria-label="待办筛选">
         <Select value={subprojectFilter} onValueChange={(value) => { setSubprojectFilter(value); setPage(0) }}>
           <SelectTrigger aria-label="按子项目筛选" style={{ width: 160, flexShrink: 0 }}>
@@ -12342,42 +12335,18 @@ function TodoList({
           onApply={applyTodoFilterState}
         />
       </div>
-      <Dialog
+      <ConfirmDialog
         open={Boolean(todoPendingReviewTarget)}
-        onOpenChange={(open) => {
-          if (!open) setTodoPendingReviewTarget(null)
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>提交验收？</DialogTitle>
-            <DialogDescription>
-              非待办创建人不能完成任务，只能提交验收，是否确认提交？
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              type="button"
-              onClick={() => setTodoPendingReviewTarget(null)}
-            >
-              取消
-            </Button>
-            <Button
-              className="solid-button"
-              type="button"
-              onClick={() => {
-                if (!todoPendingReviewTarget) return
-                onUpdateTodo?.(todoPendingReviewTarget.id, { confirmationStatus: 'pending_review' })
-                setTodoPendingReviewTarget(null)
-              }}
-            >
-              确认提交
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={(open) => { if (!open) setTodoPendingReviewTarget(null) }}
+        title="确认提交验收？"
+        description={`「${todoPendingReviewTarget?.title ?? ''}」将交给验收人处理，可能退出负责人的我的待办列表。仍可在原项目待办查看。`}
+        confirmLabel="确认提交验收"
+        variant="default"
+        onConfirm={() => todoPendingReviewTarget && onUpdateTodo
+          ? onUpdateTodo(todoPendingReviewTarget.id, { confirmationStatus: 'pending_review' }) : Promise.resolve(false)}
+      />
       <TodoAcceptanceDialog
+          title={todoAcceptanceTarget?.title ?? "待办"}
         open={Boolean(todoAcceptanceTarget)}
         onOpenChange={(open) => {
           if (!open) setTodoAcceptanceTarget(null)
@@ -12504,15 +12473,16 @@ function TodoList({
                     {priorityCopy[todo.priority]}
                   </Badge>
                   <TodoConfirmSelect
+                    title={todo.title}
                     done={todo.done}
                     status={todo.confirmationStatus}
                     disabled={!rowCanRespondToTodo}
-                    onChange={(confirmationStatus) => onUpdateTodo?.(todo.id, { confirmationStatus })}
+                    onChange={(confirmationStatus) => onUpdateTodo ? onUpdateTodo(todo.id, { confirmationStatus }) : Promise.resolve(false)}
                     onReject={(rejectionReason) =>
-                      onUpdateTodo?.(todo.id, {
+                      onUpdateTodo ? onUpdateTodo(todo.id, {
                         confirmationStatus: 'rejected',
                         rejectionReason,
-                      })
+                      }) : Promise.resolve(false)
                     }
                     onRequestAcceptance={() => {
                       if (canToggleTodoDone(todo)) setTodoAcceptanceTarget(todo)
@@ -12521,9 +12491,10 @@ function TodoList({
                   {rowCanManageTodo ? (
                     <span className="todo-delete-slot">
                       <ConfirmDialog
+                        actionKey={`delete-todo:${todo.id}`}
                         confirmLabel="删除待办"
                         description={`删除「${todo.title}」后，这条待办将从当前项目移除。`}
-                        onConfirm={() => onDeleteTodo?.(todo.id)}
+                        onConfirm={() => onDeleteTodo ? onDeleteTodo(todo.id) : Promise.resolve(false)}
                         title="确认删除这条待办？"
                         trigger={
                           <Button

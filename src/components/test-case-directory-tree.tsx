@@ -1,4 +1,5 @@
 import type { useDirectoryTreeState } from '../use-case-directory-tree'
+import { ConfirmActionDialog } from './confirm-action-dialog'
 import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import {
   CaretDown,
@@ -489,6 +490,22 @@ function DirectoryActionDialog({
     action.kind === 'delete' &&
     (folders.some((f) => f.parentId === action.folder!.id) ||
       cases.some((c) => c.folderId === action.folder!.id))
+  if (action.kind === 'delete') {
+    return (
+      <ConfirmActionDialog
+        open
+        actionKey={`delete-case-directory:${action.folder!.id}`}
+        onOpenChange={(open) => { if (!open) onClose() }}
+        title={`删除空目录“${action.folder!.name}”？`}
+        description="仅空目录可删除，提交时会重新检查。已有用例和其他目录保留。"
+        confirmLabel="删除目录"
+        busy={busy}
+        confirmDisabled={nonempty}
+        error={nonempty ? '目录已非空，无法删除。' : undefined}
+        onConfirm={() => onSave(name.trim(), parentId)}
+      />
+    )
+  }
   return (
     <Dialog
       open
@@ -499,16 +516,10 @@ function DirectoryActionDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {action.kind === 'delete'
-              ? '删除空目录'
-              : action.kind === 'edit'
-                ? '编辑 / 移动目录'
-                : '新增目录'}
+            {action.kind === 'edit' ? '编辑 / 移动目录' : '新增目录'}
           </DialogTitle>
           <DialogDescription>
-            {action.kind === 'delete'
-              ? `确认删除“${action.folder!.name}”？仅空目录可删除，提交时会重新检查。`
-              : '目录最多 32 层，同一层级名称不可重复。移动目录会保留子目录与用例。'}
+            目录最多 32 层，同一层级名称不可重复。移动目录会保留子目录与用例。
           </DialogDescription>
         </DialogHeader>
         <form
@@ -517,14 +528,12 @@ function DirectoryActionDialog({
             e.preventDefault()
             setError('')
             try {
-              if (nonempty) throw new Error('目录已非空，无法删除。')
-              if (action.kind !== 'delete')
-                validateDirectoryPlacement(
-                  folders,
-                  name,
-                  parentId,
-                  action.folder?.id,
-                )
+              validateDirectoryPlacement(
+                folders,
+                name,
+                parentId,
+                action.folder?.id,
+              )
               if (!(await onSave(name.trim(), parentId)))
                 setError('操作失败，请查看工作台错误提示后重试。')
             } catch (err) {
@@ -532,8 +541,7 @@ function DirectoryActionDialog({
             }
           }}
         >
-          {action.kind !== 'delete' && (
-            <>
+          <>
               <Label>
                 目录名称
                 <Input
@@ -552,11 +560,8 @@ function DirectoryActionDialog({
                   rootLabel="根目录"
                 />
               </Label>
-            </>
-          )}
-          {(error || nonempty) && (
-            <p role="alert">{error || '目录已非空，无法删除。'}</p>
-          )}
+          </>
+          {error && <p role="alert">{error}</p>}
           <DialogFooter>
             <Button
               type="button"
@@ -568,14 +573,10 @@ function DirectoryActionDialog({
             </Button>
             <Button
               type="submit"
-              variant={action.kind === 'delete' ? 'destructive' : 'default'}
-              disabled={
-                busy ||
-                Boolean(nonempty) ||
-                (action.kind !== 'delete' && !name.trim())
-              }
+              variant="default"
+              disabled={busy || !name.trim()}
             >
-              {action.kind === 'delete' ? '删除目录' : '保存'}
+              保存
             </Button>
           </DialogFooter>
         </form>

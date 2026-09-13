@@ -13,8 +13,13 @@ import {
   matchesPackageMarketReleaseFileName,
   normalizeOssEndpoint,
   normalizePackageMarketExpireMinutes,
+  packageMarketExpireMinuteOptions,
   resolvePackageMarketAppRuleId,
 } from './package-market.ts'
+
+test('offers package link validity choices from four hours through seven days', () => {
+  assert.deepEqual(packageMarketExpireMinuteOptions, [240, 480, 1440, 4320, 10080])
+})
 
 test('accepts custom package link validity in minutes within the bounded range', () => {
   const defaultMinutes = normalizePackageMarketExpireMinutes(undefined)

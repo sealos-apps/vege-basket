@@ -1,3 +1,4 @@
+import { ConfirmActionDialog } from './confirm-action-dialog'
 import {
   Bell,
   LinkSimple,
@@ -300,14 +301,14 @@ export function AccountSettingsDialog({
 
   async function disconnectFeishu() {
     const mutation = beginMutation()
-    if (!mutation) return
+    if (!mutation) return false
 
     setFeishuBusy(true)
     setFeishuError('')
     setFeishuSuccess('')
     try {
       const result = await onDisconnectFeishu()
-      if (!isMutationCurrent(mutation)) return
+      if (!isMutationCurrent(mutation)) return false
       subscriptionRequestIdRef.current += 1
       setFeishuDisconnected(true)
       setSavedDisplayName(result.displayName || result.username)
@@ -317,10 +318,7 @@ export function AccountSettingsDialog({
       setSubscriptionSaveError('')
       setSubscriptionSuccess('')
       setFeishuSuccess('飞书账号已解除绑定。')
-    } catch (error) {
-      if (isMutationCurrent(mutation)) {
-        setFeishuError(getErrorMessage(error, '解除飞书绑定失败，请稍后重试。'))
-      }
+      return true
     } finally {
       const isCurrent = isMutationCurrent(mutation)
       finishMutation(mutation)
@@ -572,15 +570,24 @@ export function AccountSettingsDialog({
                         {feishuBusy ? '处理中...' : feishuLinked ? '重新绑定' : '绑定飞书'}
                       </Button>
                       {feishuLinked ? (
-                        <Button
-                          aria-busy={notificationMutationBusy}
-                          disabled={notificationMutationBusy}
-                          type="button"
-                          variant="destructive"
-                          onClick={() => void disconnectFeishu()}
-                        >
-                          解除绑定
-                        </Button>
+                        <ConfirmActionDialog
+                          key={`${user?.id}:${open}`}
+                          actionKey={`disconnect-feishu:${user?.id}`}
+                          title="解除飞书账号绑定？"
+                          description="解除后将停止通过此账号接收飞书通知和待办日报，日报订阅也会关闭。需要时可重新绑定并开启订阅。"
+                          confirmLabel="解除绑定"
+                          onConfirm={disconnectFeishu}
+                          trigger={(
+                            <Button
+                              aria-busy={notificationMutationBusy}
+                              disabled={notificationMutationBusy}
+                              type="button"
+                              variant="destructive"
+                            >
+                              解除绑定
+                            </Button>
+                          )}
+                        />
                       ) : null}
                     </div>
                   </div>

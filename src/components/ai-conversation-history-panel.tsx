@@ -17,14 +17,7 @@ import {
   type AiConversationListItem,
 } from '@/ai-conversation-state'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { ConfirmActionDialog } from './confirm-action-dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -79,7 +72,6 @@ export function AiConversationHistoryPanel({
   const [renameDraft, setRenameDraft] = useState('')
   const [renameError, setRenameError] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<AiConversationListItem | null>(null)
-  const [deleteError, setDeleteError] = useState('')
   const [actionBusyId, setActionBusyId] = useState<string | null>(null)
   const groups = groupAiConversationsByDate(conversations, now)
   const initialLoading = loadState === 'loading-initial' && conversations.length === 0
@@ -129,22 +121,15 @@ export function AiConversationHistoryPanel({
 
   function requestDelete(conversation: AiConversationListItem) {
     setDeleteTarget(conversation)
-    setDeleteError('')
   }
 
   async function confirmDelete() {
-    if (!deleteTarget || actionBusyId) return
-
+    if (!deleteTarget || actionBusyId) return false
     setActionBusyId(deleteTarget.id)
-    setDeleteError('')
     try {
       await onDeleteConversation(deleteTarget.id)
-      setDeleteTarget(null)
-    } catch (deleteFailure) {
-      setDeleteError(actionErrorMessage(deleteFailure, '删除失败，请重试。'))
-    } finally {
-      setActionBusyId(null)
-    }
+      return true
+    } finally { setActionBusyId(null) }
   }
 
   return (
@@ -394,51 +379,17 @@ export function AiConversationHistoryPanel({
         )}
       </div>
 
-      <Dialog
+      <ConfirmActionDialog
+        key={deleteTarget?.id}
+        actionKey={`delete-conversation:${deleteTarget?.id}`}
         open={Boolean(deleteTarget)}
-        onOpenChange={(open) => {
-          if (!open && actionBusyId !== deleteTarget?.id) {
-            setDeleteTarget(null)
-            setDeleteError('')
-          }
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>删除这段对话？</DialogTitle>
-            <DialogDescription>
-              “{deleteTarget?.title}”的聊天记录将被永久删除。已保存的总结和已确认的待办不会受影响。
-            </DialogDescription>
-          </DialogHeader>
-          {deleteError ? (
-            <p className="m-0 text-sm leading-5 text-destructive" role="alert">{deleteError}</p>
-          ) : null}
-          <DialogFooter>
-            <Button
-              disabled={actionBusyId === deleteTarget?.id}
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setDeleteTarget(null)
-                setDeleteError('')
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              disabled={actionBusyId === deleteTarget?.id}
-              type="button"
-              variant="destructive"
-              onClick={() => void confirmDelete()}
-            >
-              {actionBusyId === deleteTarget?.id
-                ? <CircleNotch aria-hidden className="animate-spin" />
-                : <Trash aria-hidden />}
-              {actionBusyId === deleteTarget?.id ? '正在删除…' : '删除对话'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
+        title={`删除对话“${deleteTarget?.title ?? ''}”？`}
+        description="聊天记录和未确认的待办提案将永久删除。正在处理的对话将停止；已保存的文档和已确认的待办保留。"
+        confirmLabel="删除对话"
+        onConfirm={confirmDelete}
+      />
+
     </nav>
   )
 }

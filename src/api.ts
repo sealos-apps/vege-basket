@@ -1043,6 +1043,17 @@ export function requestProjectTransfer(
   })
 }
 
+export function transferOrganizationProjectOwnership(
+  organizationId: number,
+  projectId: number,
+  targetUserId: number,
+) {
+  return request<{ ok: true }>(`/api/organizations/${organizationId}/projects/${projectId}/transfer`, {
+    method: 'POST',
+    body: JSON.stringify({ targetUserId }),
+  })
+}
+
 export function respondToProjectTransfer(
   transferId: number,
   action: 'accept' | 'decline',

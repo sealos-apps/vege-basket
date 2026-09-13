@@ -6,7 +6,7 @@ import { deleteOwnedProjectWithAiCleanup } from './project-deletion.ts'
 
 type ProjectDeletionClient = Pick<PoolClient, 'query'>
 
-function queryResult(rows: Array<{ id?: string; owner_user_id?: string; organization_id?: null }> = []): QueryResult<{ id?: string; owner_user_id?: string; organization_id?: null }> {
+function queryResult<T extends Record<string, unknown>>(rows: T[] = []): QueryResult<T> {
   return {
     command: '',
     fields: [],
@@ -21,24 +21,37 @@ test('deletes pending AI proposal batches before deleting the owned project', as
   const client = {
     query: async (text: string, params: unknown[] = []) => {
       queries.push({ params, text })
-      if (text.includes('select user_id as owner_user_id')) return queryResult([{ owner_user_id: '9', organization_id: null }])
-      return text.includes('select id from projects') || text.includes('delete from projects')
-        ? queryResult([{ id: '17' }])
+      return text.includes('select user_id as owner_user_id')
+        ? queryResult([{ owner_user_id: '9', organization_id: null }])
+        : text.includes('select id from projects') || text.includes('delete from projects')
+          ? queryResult([{ id: '17' }])
         : queryResult()
     },
   } as unknown as ProjectDeletionClient
 
   assert.equal(await deleteOwnedProjectWithAiCleanup(client, 17, 9), true)
-  assert.equal(queries[0].text, 'begin')
-  assert.equal(queries.at(-1)?.text, 'commit')
-  const cleanup = queries.findIndex(({ text }) => text.includes('delete from ai_todo_proposal_batches'))
-  const deletion = queries.findIndex(({ text }) => text.includes('delete from projects'))
-  assert.ok(cleanup > 0 && deletion > cleanup)
-  assert.match(queries[cleanup].text, /b\.source_turn_id = t\.id/u)
-  assert.match(queries[cleanup].text, /b\.status = 'pending'/u)
-  assert.deepEqual(queries[cleanup].params, [17])
-  assert.deepEqual(queries[deletion].params, [17, 9])
-
+  assert.deepEqual(queries.map(({ text }) => text.trim().split(/\s+/u)[0]), [
+    'begin',
+    'select',
+    'select',
+    'select',
+    'select',
+    'delete',
+    'select',
+    'delete',
+    'commit',
+  ])
+  assert.match(queries[1].text, /select user_id as owner_user_id/u)
+  assert.match(queries[2].text, /pg_advisory_xact_lock/u)
+  assert.match(queries[3].text, /for update/u)
+  assert.match(queries[4].text, /ai_conversations/u)
+  assert.match(queries[4].text, /for update/u)
+  assert.match(queries[5].text, /b\.source_turn_id = t\.id/u)
+  assert.match(queries[5].text, /c\.project_id = p\.id/u)
+  assert.match(queries[5].text, /b\.status = 'pending'/u)
+  assert.deepEqual(queries[5].params, [17])
+  assert.match(queries[6].text, /for update/u)
+  assert.match(queries[7].text, /delete from projects/u)
 })
 
 test('rolls back project deletion when pending proposal cleanup fails', async () => {
@@ -47,8 +60,9 @@ test('rolls back project deletion when pending proposal cleanup fails', async ()
     query: async (text: string) => {
       queries.push(text.trim())
       if (text.includes('delete from ai_todo_proposal_batches')) throw new Error('cleanup failed')
-      if (text.includes('select user_id as owner_user_id')) return queryResult([{ owner_user_id: '9', organization_id: null }])
-      if (text.includes('select id from projects')) return queryResult([{ id: '17' }])
+      if (text.includes('select user_id as owner_user_id')) {
+        return queryResult([{ owner_user_id: '9', organization_id: null }])
+      }
       return queryResult()
     },
   } as unknown as ProjectDeletionClient

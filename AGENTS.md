@@ -183,6 +183,21 @@ historical product context; current code and these operational docs take precede
 - Todo completion and reopen transitions must lock the todo row inside the same
   transaction before updating `completed_at`, `completed_by_user_id`, or activity events.
 
+## Destructive And Terminal UI Actions
+
+- Use the shared `ConfirmActionDialog` before the first write for resource deletion,
+  membership removal, and completion/archive/close transitions that remove actionable data.
+  Existing acceptance/rejection forms may serve as the single explicit confirmation.
+- Return a real `Promise<boolean>` from confirmed mutations. Only canonical success may
+  remove records, clear drafts, or navigate away. Keep pending actions locked and errors
+  inside the confirmation; never treat `finally` or a swallowed error as success.
+- Reconcile uncertain transport failures with authorized reads; never automatically repeat
+  a write or clear the unresolved guard by cancelling/reopening. For multi-request saves,
+  confirm the whole change first and preserve committed steps on retries.
+- Keep [the manual entry checklist](docs/manual-confirmation-checklist.md) synchronized
+  when adding deletion or terminal-state buttons. Filters and local draft edits do not
+  require destructive-action confirmation.
+
 ## Database Safety
 
 New Bugs must reference a canonical case in the same test space; derive the subject from

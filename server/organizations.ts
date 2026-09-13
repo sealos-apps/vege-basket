@@ -259,6 +259,7 @@ async function lockGovernedProject(
     join user_roles role
       on role.user_id = $3 and role.role = 'organization_admin'
     where p.organization_id = $1 and p.id = $2
+      and membership.access_role in ('owner', 'admin')
     for update of p, membership, role
     `,
     [organizationId, projectId, userId],
@@ -518,7 +519,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       updated_at: Date
     }>(
       `
-      select p.id, p.name, p.description_encrypted, p.tags, p.tags_encrypted, p.status, p.health_status, p.health_note_encrypted,
+      select p.id, p.name, p.description_encrypted, p.tags, p.tags_encrypted,
+        p.status, p.health_status, p.health_note_encrypted,
         p.updated_at, p.user_id as owner_user_id, owner.email as owner_email,
         owner.display_name as owner_display_name,
         count(distinct t.id) as todo_count,
@@ -970,7 +972,9 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
     packageMarketPolicy,
     projects: projects.rows.map((project) => ({
       description: project.description_encrypted ? decryptText(project.description_encrypted) : '',
-      tags: project.tags_encrypted ? decryptJson<string[]>(project.tags_encrypted, project.tags ?? []) : project.tags ?? [],
+      tags: project.tags_encrypted
+        ? decryptJson<string[]>(project.tags_encrypted, project.tags ?? [])
+        : project.tags ?? [],
       canManageSettings: canManageProjects,
       canManageMembers: canManageProjects,
       canDelete: canManageProjects,
@@ -2422,10 +2426,6 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       && request.body.tags.length <= 30
       && request.body.tags.every((tag: unknown) => typeof tag === 'string' && tag.trim().length > 0 && tag.length <= 80)
       ? [...new Set((request.body.tags as string[]).map(tag => tag.trim()))] : null
-    if ((hasName && !name) || (hasDescription && description === null) || (hasTags && !tags)) {
-      response.status(400).json({ error: 'Valid project name, description and tags are required' })
-      return
-    }
     const hasStatus = Object.hasOwn(request.body ?? {}, 'status')
     const hasHealthStatus = Object.hasOwn(request.body ?? {}, 'healthStatus')
     const hasHealthNote = Object.hasOwn(request.body ?? {}, 'healthNote')
@@ -2436,6 +2436,9 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     const healthNote = hasHealthNote ? boundedText(request.body.healthNote, 1_000) : null
     if (
       (!hasStatus && !hasHealthStatus && !hasHealthNote && !hasName && !hasDescription && !hasTags) ||
+      (hasName && !name) ||
+      (hasDescription && description === null) ||
+      (hasTags && !tags) ||
       (hasStatus && !status) ||
       (hasHealthStatus && !healthStatus) ||
       (hasHealthNote && healthNote === null)
@@ -2469,7 +2472,6 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       if (hasName) { values.push(encryptText(name!)); updates.push(`name = $${values.length}`) }
       if (hasDescription) { values.push(description ? encryptText(description) : null); updates.push(`description_encrypted = $${values.length}`) }
       if (hasTags) { values.push(encryptJson(tags)); updates.push(`tags_encrypted = $${values.length}`, "tags = '{}'" ) }
-
       if (hasStatus) {
         values.push(status)
         updates.push(`status = $${values.length}`)
@@ -2489,11 +2491,14 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         values,
       )
       const detail = JSON.stringify({
+        description: hasDescription ? description : undefined,
         healthNote: nextHealthNote,
         healthStatus: nextHealthStatus,
+        name: hasName ? name : undefined,
         previousHealthStatus: project.health_status,
         previousStatus: project.status,
         status: status ?? project.status,
+        tags: hasTags ? tags : undefined,
       })
       await writeAudit(client, organizationId!, session.userId, 'project.governance_updated', 'project', String(projectId), detail)
       await client.query('commit')

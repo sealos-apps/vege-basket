@@ -1,3 +1,6 @@
+import { createResumableAction } from '../confirmed-action'
+import { ConfirmActionDialog as DeleteConfirmDialog } from './confirm-action-dialog'
+import { useConfirmAction } from '../hooks/use-confirm-action'
 import {
   Component,
   forwardRef,
@@ -43,7 +46,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   DropdownMenu,
@@ -128,8 +130,8 @@ type PackageWorkbenchProps = {
   }) => Promise<boolean>
   onDeleteEvent: (eventId: number) => Promise<boolean>
   onDeleteEventComment: (eventId: number, commentId: number) => Promise<boolean>
-  onDeleteGroup: (groupId: number) => Promise<void>
-  onDeleteOperation: (operationId: number) => Promise<void>
+  onDeleteGroup: (groupId: number) => Promise<boolean>
+  onDeleteOperation: (operationId: number) => Promise<boolean>
   onExportTimeline: (eventId?: number) => Promise<{ fileName: string; markdown: string }>
   onLoadPackageMarketDetail: (payload: {
     arch: string
@@ -170,6 +172,7 @@ type PackageWorkbenchProps = {
       relatedTodoIds: number[]
       relatedTodoNotes: Record<number, string>
     }>,
+    confirmed?: boolean,
   ) => Promise<boolean>
   onUpdateEventComment: (eventId: number, commentId: number, content: string) => Promise<boolean>
   onUpdateTodo: (
@@ -382,12 +385,11 @@ function channelLabel(channel: PackageMarketChannel) {
 }
 
 const packageMarketExpireOptions = [
-  { label: '30 分钟', value: 30 },
-  { label: '60 分钟（1 小时）', value: 60 },
-  { label: '90 分钟', value: 90 },
-  { label: '2 小时', value: 120 },
-  { label: '5 小时', value: 300 },
-  { label: '10 小时', value: 600 },
+  { label: '4 小时', value: 4 * 60 },
+  { label: '8 小时', value: 8 * 60 },
+  { label: '24 小时', value: 24 * 60 },
+  { label: '3 天', value: 3 * 24 * 60 },
+  { label: '7 天', value: 7 * 24 * 60 },
 ]
 
 const packageMarketExpireMaxMinutes = 365 * 24 * 60
@@ -1540,50 +1542,6 @@ function downloadMarkdownFile(fileName: string, markdown: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-function DeleteConfirmDialog({
-  confirmLabel,
-  description,
-  onConfirm,
-  title,
-  trigger,
-}: {
-  confirmLabel: string
-  description: string
-  onConfirm: () => void | Promise<void>
-  title: string
-  trigger: React.ReactNode
-}) {
-  const [open, setOpen] = useState(false)
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        {trigger}
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" type="button" onClick={() => setOpen(false)}>
-            取消
-          </Button>
-          <Button
-            className="destructive-button"
-            type="button"
-            onClick={() => {
-              void Promise.resolve(onConfirm()).finally(() => setOpen(false))
-            }}
-          >
-            {confirmLabel}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 const operationEventOptions: Array<{
   label: string
   type: ProjectPackageEventType
@@ -1651,6 +1609,8 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
   const [operationKind, setOperationKind] = useState<ProjectPackageOperationKind>('document')
   const [pendingOperationTarget, setPendingOperationTarget] = useState<PendingOperationTarget>(null)
   const [operationTodoDialogOpen, setOperationTodoDialogOpen] = useState(false)
+  const { confirmAction, confirmationDialog } = useConfirmAction(`${currentUserId}:${project.id}`)
+  const [operationTodoSaveError, setOperationTodoSaveError] = useState('')
   const [todoDialogOperationId, setTodoDialogOperationId] = useState<number | null>(null)
   const [todoDialogRelatedTodoIds, setTodoDialogRelatedTodoIds] = useState<number[]>([])
   const [todoDialogRelatedTodoNotes, setTodoDialogRelatedTodoNotes] = useState<Record<number, string>>({})
@@ -2607,13 +2567,14 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
       eventEditorOpen && eventEditorEventId === event.id
     )
     const deleted = await onDeleteEvent(event.id)
-    if (!deleted || !deletingActiveEvent) return
+    if (!deleted || !deletingActiveEvent) return deleted
 
     setEventEditorOpen(false)
     setEventEditorDirty(false)
     setEventEditorEventId(null)
     setSelectedEventId(nextEvent?.id ?? null)
     setSelectedGroupId(nextEvent?.groups[0]?.id ?? null)
+    return true
   }
 
   function openOperationDialog(target: PendingOperationTarget, kind: ProjectPackageOperationKind) {
@@ -2692,33 +2653,43 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
   }
 
   async function saveOperationTodoDialog() {
+    setOperationTodoSaveError('')
     if (!todoDialogOperation) return
-    setBusyAction(`operation-todo-link-${todoDialogOperation.id}`)
-    try {
-      const relatedTodoNotes = Object.fromEntries(
-        todoDialogRelatedTodoIds.flatMap((todoId) => {
-          const note = todoDialogRelatedTodoNotes[todoId]
-          return note && note.trim() ? [[todoId, note] as const] : []
-        }),
-      )
-      const operationUpdated = await onUpdateOperation(todoDialogOperation.id, {
-        relatedTodoIds: todoDialogRelatedTodoIds,
-        relatedTodoNotes,
-      })
-      if (!operationUpdated) return
-      const changedTodos = todos.filter(
-        (todo) => todo.done !== todoDialogTodoDoneMap[todo.id],
-      )
-      for (const todo of changedTodos) {
-        const todoUpdated = await onUpdateTodo(todo.id, {
-          done: todoDialogTodoDoneMap[todo.id],
-        })
-        if (!todoUpdated) return
-      }
-      setOperationTodoDialogOpen(false)
-      clearOperationTodoDialogState()
-    } finally {
-      setBusyAction('')
+    const operationId = todoDialogOperation.id
+    const relatedTodoIds = [...todoDialogRelatedTodoIds]
+    const relatedTodoNotes = Object.fromEntries(relatedTodoIds.flatMap((id) => {
+      const note = todoDialogRelatedTodoNotes[id]
+      return note?.trim() ? [[id, note]] : []
+    }))
+    const changes = todos.filter((todo) => typeof todoDialogTodoDoneMap[todo.id] === 'boolean' && todo.done !== todoDialogTodoDoneMap[todo.id])
+      .map((todo) => ({ id: todo.id, title: todo.title, done: todoDialogTodoDoneMap[todo.id] }))
+    const completions = changes.filter((todo) => todo.done)
+    const action = createResumableAction([
+      () => onUpdateOperation(operationId, { relatedTodoIds, relatedTodoNotes }, completions.length > 0),
+      ...changes.map((todo) => () => onUpdateTodo(todo.id, { done: todo.done })),
+    ])
+    const save = async () => {
+      setBusyAction(`operation-todo-link-${operationId}`)
+      try {
+        if (!await action.run()) throw new Error('操作未完成，请检查后重试。')
+        setOperationTodoDialogOpen(false)
+        clearOperationTodoDialogState()
+        return true
+      } catch (error) {
+        if (error instanceof Error && action.completed > 0) {
+          error.message = `关联记录已保存，已更新 ${action.completed - 1}/${changes.length} 条待办。${error.message}`
+        }
+        throw error
+      } finally { setBusyAction('') }
+    }
+    if (completions.length) {
+      await confirmAction({
+        title: `完成 ${completions.length} 条关联待办？`,
+        description: `${completions.map((todo) => `• ${todo.title}`).join('\n')}\n关联关系和备注将一并保存。完成的待办可在项目的已完成列表查看。若部分保存失败，重试只提交未完成的步骤。`,
+        confirmLabel: '保存并完成待办', variant: 'default',
+      }, save)
+    } else {
+      try { await save() } catch (error) { setOperationTodoSaveError(error instanceof Error ? error.message : '保存失败，请重试。') }
     }
   }
 
@@ -3367,6 +3338,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
 
   return (
     <div className="package-workbench">
+      {confirmationDialog}
       {events.length === 0 && !eventEditorOpen ? (
         <section className="package-empty-state">
           <div className="package-empty-panel">
@@ -3579,8 +3551,11 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
                           type="button"
                           disabled={busyAction === `complete-event-${selectedEvent.id}`}
                           onClick={() => {
-                            setBusyAction(`complete-event-${selectedEvent.id}`)
-                            void onCompleteEvent(selectedEvent.id).finally(() => setBusyAction(''))
+                            void confirmAction({
+                              title: `将“${selectedEvent.title}”标记为已交付？`,
+                              description: '事件将进入已交付状态，可在交付事件列表查看。',
+                              confirmLabel: '标记已交付', variant: 'default',
+                            }, () => onCompleteEvent(selectedEvent.id))
                           }}
                         >
                           <Check size={14} weight="bold" /> 标记已交付
@@ -4265,6 +4240,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
               保存操作
             </Button>
           </DialogFooter>
+          {operationTodoSaveError ? <p role="alert" className="text-destructive">{operationTodoSaveError}</p> : null}
         </DialogContent>
       </Dialog>
 
@@ -4742,20 +4718,25 @@ function PackageEventCommentItem({
             >
               <PencilSimple />
             </Button>
-            <Button
-              aria-label="删除反馈"
-              className="package-event-comment-delete"
-              disabled={disabled}
-              size="icon-sm"
-              title="删除反馈"
-              type="button"
-              variant="outline"
-              onClick={() => {
-                if (window.confirm('确定删除这条交付反馈吗？')) void onDelete(comment)
-              }}
-            >
-              <Trash />
-            </Button>
+            <DeleteConfirmDialog
+              title="删除这条交付反馈？"
+              description={`“${comment.content.slice(0, 120)}”将永久删除，无法恢复。`}
+              confirmLabel="删除反馈"
+              onConfirm={() => onDelete(comment)}
+              trigger={(
+                <Button
+                  aria-label="删除反馈"
+                  className="package-event-comment-delete"
+                  disabled={disabled}
+                  size="icon-sm"
+                  title="删除反馈"
+                  type="button"
+                  variant="outline"
+                >
+                  <Trash />
+                </Button>
+              )}
+            />
           </div>
         ) : null}
       </div>

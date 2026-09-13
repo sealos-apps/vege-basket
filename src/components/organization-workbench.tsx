@@ -1,4 +1,7 @@
 import { OrganizationTestEnvironmentPanel } from './organization-test-environments'
+import { ConfirmActionDialog } from './confirm-action-dialog'
+import { useConfirmAction } from '../hooks/use-confirm-action'
+import { reconcileAction } from '../confirmed-action'
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -21,8 +24,8 @@ import {
   Sparkle,
   Target,
   Trash,
+  UserSwitch,
   Users,
-  Warning,
 } from '@phosphor-icons/react'
 import {
   attachProjectToOrganization,
@@ -41,12 +44,15 @@ import {
   inviteOrganizationMemberByUsername,
   removeOrganizationProjectMember,
   removeOrganizationMember,
+  removeProject,
   remindWeeklyReportMembers,
+  transferOrganizationProjectOwnership,
   saveOrganizationWeeklyReport,
   updateOrganization,
   updateOrganizationPackageMarketPolicy,
   updateOrganizationWeeklyReportRules,
   updateOrganizationMemberRole,
+  updateOrganizationProjectGovernance,
   updateOrganizationProjectMilestone,
   updateOrganizationProjectMilestoneStatus,
   type AuthUser,
@@ -103,7 +109,7 @@ import {
 import { Textarea } from './ui/textarea'
 import { UserName } from './user-name'
 import { OrganizationPackageMarketPanel } from './organization-package-market-panel'
-import { OrganizationProjectActions, OrganizationTestSpaces } from './organization-resource-actions'
+import { OrganizationTestSpaces } from './organization-resource-actions'
 import { OrganizationProjectModulesPanel } from './organization-project-modules-panel'
 import './organization-workbench.css'
 import { ProjectSubprojectsPanel } from './project-subprojects-panel'
@@ -329,6 +335,10 @@ export function OrganizationWorkbench({
   const [canCreate, setCanCreate] = useState(false)
   const [tab, setTab] = useState<OrganizationTab>('overview')
   const [testResourceTab, setTestResourceTab] = useState<'spaces' | 'environments'>('spaces')
+  const actionScope = `${currentUser.id}:${selectedOrganizationId}:${tab}`
+  const actionScopeRef = useRef(actionScope)
+  useEffect(() => { actionScopeRef.current = actionScope }, [actionScope])
+  const { confirmAction, confirmationDialog } = useConfirmAction(actionScope)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -343,7 +353,6 @@ export function OrganizationWorkbench({
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [organizationName, setOrganizationName] = useState('')
   const [organizationRenameDraft, setOrganizationRenameDraft] = useState('')
-  const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [ownerUsername, setOwnerUsername] = useState(currentUser.username)
   const [memberInviteOpen, setMemberInviteOpen] = useState(false)
   const [inviteUsername, setInviteUsername] = useState('')
@@ -493,15 +502,17 @@ export function OrganizationWorkbench({
     }
   }, [detail])
 
-  async function mutate(operation: () => Promise<OrganizationDetail>) {
+  async function mutate(operation: () => Promise<OrganizationDetail>, confirmed = false, matches: (data: OrganizationDetail) => boolean = () => false) {
     setBusy(true)
     setError('')
     setOrganizationSettingsError('')
     try {
-      const nextDetail = await operation()
+      const nextDetail = confirmed ? await reconcileAction(operation, () => fetchOrganization(selectedOrganizationId), matches) : await operation()
+      if (actionScopeRef.current !== actionScope) return false
       setDetail(nextDetail)
       return true
     } catch (mutationError) {
+      if (confirmed) throw mutationError
       setError(errorMessage(mutationError))
       return false
     } finally {
@@ -605,25 +616,22 @@ export function OrganizationWorkbench({
     }
   }
 
-  async function submitOrganizationDelete(event: FormEvent) {
-    event.preventDefault()
-    if (!detail || deleteConfirmation !== detail.name) return
-    setBusy(true)
+  async function submitOrganizationDelete() {
+    if (!detail) return false
     setError('')
     setOrganizationSettingsError('')
-    try {
-      await deleteOrganization(detail.id, deleteConfirmation)
-      setDeleteOpen(false)
-      setDeleteConfirmation('')
-      setDetail(null)
-      setSelectedOrganizationId(0)
-      await loadOrganizations()
-      onOrganizationsChanged?.()
-    } catch (deleteError) {
-      setOrganizationSettingsError(errorMessage(deleteError))
-    } finally {
-      setBusy(false)
-    }
+    await reconcileAction(
+      async () => { await deleteOrganization(detail.id, detail.name); return { organizations: organizations.filter((item) => item.id !== detail.id) } },
+      fetchOrganizations,
+      (data) => !data.organizations.some((item) => item.id === detail.id),
+    )
+    if (actionScopeRef.current !== actionScope) return false
+    setDeleteOpen(false)
+    setDetail(null)
+    setSelectedOrganizationId(0)
+    await loadOrganizations().catch(() => setError('组织已删除，列表刷新失败，请刷新页面。'))
+    onOrganizationsChanged?.()
+    return true
   }
 
   async function submitWeeklyReportRules(event: FormEvent) {
@@ -865,6 +873,7 @@ export function OrganizationWorkbench({
 
   return (
     <div className="organization-workbench">
+      {confirmationDialog}
       {organizationCreateAction}
       <div className="organization-toolbar">
         <div className="organization-switcher-group">
@@ -952,7 +961,6 @@ export function OrganizationWorkbench({
                     variant="destructive"
                     onClick={() => {
                       setSettingsOpen(false)
-                      setDeleteConfirmation('')
                       setOrganizationSettingsError('')
                       setDeleteOpen(true)
                     }}
@@ -966,71 +974,16 @@ export function OrganizationWorkbench({
         </div>
       </div>
 
-      <Dialog open={deleteOpen} onOpenChange={(open) => {
-        if (!busy) {
-          setDeleteOpen(open)
-          if (!open) {
-            setDeleteConfirmation('')
-            setOrganizationSettingsError('')
-          }
-        }
-      }}>
-        <DialogContent
-          className="organization-delete-dialog"
-          onEscapeKeyDown={(event) => {
-            if (busy) event.preventDefault()
-          }}
-          onInteractOutside={(event) => {
-            if (busy) event.preventDefault()
-          }}
-          showCloseButton={!busy}
-        >
-          <DialogHeader>
-            <div className="organization-delete-heading-icon" aria-hidden="true">
-              <Warning size={20} weight="fill" />
-            </div>
-            <DialogTitle>确认删除组织</DialogTitle>
-            <DialogDescription>
-              这是不可逆操作。组织成员关系、邀请、周报与汇总会被永久删除。
-            </DialogDescription>
-          </DialogHeader>
-          {organizationSettingsError ? (
-            <div className="organization-error" role="alert">{organizationSettingsError}</div>
-          ) : null}
-          <div className="organization-delete-impact">
-            <strong>业务数据不会被删除</strong>
-            <span>
-              {detail.projects.length} 个项目和 {detail.testSpaces.length} 个测试空间会解除组织归属，
-              其中的待办、交付、测试记录与 Bug 均会保留。
-            </span>
-          </div>
-          <form className="organization-delete-form" onSubmit={submitOrganizationDelete}>
-            <Label htmlFor="organization-delete-confirmation">
-              输入完整组织名称 <strong>{detail.name}</strong> 以确认
-            </Label>
-            <Input
-              id="organization-delete-confirmation"
-              autoComplete="off"
-              spellCheck={false}
-              value={deleteConfirmation}
-              onChange={(event) => setDeleteConfirmation(event.target.value)}
-            />
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button disabled={busy} type="button" variant="outline">取消</Button>
-              </DialogClose>
-              <Button
-                className="organization-delete-confirm-button"
-                disabled={busy || deleteConfirmation !== detail.name}
-                type="submit"
-                variant="destructive"
-              >
-                <Trash size={16} /> {busy ? '正在删除...' : '永久删除组织'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <ConfirmActionDialog
+        key={detail.id}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={`删除组织“${detail.name}”？`}
+        description={`组织成员关系、邀请、周报与汇总将永久删除，无法恢复。${detail.projects.length} 个项目和 ${detail.testSpaces.length} 个测试空间将解除组织归属，其中的业务数据保留。`}
+        confirmationName={detail.name}
+        confirmLabel="永久删除组织"
+        onConfirm={submitOrganizationDelete}
+      />
 
       <div className="organization-tabs-row">
         <div className="organization-tabs" role="tablist" aria-label="组织模块">
@@ -1154,7 +1107,6 @@ export function OrganizationWorkbench({
                   detail={detail}
                   key={project.id}
                   onMutate={mutate}
-                  onRefresh={refreshResources}
                   project={project}
                 />
               ))}
@@ -1329,7 +1281,11 @@ export function OrganizationWorkbench({
                       size="icon"
                       type="button"
                       variant="ghost"
-                      onClick={() => void mutate(() => removeOrganizationMember(detail.id, member.id))}
+                      onClick={() => void confirmAction({
+                        title: `移除组织成员“${member.displayName}”？`,
+                        description: `该成员将失去“${detail.name}”及其项目、测试空间的成员权限，相关待办、交付和未结束 Bug 的指派将被清理。已有业务记录保留。`,
+                        confirmLabel: '移除成员',
+                      }, () => mutate(() => removeOrganizationMember(detail.id, member.id), true, (data) => !data.members.some((item) => item.id === member.id)))}
                     >
                       <Trash size={17} />
                     </Button>
@@ -1652,7 +1608,6 @@ function OrganizationProjectRow({
   canManage,
   detail,
   onMutate,
-  onRefresh,
   project,
 }: {
   canManageSubprojects: boolean
@@ -1660,13 +1615,15 @@ function OrganizationProjectRow({
   busy: boolean
   canManage: boolean
   detail: OrganizationDetail
-  onMutate: (operation: () => Promise<OrganizationDetail>) => Promise<boolean>
-  onRefresh: () => Promise<void>
+  onMutate: (operation: () => Promise<OrganizationDetail>, confirmed?: boolean, matches?: (data: OrganizationDetail) => boolean) => Promise<boolean>
   project: OrganizationProject
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [governanceOpen, setGovernanceOpen] = useState(false)
+  const [transferOpen, setTransferOpen] = useState(false)
   const [milestoneOpen, setMilestoneOpen] = useState(false)
   const [editingMilestone, setEditingMilestone] = useState<OrganizationProjectMilestone | null>(null)
+  const { confirmAction, confirmationDialog } = useConfirmAction(`${detail.id}:${project.id}`)
   const nextMilestone = nextProjectMilestone(project)
   const projectTodos = detail.tasks.filter((task) => (
     task.kind === 'todo' && task.projectId === project.id
@@ -1682,16 +1639,21 @@ function OrganizationProjectRow({
     status: OrganizationProjectMilestoneStatus,
   ) {
     if (status === milestone.status) return
-    void onMutate(() => updateOrganizationProjectMilestoneStatus(
-      detail.id,
-      project.id,
-      milestone.id,
-      status,
-    ))
+    const terminal = status === 'achieved' || status === 'cancelled'
+    const run = () => onMutate(() => updateOrganizationProjectMilestoneStatus(detail.id, project.id, milestone.id, status), terminal, (data) => data.projects.some((item) => item.id === project.id && item.milestones.some((entry) => entry.id === milestone.id && entry.status === status)))
+    if (terminal) {
+      void confirmAction({
+        title: `${status === 'achieved' ? '达成' : '取消'}里程碑“${milestone.title}”？`,
+        description: `该里程碑将不再作为下一里程碑展示，可在“${project.name}”的里程碑列表查看。`,
+        confirmLabel: status === 'achieved' ? '确认达成' : '取消里程碑',
+        variant: status === 'achieved' ? 'default' : 'destructive',
+      }, run)
+    } else void run()
   }
 
   return (
     <article className={`organization-project-item${expanded ? ' expanded' : ''}`}>
+      {confirmationDialog}
       <div className="organization-project-summary">
         <button
           aria-expanded={expanded}
@@ -1735,7 +1697,50 @@ function OrganizationProjectRow({
               project={project}
               onMutate={onMutate}
             />
-            <OrganizationProjectActions project={project} detail={detail} onRefresh={onRefresh} disabled={busy} />
+            {project.canManageSettings ? (
+              <Button
+                aria-label={`编辑项目${project.name}`}
+                disabled={busy}
+                size="icon"
+                title="编辑项目"
+                type="button"
+                variant="ghost"
+                onClick={() => setGovernanceOpen(true)}
+              >
+                <PencilSimple size={17} />
+              </Button>
+            ) : null}
+            {project.canTransferOwnership ? (
+              <Button
+                aria-label={`转移${project.name}的项目所有权`}
+                disabled={busy}
+                size="icon"
+                title="转移项目所有权"
+                type="button"
+                variant="ghost"
+                onClick={() => setTransferOpen(true)}
+              >
+                <UserSwitch size={17} />
+              </Button>
+            ) : null}
+            {project.canDelete ? (
+              <ConfirmActionDialog
+                actionKey={`organization-project-delete:${detail.id}:${project.id}`}
+                confirmationName={project.name}
+                confirmLabel="删除项目"
+                description={`删除后，“${project.name}”下的日记、待办、交付记录和 AI 项目对话将一并删除，无法撤销。`}
+                onConfirm={() => onMutate(async () => {
+                  await removeProject(project.id)
+                  return fetchOrganization(detail.id)
+                }, true, (data) => !data.projects.some((item) => item.id === project.id))}
+                title={`删除项目“${project.name}”？`}
+                trigger={(
+                  <Button aria-label={`删除项目${project.name}`} disabled={busy} size="icon" title="删除项目" type="button" variant="ghost">
+                    <Trash size={17} />
+                  </Button>
+                )}
+              />
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -1845,6 +1850,29 @@ function OrganizationProjectRow({
         </div>
       </div>
 
+      <ProjectGovernanceDialog
+        busy={busy}
+        open={governanceOpen}
+        project={project}
+        onOpenChange={setGovernanceOpen}
+        onSave={(payload) => onMutate(() => updateOrganizationProjectGovernance(detail.id, project.id, payload), payload.status !== project.status && (payload.status === 'completed' || payload.status === 'archived'), (data) => data.projects.some((item) => item.id === project.id && item.name === payload.name && item.description === payload.description && item.tags.join('\u0000') === payload.tags.join('\u0000') && item.status === payload.status && item.healthStatus === payload.healthStatus && item.healthNote === payload.healthNote))}
+      />
+      <ProjectTransferDialog
+        busy={busy}
+        detail={detail}
+        open={transferOpen}
+        project={project}
+        onOpenChange={setTransferOpen}
+        onSubmit={(targetUserId) => confirmAction({
+          title: `立即转移项目“${project.name}”？`,
+          description: `项目所有权将立即转移给所选成员，无需对方确认。${project.ownerName}将保留项目成员身份。`,
+          confirmLabel: '立即转移所有权',
+          variant: 'default',
+        }, () => onMutate(async () => {
+          await transferOrganizationProjectOwnership(detail.id, project.id, targetUserId)
+          return fetchOrganization(detail.id)
+        }, true, (data) => data.projects.some((item) => item.id === project.id && item.ownerUserId === targetUserId)))}
+      />
       <ProjectMilestoneDialog
         busy={busy}
         editing={editingMilestone}
@@ -1920,7 +1948,7 @@ function ProjectMemberDialog({
 }: {
   busy: boolean
   detail: OrganizationDetail
-  onMutate: (operation: () => Promise<OrganizationDetail>) => Promise<boolean>
+  onMutate: (operation: () => Promise<OrganizationDetail>, confirmed?: boolean, matches?: (data: OrganizationDetail) => boolean) => Promise<boolean>
   project: OrganizationProject
 }) {
   const [open, setOpen] = useState(false)
@@ -2005,28 +2033,227 @@ function ProjectMemberDialog({
                       <strong>{membership.memberName}</strong>
                       <small>{membership.invitedUsername} · 项目成员</small>
                     </span>
-                    <Button
-                      aria-label="移除成员"
-                      className="todo-delete-button"
-                      disabled={busy}
-                      size="icon"
-                      title="移除成员"
-                      type="button"
-                      variant="ghost"
-                      onClick={() => void onMutate(() => removeOrganizationProjectMember(
-                        detail.id,
-                        project.id,
-                        membership.id,
-                      ))}
-                    >
-                      <Trash size={14} />
-                    </Button>
+                    <ConfirmActionDialog
+                      title={`移除项目成员“${membership.memberName}”？`}
+                      description={`该成员将失去“${project.name}”的项目成员权限，相关待办负责人、验收人、关注关系及交付指派将按项目规则清理。已有业务记录保留。`}
+                      confirmLabel="移除成员"
+                      onConfirm={() => onMutate(() => removeOrganizationProjectMember(detail.id, project.id, membership.id), true, (data) => data.projects.some((item) => item.id === project.id && !item.memberships.some((member) => member.id === membership.id)))}
+                      trigger={(
+                        <Button
+                          aria-label="移除成员"
+                          className="todo-delete-button"
+                          disabled={busy}
+                          size="icon"
+                          title="移除成员"
+                          type="button"
+                          variant="ghost"
+                        >
+                          <Trash size={14} />
+                        </Button>
+                      )}
+                    />
                   </article>
                 ))
               ) : null}
             </div>
           </section>
         </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Retained while project actions use the audited transfer-request workflow.
+function ProjectGovernanceDialog({
+  busy,
+  onOpenChange,
+  onSave,
+  open,
+  project,
+}: {
+  busy: boolean
+  onOpenChange: (open: boolean) => void
+  onSave: (payload: {
+    description: string
+    healthNote: string
+    healthStatus: OrganizationProjectHealthStatus
+    name: string
+    status: OrganizationProjectStatus
+    tags: string[]
+  }) => Promise<boolean>
+  open: boolean
+  project: OrganizationProject
+}) {
+  const { confirmAction, confirmationDialog } = useConfirmAction(`${open}:${project.id}`)
+  const [status, setStatus] = useState(project.status)
+  const [healthStatus, setHealthStatus] = useState(project.healthStatus)
+  const [healthNote, setHealthNote] = useState(project.healthNote)
+  const [name, setName] = useState(project.name)
+  const [description, setDescription] = useState(project.description)
+  const [tags, setTags] = useState(project.tags.join('，'))
+
+  useEffect(() => {
+    if (!open) return
+    setStatus(project.status)
+    setHealthStatus(project.healthStatus)
+    setHealthNote(project.healthNote)
+    setName(project.name)
+    setDescription(project.description)
+    setTags(project.tags.join('，'))
+  }, [open, project.description, project.healthNote, project.healthStatus, project.name, project.status, project.tags])
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    const payload = {
+      description: description.trim(),
+      healthNote: healthNote.trim(),
+      healthStatus,
+      name: name.trim(),
+      status,
+      tags: tags.split(/[\s,，、]+/u).filter(Boolean),
+    }
+    const saved = status !== project.status && (status === 'completed' || status === 'archived')
+      ? await confirmAction({
+          title: `${status === 'completed' ? '完成' : '归档'}项目“${project.name}”？`,
+          description: '项目将退出进行中的项目列表，可在组织项目列表切换对应状态查看。本次治理表单的其他修改也将一并保存。',
+          confirmLabel: status === 'completed' ? '完成项目' : '归档项目',
+          variant: 'default',
+        }, () => onSave(payload))
+      : await onSave(payload)
+    if (saved) onOpenChange(false)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => !busy && onOpenChange(nextOpen)}>
+      <DialogContent className="organization-governance-dialog">
+        <DialogHeader>
+          <DialogTitle>{project.name} · 项目管理</DialogTitle>
+          <DialogDescription>生命周期描述项目阶段，健康度反映当前计划是否可控。</DialogDescription>
+        </DialogHeader>
+        {confirmationDialog}
+        <form className="organization-governance-form" onSubmit={submit}>
+          <Label>
+            项目名称
+            <Input maxLength={80} required value={name} onChange={(event) => setName(event.target.value)} />
+          </Label>
+          <Label>
+            项目简介
+            <Textarea maxLength={5_000} value={description} onChange={(event) => setDescription(event.target.value)} />
+          </Label>
+          <Label>
+            项目标签
+            <Input maxLength={819} value={tags} onChange={(event) => setTags(event.target.value)} placeholder="用逗号或空格分隔，最多 20 个" />
+          </Label>
+          <div className="organization-governance-fields">
+            <Label>
+              生命周期状态
+              <Select value={status} onValueChange={(value) => setStatus(value as OrganizationProjectStatus)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="active">进行中</SelectItem>
+                  <SelectItem value="paused">暂停</SelectItem>
+                  <SelectItem value="completed">已完成</SelectItem>
+                  <SelectItem value="archived">已归档</SelectItem>
+                </SelectContent>
+              </Select>
+            </Label>
+            <Label>
+              项目健康度
+              <Select value={healthStatus} onValueChange={(value) => setHealthStatus(value as OrganizationProjectHealthStatus)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="on_track">正常</SelectItem>
+                  <SelectItem value="at_risk">有风险</SelectItem>
+                  <SelectItem value="off_track">已失控</SelectItem>
+                </SelectContent>
+              </Select>
+            </Label>
+          </div>
+          <Label>
+            健康度说明{healthStatus === 'on_track' ? '（可选）' : ''}
+            <Textarea
+              maxLength={1_000}
+              placeholder={healthStatus === 'on_track' ? '记录当前判断依据' : '说明风险、影响和需要的决策'}
+              value={healthNote}
+              onChange={(event) => setHealthNote(event.target.value)}
+            />
+          </Label>
+          <DialogFooter>
+            <DialogClose asChild><Button disabled={busy} type="button" variant="outline">取消</Button></DialogClose>
+            <Button disabled={busy || !name.trim() || (healthStatus !== 'on_track' && !healthNote.trim())} type="submit">
+              保存项目
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ProjectTransferDialog({
+  busy,
+  detail,
+  onOpenChange,
+  onSubmit,
+  open,
+  project,
+}: {
+  busy: boolean
+  detail: OrganizationDetail
+  onOpenChange: (open: boolean) => void
+  onSubmit: (targetUserId: number) => Promise<boolean>
+  open: boolean
+  project: OrganizationProject
+}) {
+  const [targetUserId, setTargetUserId] = useState('')
+  const [completed, setCompleted] = useState(false)
+  const candidates = detail.members.filter((member) => member.id !== project.ownerUserId)
+
+  useEffect(() => {
+    if (!open) return
+    setTargetUserId('')
+    setCompleted(false)
+  }, [open, project.id])
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    const target = Number(targetUserId)
+    if (!Number.isSafeInteger(target) || target <= 0) return
+    if (await onSubmit(target)) setCompleted(true)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => !busy && onOpenChange(nextOpen)}>
+      <DialogContent className="organization-governance-dialog">
+        <DialogHeader>
+          <DialogTitle>转移项目所有权</DialogTitle>
+          <DialogDescription>
+            当前所有者为 {project.ownerName}。确认后会立即完成所有权转移，原所有者保留项目成员身份。
+          </DialogDescription>
+        </DialogHeader>
+        {completed ? (
+          <DialogFooter>
+            <DialogClose asChild><Button type="button">关闭</Button></DialogClose>
+          </DialogFooter>
+        ) : (
+          <form className="organization-governance-form" onSubmit={submit}>
+            <Label>
+              新所有者
+              <Select value={targetUserId} onValueChange={setTargetUserId}>
+                <SelectTrigger aria-label="选择项目新所有者"><SelectValue placeholder="选择组织成员" /></SelectTrigger>
+                <SelectContent>
+                  {candidates.map((member) => (
+                    <SelectItem key={member.id} value={String(member.id)}>{member.displayName}（{member.username}）</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Label>
+            <DialogFooter>
+              <DialogClose asChild><Button disabled={busy} type="button" variant="outline">取消</Button></DialogClose>
+              <Button disabled={busy || !targetUserId} type="submit">确认转移所有权</Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   )

@@ -31,14 +31,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { createWgetDownloadCommand } from '@/lib/download-command'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { ConfirmActionDialog } from './confirm-action-dialog'
 import './image-sync-workbench.css'
 
 const statusLabels: Record<ImageSyncRunStatus, string> = {
@@ -119,7 +112,6 @@ export function ImageSyncWorkbench() {
   const [busy, setBusy] = useState(false)
   const [copiedUri, setCopiedUri] = useState('')
   const [downloadCopyRunId, setDownloadCopyRunId] = useState<number | null>(null)
-  const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteRun, setDeleteRun] = useState<ImageSyncRun | null>(null)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<ImageSyncFilter>('all')
@@ -263,18 +255,11 @@ export function ImageSyncWorkbench() {
   }
 
   async function confirmDelete() {
-    if (!deleteRun) return
-    setDeleteBusy(true)
+    if (!deleteRun) return false
     setError('')
-    try {
-      await deleteImageSyncRun(deleteRun.id)
-      setRuns((current) => current.filter((run) => run.id !== deleteRun.id))
-      setDeleteRun(null)
-    } catch (deleteError) {
-      setError(errorMessage(deleteError, '失败任务清理失败。'))
-    } finally {
-      setDeleteBusy(false)
-    }
+    await deleteImageSyncRun(deleteRun.id)
+    setRuns((current) => current.filter((run) => run.id !== deleteRun.id))
+    return true
   }
 
   return (
@@ -504,27 +489,17 @@ export function ImageSyncWorkbench() {
         </section>
       </div>
 
-      <Dialog open={deleteRun != null} onOpenChange={(open) => {
-        if (!open && !deleteBusy) setDeleteRun(null)
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>清理失败任务</DialogTitle>
-            <DialogDescription>
-              只会删除任务 #{deleteRun?.id} 的本地记录，不会删除 GitHub Action、OSS 文件或日志。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button disabled={deleteBusy} type="button" variant="outline" onClick={() => setDeleteRun(null)}>
-              取消
-            </Button>
-            <Button disabled={deleteBusy} type="button" variant="destructive" onClick={() => void confirmDelete()}>
-              {deleteBusy ? <SpinnerGap className="image-sync-spin" /> : <Trash />}
-              {deleteBusy ? '正在清理' : '清理本地记录'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmActionDialog
+        key={deleteRun?.id}
+        actionKey={`delete-image-sync:${deleteRun?.id}`}
+        open={deleteRun != null}
+        onOpenChange={(open) => { if (!open) setDeleteRun(null) }}
+        title={`清理失败任务 #${deleteRun?.id ?? ''}？`}
+        description="将删除这条任务的本地记录。GitHub Action、OSS 文件和日志保留。"
+        confirmLabel="清理本地记录"
+        onConfirm={confirmDelete}
+      />
+
     </div>
   )
 }

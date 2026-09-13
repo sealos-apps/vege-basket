@@ -13,6 +13,18 @@ const timelineSource = readFileSync(
 )
 const indexSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
 
+test('package market offers link validity choices from four hours through seven days', () => {
+  const expireOptionsSource = workbenchSource.slice(
+    workbenchSource.indexOf('const packageMarketExpireOptions = ['),
+    workbenchSource.indexOf('const packageMarketExpireMaxMinutes'),
+  )
+  assert.match(
+    expireOptionsSource,
+    /4 小时[\s\S]*?4 \* 60[\s\S]*?8 小时[\s\S]*?8 \* 60[\s\S]*?24 小时[\s\S]*?24 \* 60[\s\S]*?3 天[\s\S]*?3 \* 24 \* 60[\s\S]*?7 天[\s\S]*?7 \* 24 \* 60/u,
+  )
+  assert.doesNotMatch(expireOptionsSource, /分钟|10 小时|14 天/u)
+})
+
 test('published event and package documents remain openable for read-only viewing', () => {
   assert.deepEqual(resolveExistingOperationInteraction(false), {
     disabled: false,

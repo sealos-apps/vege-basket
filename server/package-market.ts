@@ -75,7 +75,7 @@ const downloadExpireSeconds = Number(
     process.env.OSS_UI_DOWNLOAD_EXPIRE_SECONDS ??
     30 * 60,
 )
-export const packageMarketExpireMinuteOptions = [30, 60, 90, 120, 300, 600] as const
+export const packageMarketExpireMinuteOptions = [240, 480, 1440, 4320, 10080] as const
 export const packageMarketExpireMaxMinutes = 365 * 24 * 60
 const defaultMiddlewareRoot = 'offline/sealos-pro/'
 const fallbackMiddlewareRoots = normalizeList([
