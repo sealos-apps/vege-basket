@@ -395,7 +395,7 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   project, the same assignment is also sent to the configured project chat and mentions
   the assignee. Bugs without a project-linked plan never target a group chat. Status-only
   edits and unchanged assignees do not redeliver the assignment notification.
-- Package download expiry choices: 30, 60, 90, 120, 300, or 600 minutes.
+- Package download expiry choices: 4 hours, 8 hours, 24 hours, 3 days, or 7 days.
 
 `GET /api/ai/status` returns `configured`, `model`, and the effective positive
 `maxMessageLength`; the browser uses that limit to reject an oversized composed message

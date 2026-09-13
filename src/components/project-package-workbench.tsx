@@ -382,12 +382,11 @@ function channelLabel(channel: PackageMarketChannel) {
 }
 
 const packageMarketExpireOptions = [
-  { label: '30 分钟', value: 30 },
-  { label: '60 分钟（1 小时）', value: 60 },
-  { label: '90 分钟', value: 90 },
-  { label: '2 小时', value: 120 },
-  { label: '5 小时', value: 300 },
-  { label: '10 小时', value: 600 },
+  { label: '4 小时', value: 4 * 60 },
+  { label: '8 小时', value: 8 * 60 },
+  { label: '24 小时', value: 24 * 60 },
+  { label: '3 天', value: 3 * 24 * 60 },
+  { label: '7 天', value: 7 * 24 * 60 },
 ]
 
 const packageMarketExpireMaxMinutes = 365 * 24 * 60
