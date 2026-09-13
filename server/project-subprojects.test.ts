@@ -54,3 +54,11 @@ test('subproject deletion uses the shared confirmation dialog', () => {
   assert.match(panelSource, /project-subproject-delete:/u)
   assert.doesNotMatch(panelSource, /window\.confirm/u)
 })
+
+test('subproject dialog hides only its header and keeps item rows visible', () => {
+  const panelStyles = readFileSync(new URL('../src/components/project-subprojects-panel.css', import.meta.url), 'utf8')
+  assert.match(panelSource, /project-subprojects-header organization-project-detail-heading/u)
+  assert.match(panelSource, /project-subproject-row organization-project-detail-heading/u)
+  assert.match(panelStyles, /\.project-subprojects-dialog \.project-subprojects-panel > \.project-subprojects-header\s*\{\s*display:\s*none;/u)
+  assert.doesNotMatch(panelStyles, /\.project-subprojects-dialog \.project-subprojects-panel > \.organization-project-detail-heading\s*\{/u)
+})

@@ -55,7 +55,7 @@
   border-bottom: 0;
 }
 
-.project-subprojects-dialog .project-subprojects-panel > .organization-project-detail-heading {
+.project-subprojects-dialog .project-subprojects-panel > .project-subprojects-header {
   display: none;
 }
 

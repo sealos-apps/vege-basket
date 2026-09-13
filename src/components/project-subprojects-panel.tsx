@@ -46,9 +46,9 @@ export function ProjectSubprojectsPanel({ projectId, canManage, onChange }: { pr
     } finally { if (generation === requestGeneration.current) setBusy(false) }
   }
   return <section className="project-subprojects-panel" aria-label="子项目管理" aria-busy={loading || busy}>
-    <div className="organization-project-detail-heading"><strong>子项目管理</strong><span>{items.length} 个子项目</span></div>
+    <div className="project-subprojects-header organization-project-detail-heading"><strong>子项目管理</strong><span>{items.length} 个子项目</span></div>
     {error && <p role="alert">{error}</p>}
-    {items.map(item => <div className="organization-project-detail-heading" key={item.id}>
+    {items.map(item => <div className="project-subproject-row organization-project-detail-heading" key={item.id}>
       <span>{item.name}</span>
       <div><span>{item.taskCount ?? 0} 个任务</span>
         {canManage && <>
