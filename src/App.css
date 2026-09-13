@@ -4081,8 +4081,68 @@ textarea:focus {
   gap: 12px;
 }
 
+.notification-center-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 4px;
+}
+
+.notification-center-heading h2 {
+  margin: 0;
+  color: var(--strong);
+  font-size: 30px;
+  line-height: 1.15;
+}
+
+.notification-center-heading p {
+  margin: 6px 0 0;
+  color: var(--muted-text);
+  font-size: 13px;
+}
+
+.notification-category-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.notification-category-toolbar button {
+  flex: 0 0 auto;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 5px;
+  padding: 8px 10px;
+  color: var(--muted-text);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.notification-category-toolbar button:hover,
+.notification-category-toolbar button.active {
+  border-bottom-color: var(--brand);
+  color: var(--brand);
+}
+
+.notification-category-toolbar button span {
+  margin-left: 3px;
+  color: var(--brand);
+  font-size: 12px;
+}
+
 .notification-feed {
   display: grid;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 14px;
 }
 
 .notification-feed-item {
@@ -4090,8 +4150,12 @@ textarea:focus {
   grid-template-columns: 8px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
-  padding: 16px 4px;
+  padding: 18px 4px;
   border-bottom: 1px solid var(--line);
+}
+
+.notification-feed-item .notification-feed-content p::first-line {
+  color: var(--strong);
 }
 
 .notification-feed-item.has-actions {

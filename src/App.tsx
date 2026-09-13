@@ -5433,6 +5433,10 @@ ${packageTimelineText}`
             onAcceptInvitation={acceptInvitation}
             onIgnoreInvitation={ignoreInvitation}
             onRespondProjectTransfer={respondProjectTransfer}
+            onMarkAllRead={async () => {
+              const result = await markAllNotificationsRead()
+              setNotifications(result.notifications)
+            }}
           />
         )}
 
@@ -7363,11 +7367,13 @@ function NotificationCenterView({
   onAcceptInvitation,
   onIgnoreInvitation,
   onRespondProjectTransfer,
+  onMarkAllRead,
 }: {
   notifications: NotificationCenterData
   onAcceptInvitation: (membershipId: number) => Promise<void>
   onIgnoreInvitation: (membershipId: number) => Promise<void>
   onRespondProjectTransfer: (transferId: number, action: 'accept' | 'decline') => Promise<void>
+  onMarkAllRead: () => Promise<void>
 }) {
   type NotificationFeedItem = {
     id: string
@@ -7378,9 +7384,11 @@ function NotificationCenterView({
     message: string
     sortAt: number
     time?: string
+    category: '关注信息' | '待办信息' | '测试与质量' | '缺陷处理' | '周报与汇报' | '其他'
   }
 
   const [processingItemId, setProcessingItemId] = useState<string | null>(null)
+  const [activeCategory, setActiveCategory] = useState<'全部' | NotificationFeedItem['category']>('全部')
 
   const items = useMemo<NotificationFeedItem[]>(() => {
     const sortTime = (item: { assignedAt?: string; createdAt?: string; dueDate?: string; sortAt?: string }) => {
@@ -7399,6 +7407,7 @@ function NotificationCenterView({
         message: `${invite.invitedByName} 邀请你加入项目「${invite.projectName}」。`,
         sortAt: sortTime(invite),
         time: invite.createdAt,
+        category: '其他',
       })
     }
     for (const transfer of visible(notifications.projectTransfers)) {
@@ -7409,6 +7418,7 @@ function NotificationCenterView({
         time: transfer.createdAt,
         transferId: transfer.id,
         transferProjectName: transfer.projectName,
+        category: '其他',
       })
     }
     for (const notification of visible(notifications.accountOffboardingReceived)) {
@@ -7426,6 +7436,7 @@ function NotificationCenterView({
         message: `你已接收「${notification.departedUserName}」离职后的资产：${organizationText}。`,
         sortAt: sortTime(notification),
         time: notification.createdAt,
+        category: '其他',
       })
     }
     for (const todo of visible(notifications.assignedTodos)) {
@@ -7434,6 +7445,7 @@ function NotificationCenterView({
         message: `${todo.assignedByName ?? '有人'} 在「${todo.projectName}${todo.subprojectName ? ` / ${todo.subprojectName}` : ''}」中为你添加了一条待办「${todo.title}」，请及时前往待办列表查看。`,
         sortAt: sortTime(todo),
         time: todo.assignedAt,
+        category: '待办信息',
       })
     }
     for (const todo of visible(notifications.watchedTodos)) {
@@ -7442,6 +7454,7 @@ function NotificationCenterView({
         message: `${todo.watchedByName ?? '有人'} 在「${todo.projectName}${todo.subprojectName ? ` / ${todo.subprojectName}` : ''}」中关注了待办「${todo.title}」。`,
         sortAt: sortTime(todo),
         time: todo.watchedAt,
+        category: '关注信息',
       })
     }
     for (const event of visible(notifications.assignedPackageEvents)) {
@@ -7450,6 +7463,7 @@ function NotificationCenterView({
         message: `${event.assignedByName ?? '有人'} 在「${event.projectName}」中为你安排了交付事件「${event.title}」，请及时查看。`,
         sortAt: sortTime(event),
         time: event.assignedAt,
+        category: '测试与质量',
       })
     }
     for (const comment of visible(notifications.packageEventCommentMentions)) {
@@ -7458,6 +7472,7 @@ function NotificationCenterView({
         message: `${comment.authorName} 在「${comment.projectName}」的交付反馈中提到了你${comment.commentPreview ? `：“${comment.commentPreview}”` : '。'}`,
         sortAt: sortTime(comment),
         time: comment.createdAt,
+        category: '关注信息',
       })
     }
     for (const todo of visible(notifications.dueTomorrowTodos)) {
@@ -7466,6 +7481,7 @@ function NotificationCenterView({
         message: `「${todo.projectName}${todo.subprojectName ? ` / ${todo.subprojectName}` : ''}」中的待办「${todo.title}」将于 ${todo.dueDate} 到期，请及时处理。`,
         sortAt: sortTime(todo),
         time: todo.dueDate,
+        category: '待办信息',
       })
     }
     for (const note of visible(notifications.noteMentions)) {
@@ -7474,11 +7490,22 @@ function NotificationCenterView({
         message: `${note.noteAuthorName ?? '有人'} 在「${note.projectName}${note.subprojectName ? ` / ${note.subprojectName}` : ''}」的待办「${note.title}」备注中提到了你${note.notePreview ? `：“${note.notePreview}”` : '。'}`,
         sortAt: sortTime(note),
         time: note.createdAt,
+        category: '关注信息',
       })
     }
 
     return result.sort((left, right) => right.sortAt - left.sortAt)
   }, [notifications])
+
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>([['全部', items.length]])
+    for (const item of items) counts.set(item.category, (counts.get(item.category) ?? 0) + 1)
+    return counts
+  }, [items])
+
+  const filteredItems = activeCategory === '全部'
+    ? items
+    : items.filter((item) => item.category === activeCategory)
 
   async function handleInvitation(inviteId: number, action: 'accept' | 'ignore') {
     if (processingItemId !== null) return
@@ -7506,9 +7533,32 @@ function NotificationCenterView({
 
   return (
     <Card className="panel notification-center-panel">
-      {items.length > 0 ? (
+      <div className="notification-center-heading">
+        <div>
+          <h2>通知中心</h2>
+          <p>项目协作、测试质量与周期汇报</p>
+        </div>
+        <Button type="button" variant="outline" onClick={() => void onMarkAllRead()}>
+          全部标为已读
+        </Button>
+      </div>
+      <div className="notification-category-toolbar" role="tablist" aria-label="通知分类">
+        {(['全部', '关注信息', '待办信息', '测试与质量', '缺陷处理', '周报与汇报', '其他'] as const).map((category) => (
+          <button
+            className={activeCategory === category ? 'active' : ''}
+            key={category}
+            role="tab"
+            aria-selected={activeCategory === category}
+            type="button"
+            onClick={() => setActiveCategory(category)}
+          >
+            {category} <span>{categoryCounts.get(category) ?? 0}</span>
+          </button>
+        ))}
+      </div>
+      {filteredItems.length > 0 ? (
         <div className="notification-feed" aria-label="通知列表">
-          {items.map((item) => (
+          {filteredItems.map((item) => (
             <article
               className={`notification-feed-item${item.inviteId || item.transferId ? ' has-actions' : ''}`}
               key={item.id}
