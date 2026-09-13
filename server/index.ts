@@ -1,4 +1,6 @@
 import 'dotenv/config'
+import { canCompleteProjectTransfer, lockTransferProject } from './project-transfer.ts'
+import { lockResourceManager, type ManagedResource } from './resource-management.ts'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -3729,6 +3731,36 @@ async function getProjectAccess(projectId: number, userId: number): Promise<Proj
     id: Number(row.id),
     ownerUserId: Number(row.owner_user_id),
     role: row.access_role,
+  }
+}
+
+async function withProjectManager(
+  projectId: number,
+  userId: number,
+  response: express.Response,
+  action: (client: PoolClient, access: ManagedResource) => Promise<void>,
+) {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const access = await lockResourceManager(client, 'project', projectId, userId)
+    if (!access) {
+      await client.query('rollback')
+      response.status(404).json({ error: 'Managed project not found' })
+      return false
+    }
+    await action(client, access)
+    if (response.headersSent) {
+      await client.query('rollback')
+      return false
+    }
+    await client.query('commit')
+    return true
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
   }
 }
 
@@ -9473,19 +9505,14 @@ app.patch('/api/projects/:projectId', asyncHandler(async (request, response) => 
   const userId = await ensureUserId(request, response)
   if (!userId) return
   const projectId = Number(request.params.projectId)
-  const access = await getProjectAccess(projectId, userId)
-  if (!access) {
-    response.status(404).json({ error: 'Project not found' })
-    return
-  }
-  if (access.role !== 'owner') {
-    response.status(403).json({ error: 'Only the project owner can update project settings' })
-    return
-  }
   const updates: string[] = []
   const values: unknown[] = []
 
   if (typeof request.body.name === 'string') {
+    if (!request.body.name.trim()) {
+      response.status(400).json({ error: 'Project name is required' })
+      return
+    }
     values.push(encryptText(request.body.name.trim()))
     updates.push(`name = $${values.length}`)
   }
@@ -9509,15 +9536,17 @@ app.patch('/api/projects/:projectId', asyncHandler(async (request, response) => 
     return
   }
 
-  values.push(projectId, userId)
-  await query(
-    `
-    update projects
-    set ${updates.join(', ')}, updated_at = now()
-    where id = $${values.length - 1} and user_id = $${values.length}
-    `,
-    values,
-  )
+  if (!await withProjectManager(projectId, userId, response, async (client, access) => {
+    values.push(projectId, access.ownerUserId)
+    await client.query(
+      `
+      update projects
+      set ${updates.join(', ')}, updated_at = now()
+      where id = $${values.length - 1} and user_id = $${values.length}
+      `,
+      values,
+    )
+  })) return
   response.json(await getWorkspace(userId))
 }))
 
@@ -9565,59 +9594,24 @@ app.post('/api/projects/:projectId/transfer', asyncHandler(async (request, respo
     response.status(400).json({ error: 'Select an organization shared by both owners' })
     return
   }
-  if (!Number.isSafeInteger(targetUserId) || targetUserId <= 0 || targetUserId === userId) {
+  if (!Number.isSafeInteger(targetUserId) || targetUserId <= 0) {
     response.status(400).json({ error: 'Select another organization member as the new owner' })
     return
   }
-  const access = await getProjectAccess(projectId, userId)
-  if (!access) {
-    response.status(404).json({ error: 'Project not found' })
-    return
-  }
-  if (access.role !== 'owner') {
-    response.status(403).json({ error: 'Only the project owner can transfer the project' })
-    return
-  }
-
-  const result = await query<{ organization_id: string }>(
-    `
-    select organization.id as organization_id
-    from projects p
-    join organizations organization on organization.id = $3
-    join organization_memberships owner_membership
-      on owner_membership.organization_id = organization.id
-     and owner_membership.user_id = p.user_id
-     and owner_membership.status = 'active'
-    join organization_memberships target_membership
-      on target_membership.organization_id = organization.id
-     and target_membership.user_id = $4
-     and target_membership.status = 'active'
-    where p.id = $1 and p.user_id = $2
-    limit 1
-    `,
-    [projectId, userId, organizationId, targetUserId],
-  )
-  const row = result.rows[0]
-  if (!row) {
-    response.status(400).json({
-      error: 'Current and new owners must be active members of the selected organization',
-    })
-    return
-  }
-
   const token = crypto.randomBytes(32).toString('base64url')
   const client = await pool.connect()
   let transferId: number
   try {
     await client.query('begin')
-    await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`ai-project:${projectId}`])
-    const locked = await client.query<{ id: string }>(
-      `select id from projects where id = $1 and user_id = $2 for update`,
-      [projectId, userId],
-    )
-    if (!locked.rows[0]) {
+    const access = await lockResourceManager(client, 'project', projectId, userId)
+    if (!access) {
       await client.query('rollback')
-      response.status(409).json({ error: 'Project ownership changed, reload and try again' })
+      response.status(404).json({ error: 'Managed project not found' })
+      return
+    }
+    if (targetUserId === access.ownerUserId || (access.ownerUserId !== userId && access.organizationId !== organizationId)) {
+      await client.query('rollback')
+      response.status(400).json({ error: 'Select another member of the project organization' })
       return
     }
     const activeOwners = await client.query<{ user_id: string }>(
@@ -9626,7 +9620,7 @@ app.post('/api/projects/:projectId/transfer', asyncHandler(async (request, respo
          and user_id in ($2::bigint, $3::bigint)
          and status = 'active'
        for share`,
-      [organizationId, userId, targetUserId],
+      [organizationId, access.ownerUserId, targetUserId],
     )
     if (activeOwners.rows.length !== 2) {
       await client.query('rollback')
@@ -9643,11 +9637,11 @@ app.post('/api/projects/:projectId/transfer', asyncHandler(async (request, respo
     )
     const transfer = await client.query<{ id: string }>(
       `insert into project_transfer_requests
-        (project_id, organization_id, requested_by_user_id, target_user_id, target_open_id,
+        (project_id, organization_id, requested_by_user_id, previous_owner_user_id, target_user_id, target_open_id,
          token_hash, expires_at)
-       values ($1, $2, $3, $4, $5, $6, now() + interval '72 hours')
+       values ($1, $2, $3, $7, $4, $5, $6, now() + interval '72 hours')
        returning id`,
-      [projectId, organizationId, userId, targetUserId, '', hashProjectTransferToken(token)],
+      [projectId, organizationId, userId, targetUserId, '', hashProjectTransferToken(token), access.ownerUserId],
     )
     transferId = Number(transfer.rows[0].id)
     await client.query('commit')
@@ -9678,6 +9672,11 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
   const client = await pool.connect()
   try {
     await client.query('begin')
+    if (!await lockTransferProject(client, transferId)) {
+      await client.query('rollback')
+      response.status(409).json({ error: 'Project transfer changed or no longer exists' })
+      return
+    }
     const transferResult = await client.query<{
       expires_at: Date
       organization_id: string
@@ -9685,6 +9684,7 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
       project_name: string
       requested_by_email: string
       requested_by_user_id: string
+      previous_owner_user_id: string
       status: string
       target_user_id: string
     }>(
@@ -9692,6 +9692,7 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
       select transfer.project_id,
              transfer.organization_id,
              transfer.requested_by_user_id,
+             coalesce(transfer.previous_owner_user_id, transfer.requested_by_user_id) as previous_owner_user_id,
              transfer.target_user_id,
              transfer.status,
              transfer.expires_at,
@@ -9699,7 +9700,7 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
              requester.email as requested_by_email
       from project_transfer_requests transfer
       join projects project on project.id = transfer.project_id
-      join users requester on requester.id = transfer.requested_by_user_id
+      join users requester on requester.id = coalesce(transfer.previous_owner_user_id, transfer.requested_by_user_id)
       where transfer.id = $1
         and transfer.target_user_id = $2
       for update of transfer, project
@@ -9721,11 +9722,8 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
     const projectId = Number(transfer.project_id)
     const organizationId = Number(transfer.organization_id)
     const requestedByUserId = Number(transfer.requested_by_user_id)
+    const previousOwnerUserId = Number(transfer.previous_owner_user_id)
     const targetUserId = Number(transfer.target_user_id)
-    await client.query(
-      `select pg_advisory_xact_lock(hashtextextended($1, 0))`,
-      [`ai-project:${projectId}`],
-    )
 
     const dismissNotification = async () => {
       await client.query(
@@ -9763,7 +9761,7 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
         and status = 'active'
       for share
       `,
-      [organizationId, requestedByUserId, targetUserId],
+      [organizationId, previousOwnerUserId, targetUserId],
     )
     if (activeOwners.rows.length !== 2) {
       await client.query(
@@ -9782,7 +9780,9 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
       `select user_id from projects where id = $1 for update`,
       [projectId],
     )
-    if (Number(project.rows[0]?.user_id) !== requestedByUserId) {
+    if (Number(project.rows[0]?.user_id) !== previousOwnerUserId || !await canCompleteProjectTransfer(client, {
+      projectId, organizationId, requestedByUserId, previousOwnerUserId,
+    })) {
       await client.query(
         `update project_transfer_requests
          set status = 'revoked', last_error = $2, responded_by_user_id = $3, responded_at = now()
@@ -9798,7 +9798,7 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
     if (action === 'accept') {
       await client.query(
         `update projects set user_id = $1, updated_at = now() where id = $2 and user_id = $3`,
-        [targetUserId, projectId, requestedByUserId],
+        [targetUserId, projectId, previousOwnerUserId],
       )
       await client.query(
         `update project_memberships set owner_user_id = $1 where project_id = $2`,
@@ -9826,7 +9826,7 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
         [
           projectId,
           targetUserId,
-          requestedByUserId,
+          previousOwnerUserId,
           encryptText(normalizeUsername(transfer.requested_by_email)),
           blindIndex(normalizeUsername(transfer.requested_by_email)),
         ],
@@ -9848,7 +9848,7 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
         userId,
         action === 'accept' ? 'project.transfer.accepted' : 'project.transfer.declined',
         String(projectId),
-        encryptText(JSON.stringify({ from: requestedByUserId, to: targetUserId })),
+        encryptText(JSON.stringify({ from: previousOwnerUserId, requestedBy: requestedByUserId, to: targetUserId })),
       ],
     )
     await client.query('commit')
@@ -9873,15 +9873,6 @@ app.delete('/api/projects/:projectId', asyncHandler(async (request, response) =>
   const userId = await ensureUserId(request, response)
   if (!userId) return
   const projectId = Number(request.params.projectId)
-  const access = await getProjectAccess(projectId, userId)
-  if (!access) {
-    response.status(404).json({ error: 'Project not found' })
-    return
-  }
-  if (access.role !== 'owner') {
-    response.status(403).json({ error: 'Only the project owner can delete the project' })
-    return
-  }
   const client = await pool.connect()
   try {
     const deleted = await deleteOwnedProjectWithAiCleanup(client, projectId, userId)

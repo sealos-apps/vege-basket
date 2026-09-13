@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import type express from 'express'
 import { Router } from 'express'
 import type { PoolClient } from 'pg'
-import { blindIndex, decryptText, encryptText } from './crypto.ts'
+import { blindIndex, decryptJson, decryptText, encryptJson, encryptText } from './crypto.ts'
 import { pool, query } from './db.ts'
 import {
   canManageOrganization,
@@ -256,6 +256,7 @@ async function lockGovernedProject(
     join user_roles role
       on role.user_id = $3 and role.role = 'organization_admin'
     where p.organization_id = $1 and p.id = $2
+      and membership.access_role in ('owner', 'admin')
     for update of p, membership, role
     `,
     [organizationId, projectId, userId],
@@ -499,6 +500,9 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       [organizationId],
     ),
     query<{
+      description_encrypted: string | null
+      tags: string[]
+      tags_encrypted: string | null
       health_note_encrypted: string | null
       health_status: string
       id: string
@@ -512,7 +516,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       updated_at: Date
     }>(
       `
-      select p.id, p.name, p.status, p.health_status, p.health_note_encrypted,
+      select p.id, p.name, p.description_encrypted, p.tags, p.tags_encrypted,
+        p.status, p.health_status, p.health_note_encrypted,
         p.updated_at, p.user_id as owner_user_id, owner.email as owner_email,
         owner.display_name as owner_display_name,
         count(distinct t.id) as todo_count,
@@ -962,6 +967,14 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
     ownerUserId: Number(row.owner_user_id),
     packageMarketPolicy,
     projects: projects.rows.map((project) => ({
+      description: project.description_encrypted ? decryptText(project.description_encrypted) : '',
+      tags: project.tags_encrypted
+        ? decryptJson<string[]>(project.tags_encrypted, project.tags ?? [])
+        : project.tags ?? [],
+      canManageSettings: canManageProjects,
+      canManageMembers: canManageProjects,
+      canDelete: canManageProjects,
+      canTransferOwnership: canManageProjects,
       healthNote: project.health_note_encrypted ? decryptText(project.health_note_encrypted) : '',
       healthStatus: normalizeOrganizationProjectHealthStatus(project.health_status) ?? 'on_track',
       id: Number(project.id),
@@ -2454,16 +2467,27 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     const projectId = positiveId(request.params.projectId)
     if (!(await requireOrganizationProjectManager(response, organizationId, session.userId)) || !projectId) return
 
+    const hasName = Object.hasOwn(request.body ?? {}, 'name')
+    const hasDescription = Object.hasOwn(request.body ?? {}, 'description')
+    const hasTags = Object.hasOwn(request.body ?? {}, 'tags')
     const hasStatus = Object.hasOwn(request.body ?? {}, 'status')
     const hasHealthStatus = Object.hasOwn(request.body ?? {}, 'healthStatus')
     const hasHealthNote = Object.hasOwn(request.body ?? {}, 'healthNote')
+    const name = hasName ? boundedText(request.body.name, 80) : null
+    const description = hasDescription ? boundedText(request.body.description, 5_000) : null
+    const tags = hasTags && Array.isArray(request.body.tags) && request.body.tags.length <= 20
+      ? request.body.tags.map((tag: unknown): string | null => boundedText(tag, 40))
+      : null
     const status = hasStatus ? normalizeOrganizationProjectStatus(request.body.status) : null
     const healthStatus = hasHealthStatus
       ? normalizeOrganizationProjectHealthStatus(request.body.healthStatus)
       : null
     const healthNote = hasHealthNote ? boundedText(request.body.healthNote, 1_000) : null
     if (
-      (!hasStatus && !hasHealthStatus && !hasHealthNote) ||
+      (!hasName && !hasDescription && !hasTags && !hasStatus && !hasHealthStatus && !hasHealthNote) ||
+      (hasName && !name) ||
+      (hasDescription && description === null) ||
+      (hasTags && (!tags || tags.some((tag: string | null) => !tag))) ||
       (hasStatus && !status) ||
       (hasHealthStatus && !healthStatus) ||
       (hasHealthNote && healthNote === null)
@@ -2493,6 +2517,18 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
 
       const updates: string[] = []
       const values: unknown[] = []
+      if (hasName) {
+        values.push(encryptText(name!))
+        updates.push(`name = $${values.length}`)
+      }
+      if (hasDescription) {
+        values.push(description ? encryptText(description) : null)
+        updates.push(`description_encrypted = $${values.length}`)
+      }
+      if (hasTags) {
+        values.push(encryptJson(tags as string[]))
+        updates.push(`tags_encrypted = $${values.length}`, "tags = '{}'")
+      }
       if (hasStatus) {
         values.push(status)
         updates.push(`status = $${values.length}`)
@@ -2512,11 +2548,14 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         values,
       )
       const detail = JSON.stringify({
+        description: hasDescription ? description : undefined,
         healthNote: nextHealthNote,
         healthStatus: nextHealthStatus,
+        name: hasName ? name : undefined,
         previousHealthStatus: project.health_status,
         previousStatus: project.status,
         status: status ?? project.status,
+        tags: hasTags ? tags : undefined,
       })
       await writeAudit(client, organizationId!, session.userId, 'project.governance_updated', 'project', String(projectId), detail)
       await client.query('commit')

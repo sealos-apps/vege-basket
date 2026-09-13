@@ -94,7 +94,7 @@ test('organization administrators are account roles independent of membership ac
 test('organization project governance requires both account and organization authority', () => {
   assert.equal(canManageOrganizationProjects('owner', ['organization_admin']), true)
   assert.equal(canManageOrganizationProjects('admin', ['organization_admin', 'developer']), true)
-  assert.equal(canManageOrganizationProjects('member', ['organization_admin']), true)
+  assert.equal(canManageOrganizationProjects('member', ['organization_admin']), false)
   assert.equal(canManageOrganizationProjects('admin', ['developer']), false)
 })
 
@@ -148,8 +148,8 @@ test('project governance mutations retain organization-admin checks', () => {
   const governedLockEnd = organizationsSource.indexOf('async function lockManagedOrganization', governedLockStart)
   const governedLockSource = organizationsSource.slice(governedLockStart, governedLockEnd)
   assert.match(governedLockSource, /membership\.status = 'active'/u)
+  assert.match(governedLockSource, /membership\.access_role in \('owner', 'admin'\)/u)
   assert.match(governedLockSource, /role\.role = 'organization_admin'/u)
-  assert.doesNotMatch(governedLockSource, /membership\.access_role in \('owner', 'admin'\)/u)
   assert.match(
     organizationsSource,
     /where p\.organization_id = \$1 and p\.id = \$2[\s\S]+for update of p, membership, role/u,

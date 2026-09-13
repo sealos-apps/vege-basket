@@ -749,6 +749,9 @@ export function updateOrganizationProjectGovernance(
   organizationId: number,
   projectId: number,
   payload: Partial<{
+    name: string
+    description: string
+    tags: string[]
     healthNote: string
     healthStatus: OrganizationProjectHealthStatus
     status: OrganizationProjectStatus

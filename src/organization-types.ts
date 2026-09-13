@@ -47,6 +47,12 @@ export type OrganizationMember = {
 }
 
 export type OrganizationProject = {
+  description: string
+  tags: string[]
+  canManageSettings: boolean
+  canManageMembers: boolean
+  canDelete: boolean
+  canTransferOwnership: boolean
   healthNote: string
   healthStatus: OrganizationProjectHealthStatus
   id: number

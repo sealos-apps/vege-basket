@@ -44,7 +44,14 @@ export function canManageOrganizationProjects(
   role: OrganizationAccessRole | null,
   assignedRoles: readonly string[],
 ) {
-  return canManageOrganization(role, assignedRoles)
+  return canManageOrganizationResources(role, assignedRoles)
+}
+
+export function canManageOrganizationResources(
+  role: OrganizationAccessRole | null,
+  assignedRoles: readonly string[],
+) {
+  return (role === 'owner' || role === 'admin') && assignedRoles.includes('organization_admin')
 }
 
 export function canManageOrganizationWeeklyReports(

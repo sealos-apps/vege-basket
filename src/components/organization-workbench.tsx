@@ -24,6 +24,7 @@ import {
   Sparkle,
   Target,
   Trash,
+  UserSwitch,
   Users,
 } from '@phosphor-icons/react'
 import {
@@ -45,7 +46,9 @@ import {
   inviteOrganizationMemberByUsername,
   removeOrganizationProjectMember,
   removeOrganizationMember,
+  removeProject,
   remindWeeklyReportMembers,
+  requestProjectTransfer,
   saveOrganizationWeeklyReport,
   updateOrganization,
   updateOrganizationTestEnvironment,
@@ -1801,6 +1804,7 @@ function OrganizationProjectRow({
 }) {
   const [expanded, setExpanded] = useState(false)
   const [governanceOpen, setGovernanceOpen] = useState(false)
+  const [transferOpen, setTransferOpen] = useState(false)
   const [milestoneOpen, setMilestoneOpen] = useState(false)
   const [editingMilestone, setEditingMilestone] = useState<OrganizationProjectMilestone | null>(null)
   const { confirmAction, confirmationDialog } = useConfirmAction(`${detail.id}:${project.id}`)
@@ -1888,6 +1892,44 @@ function OrganizationProjectRow({
               project={project}
               onMutate={onMutate}
             />
+            {project.canTransferOwnership ? (
+              <Button
+                aria-label={`转移${project.name}的项目所有权`}
+                disabled={busy}
+                size="icon"
+                title="转移项目所有权"
+                type="button"
+                variant="ghost"
+                onClick={() => setTransferOpen(true)}
+              >
+                <UserSwitch size={17} />
+              </Button>
+            ) : null}
+            {project.canDelete ? (
+              <ConfirmActionDialog
+                actionKey={`organization-project-delete:${detail.id}:${project.id}`}
+                confirmationName={project.name}
+                confirmLabel="删除项目"
+                description={`删除后，“${project.name}”下的日记、待办、交付记录和 AI 项目对话将一并删除，无法撤销。`}
+                onConfirm={() => onMutate(async () => {
+                  await removeProject(project.id)
+                  return fetchOrganization(detail.id)
+                }, true, (data) => !data.projects.some((item) => item.id === project.id))}
+                title={`删除项目“${project.name}”？`}
+                trigger={(
+                  <Button
+                    aria-label={`删除项目${project.name}`}
+                    disabled={busy}
+                    size="icon"
+                    title="删除项目"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <Trash size={17} />
+                  </Button>
+                )}
+              />
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -2002,7 +2044,18 @@ function OrganizationProjectRow({
         open={governanceOpen}
         project={project}
         onOpenChange={setGovernanceOpen}
-        onSave={(payload) => onMutate(() => updateOrganizationProjectGovernance(detail.id, project.id, payload), payload.status !== project.status && (payload.status === 'completed' || payload.status === 'archived'), (data) => data.projects.some((item) => item.id === project.id && item.status === payload.status && item.healthStatus === payload.healthStatus && item.healthNote === payload.healthNote))}
+        onSave={(payload) => onMutate(() => updateOrganizationProjectGovernance(detail.id, project.id, payload), payload.status !== project.status && (payload.status === 'completed' || payload.status === 'archived'), (data) => data.projects.some((item) => item.id === project.id && item.name === payload.name && item.description === payload.description && item.tags.join('\u0000') === payload.tags.join('\u0000') && item.status === payload.status && item.healthStatus === payload.healthStatus && item.healthNote === payload.healthNote))}
+      />
+      <ProjectTransferDialog
+        busy={busy}
+        detail={detail}
+        open={transferOpen}
+        project={project}
+        onOpenChange={setTransferOpen}
+        onSubmit={(targetUserId) => onMutate(async () => {
+          await requestProjectTransfer(project.id, { organizationId: detail.id, targetUserId })
+          return fetchOrganization(detail.id)
+        })}
       />
       <ProjectMilestoneDialog
         busy={busy}
@@ -2204,9 +2257,12 @@ function ProjectGovernanceDialog({
   busy: boolean
   onOpenChange: (open: boolean) => void
   onSave: (payload: {
+    description: string
     healthNote: string
     healthStatus: OrganizationProjectHealthStatus
+    name: string
     status: OrganizationProjectStatus
+    tags: string[]
   }) => Promise<boolean>
   open: boolean
   project: OrganizationProject
@@ -2215,17 +2271,30 @@ function ProjectGovernanceDialog({
   const [status, setStatus] = useState(project.status)
   const [healthStatus, setHealthStatus] = useState(project.healthStatus)
   const [healthNote, setHealthNote] = useState(project.healthNote)
+  const [name, setName] = useState(project.name)
+  const [description, setDescription] = useState(project.description)
+  const [tags, setTags] = useState(project.tags.join('，'))
 
   useEffect(() => {
     if (!open) return
     setStatus(project.status)
     setHealthStatus(project.healthStatus)
     setHealthNote(project.healthNote)
-  }, [open, project.healthNote, project.healthStatus, project.status])
+    setName(project.name)
+    setDescription(project.description)
+    setTags(project.tags.join('，'))
+  }, [open, project.description, project.healthNote, project.healthStatus, project.name, project.status, project.tags])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    const payload = { healthNote: healthNote.trim(), healthStatus, status }
+    const payload = {
+      description: description.trim(),
+      healthNote: healthNote.trim(),
+      healthStatus,
+      name: name.trim(),
+      status,
+      tags: tags.split(/[\s,，、]+/u).filter(Boolean),
+    }
     const saved = status !== project.status && (status === 'completed' || status === 'archived')
       ? await confirmAction({
           title: `${status === 'completed' ? '完成' : '归档'}项目“${project.name}”？`,
@@ -2241,11 +2310,23 @@ function ProjectGovernanceDialog({
     <Dialog open={open} onOpenChange={(nextOpen) => !busy && onOpenChange(nextOpen)}>
       <DialogContent className="organization-governance-dialog">
         <DialogHeader>
-          <DialogTitle>{project.name} · 项目治理</DialogTitle>
+          <DialogTitle>{project.name} · 项目管理</DialogTitle>
           <DialogDescription>生命周期描述项目阶段，健康度反映当前计划是否可控。</DialogDescription>
         </DialogHeader>
         {confirmationDialog}
         <form className="organization-governance-form" onSubmit={submit}>
+          <Label>
+            项目名称
+            <Input maxLength={80} required value={name} onChange={(event) => setName(event.target.value)} />
+          </Label>
+          <Label>
+            项目简介
+            <Textarea maxLength={5_000} value={description} onChange={(event) => setDescription(event.target.value)} />
+          </Label>
+          <Label>
+            项目标签
+            <Input maxLength={819} value={tags} onChange={(event) => setTags(event.target.value)} placeholder="用逗号或空格分隔，最多 20 个" />
+          </Label>
           <div className="organization-governance-fields">
             <Label>
               生命周期状态
@@ -2282,11 +2363,80 @@ function ProjectGovernanceDialog({
           </Label>
           <DialogFooter>
             <DialogClose asChild><Button disabled={busy} type="button" variant="outline">取消</Button></DialogClose>
-            <Button disabled={busy || (healthStatus !== 'on_track' && !healthNote.trim())} type="submit">
-              保存治理状态
+            <Button disabled={busy || !name.trim() || (healthStatus !== 'on_track' && !healthNote.trim())} type="submit">
+              保存项目
             </Button>
           </DialogFooter>
         </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ProjectTransferDialog({
+  busy,
+  detail,
+  onOpenChange,
+  onSubmit,
+  open,
+  project,
+}: {
+  busy: boolean
+  detail: OrganizationDetail
+  onOpenChange: (open: boolean) => void
+  onSubmit: (targetUserId: number) => Promise<boolean>
+  open: boolean
+  project: OrganizationProject
+}) {
+  const [targetUserId, setTargetUserId] = useState('')
+  const [sent, setSent] = useState(false)
+  const candidates = detail.members.filter((member) => member.id !== project.ownerUserId)
+
+  useEffect(() => {
+    if (!open) return
+    setTargetUserId('')
+    setSent(false)
+  }, [open, project.id])
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    const target = Number(targetUserId)
+    if (!Number.isSafeInteger(target) || target <= 0) return
+    if (await onSubmit(target)) setSent(true)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => !busy && onOpenChange(nextOpen)}>
+      <DialogContent className="organization-governance-dialog">
+        <DialogHeader>
+          <DialogTitle>转移项目所有权</DialogTitle>
+          <DialogDescription>
+            当前所有者为 {project.ownerName}。接收人确认后才会完成所有权转移，原所有者保留项目成员身份。
+          </DialogDescription>
+        </DialogHeader>
+        {sent ? (
+          <DialogFooter>
+            <DialogClose asChild><Button type="button">关闭</Button></DialogClose>
+          </DialogFooter>
+        ) : (
+          <form className="organization-governance-form" onSubmit={submit}>
+            <Label>
+              新所有者
+              <Select value={targetUserId} onValueChange={setTargetUserId}>
+                <SelectTrigger aria-label="选择项目新所有者"><SelectValue placeholder="选择组织成员" /></SelectTrigger>
+                <SelectContent>
+                  {candidates.map((member) => (
+                    <SelectItem key={member.id} value={String(member.id)}>{member.displayName}（{member.username}）</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Label>
+            <DialogFooter>
+              <DialogClose asChild><Button disabled={busy} type="button" variant="outline">取消</Button></DialogClose>
+              <Button disabled={busy || !targetUserId} type="submit">发送转移申请</Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   )
