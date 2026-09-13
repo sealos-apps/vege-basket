@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import { canCompleteProjectTransfer, lockTransferProject } from './project-transfer.ts'
-import { lockResourceManager, type ManagedResource } from './resource-management.ts'
+import { lockOrganizationResourceManager, lockResourceManager, type ManagedResource } from './resource-management.ts'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9657,6 +9657,93 @@ app.post('/api/projects/:projectId/transfer', asyncHandler(async (request, respo
   }
 
   response.status(201).json({ ok: true, transferId })
+}))
+
+app.post('/api/organizations/:organizationId/projects/:projectId/transfer', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  const organizationId = Number(request.params.organizationId)
+  const projectId = Number(request.params.projectId)
+  const targetUserId = Number(request.body?.targetUserId)
+  if (![organizationId, projectId, targetUserId].every((value) => Number.isSafeInteger(value) && value > 0)) {
+    response.status(400).json({ error: '请选择有效的组织、项目和新所有者' })
+    return
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const access = await lockResourceManager(client, 'project', projectId, userId)
+    if (!access || access.organizationId !== organizationId) {
+      await client.query('rollback')
+      response.status(404).json({ error: '组织项目不存在' })
+      return
+    }
+    if (!await lockOrganizationResourceManager(client, organizationId, userId)) {
+      await client.query('rollback')
+      response.status(403).json({ error: '需要组织 Owner/Admin 身份及组织管理员角色' })
+      return
+    }
+    if (targetUserId === access.ownerUserId) {
+      await client.query('rollback')
+      response.status(400).json({ error: '新所有者必须是其他组织成员' })
+      return
+    }
+    const target = await client.query<{ email: string }>(
+      `select u.email
+         from organization_memberships membership
+         join users u on u.id = membership.user_id
+        where membership.organization_id = $1 and membership.user_id = $2 and membership.status = 'active'
+        for share of membership`,
+      [organizationId, targetUserId],
+    )
+    if (!target.rows[0]) {
+      await client.query('rollback')
+      response.status(409).json({ error: '新所有者必须是该组织的活跃成员' })
+      return
+    }
+    const previousOwner = await client.query<{ email: string }>('select email from users where id = $1', [access.ownerUserId])
+    if (!previousOwner.rows[0]) throw new Error('Project owner not found')
+
+    await client.query(
+      `update project_transfer_requests
+          set status = 'revoked', responded_at = now(), last_error = 'Replaced by direct organization transfer'
+        where project_id = $1 and status = 'pending'`,
+      [projectId],
+    )
+    await client.query(
+      'update projects set user_id = $1, updated_at = now() where id = $2 and user_id = $3',
+      [targetUserId, projectId, access.ownerUserId],
+    )
+    await client.query('update project_memberships set owner_user_id = $1 where project_id = $2', [targetUserId, projectId])
+    await client.query('delete from project_memberships where project_id = $1 and invited_user_id = $2', [projectId, targetUserId])
+    const ownerEmail = normalizeUsername(previousOwner.rows[0].email)
+    await client.query(
+      `insert into project_memberships
+        (project_id, owner_user_id, invited_user_id, invited_email, invited_email_lookup,
+         role, status, accepted_at, declined_at)
+       values ($1, $2, $3, $4, $5, 'member', 'active', now(), null)
+       on conflict (project_id, invited_email_lookup) where invited_email_lookup is not null do update
+         set owner_user_id = excluded.owner_user_id,
+             invited_user_id = excluded.invited_user_id,
+             invited_email = excluded.invited_email,
+             role = 'member', status = 'active', accepted_at = now(), declined_at = null`,
+      [projectId, targetUserId, access.ownerUserId, encryptText(ownerEmail), blindIndex(ownerEmail)],
+    )
+    await client.query(
+      `insert into organization_audit_events
+        (organization_id, actor_user_id, action, subject_type, subject_id, detail)
+       values ($1, $2, 'project.transfer.direct', 'project', $3, $4)`,
+      [organizationId, userId, String(projectId), encryptText(JSON.stringify({ from: access.ownerUserId, to: targetUserId }))],
+    )
+    await client.query('commit')
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
+  response.json({ ok: true })
 }))
 
 app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (request, response) => {

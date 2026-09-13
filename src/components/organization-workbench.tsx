@@ -48,7 +48,7 @@ import {
   removeOrganizationMember,
   removeProject,
   remindWeeklyReportMembers,
-  requestProjectTransfer,
+  transferOrganizationProjectOwnership,
   saveOrganizationWeeklyReport,
   updateOrganization,
   updateOrganizationTestEnvironment,
@@ -2052,10 +2052,15 @@ function OrganizationProjectRow({
         open={transferOpen}
         project={project}
         onOpenChange={setTransferOpen}
-        onSubmit={(targetUserId) => onMutate(async () => {
-          await requestProjectTransfer(project.id, { organizationId: detail.id, targetUserId })
+        onSubmit={(targetUserId) => confirmAction({
+          title: `立即转移项目“${project.name}”？`,
+          description: `项目所有权将立即转移给所选成员，无需对方确认。${project.ownerName}将保留项目成员身份。`,
+          confirmLabel: '立即转移所有权',
+          variant: 'default',
+        }, () => onMutate(async () => {
+          await transferOrganizationProjectOwnership(detail.id, project.id, targetUserId)
           return fetchOrganization(detail.id)
-        })}
+        }, true, (data) => data.projects.some((item) => item.id === project.id && item.ownerUserId === targetUserId))) }
       />
       <ProjectMilestoneDialog
         busy={busy}
@@ -2389,20 +2394,20 @@ function ProjectTransferDialog({
   project: OrganizationProject
 }) {
   const [targetUserId, setTargetUserId] = useState('')
-  const [sent, setSent] = useState(false)
+  const [completed, setCompleted] = useState(false)
   const candidates = detail.members.filter((member) => member.id !== project.ownerUserId)
 
   useEffect(() => {
     if (!open) return
     setTargetUserId('')
-    setSent(false)
+    setCompleted(false)
   }, [open, project.id])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     const target = Number(targetUserId)
     if (!Number.isSafeInteger(target) || target <= 0) return
-    if (await onSubmit(target)) setSent(true)
+    if (await onSubmit(target)) setCompleted(true)
   }
 
   return (
@@ -2411,10 +2416,10 @@ function ProjectTransferDialog({
         <DialogHeader>
           <DialogTitle>转移项目所有权</DialogTitle>
           <DialogDescription>
-            当前所有者为 {project.ownerName}。接收人确认后才会完成所有权转移，原所有者保留项目成员身份。
+            当前所有者为 {project.ownerName}。确认后会立即完成所有权转移，原所有者保留项目成员身份。
           </DialogDescription>
         </DialogHeader>
-        {sent ? (
+        {completed ? (
           <DialogFooter>
             <DialogClose asChild><Button type="button">关闭</Button></DialogClose>
           </DialogFooter>
@@ -2433,7 +2438,7 @@ function ProjectTransferDialog({
             </Label>
             <DialogFooter>
               <DialogClose asChild><Button disabled={busy} type="button" variant="outline">取消</Button></DialogClose>
-              <Button disabled={busy || !targetUserId} type="submit">发送转移申请</Button>
+              <Button disabled={busy || !targetUserId} type="submit">确认转移所有权</Button>
             </DialogFooter>
           </form>
         )}

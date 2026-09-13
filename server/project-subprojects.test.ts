@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { parseProjectSubprojectId, requireProjectSubprojectName, requireProjectSubprojectManager, resolveProjectSubprojectId } from './project-subprojects.ts'
 import type { PoolClient } from 'pg'
+import { readFileSync } from 'node:fs'
+
+const panelSource = readFileSync(new URL('../src/components/project-subprojects-panel.tsx', import.meta.url), 'utf8')
 
 test('subproject identifiers reject coercible objects, booleans and noncanonical strings', () => {
   for (const value of [true, false, [], [1], {}, 0, -1, 1.5, Infinity, NaN,
@@ -44,4 +47,10 @@ test('task binding rejects subprojects outside the requested project', async () 
   } } as unknown as PoolClient
   await assert.rejects(resolveProjectSubprojectId(client, 2, 8), { status: 400 })
   assert.equal(await resolveProjectSubprojectId(client, 2, null), null)
+})
+
+test('subproject deletion uses the shared confirmation dialog', () => {
+  assert.match(panelSource, /ConfirmActionDialog/u)
+  assert.match(panelSource, /project-subproject-delete:/u)
+  assert.doesNotMatch(panelSource, /window\.confirm/u)
 })
