@@ -718,11 +718,12 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       status: string
       test_space_id: string
       test_space_name: string
+      test_space_version_label: string | null
       title: string
       updated_at: Date
     }>(
       `
-      select b.id, b.test_space_id, s.name as test_space_name, b.title, b.priority,
+      select b.id, b.test_space_id, s.name as test_space_name, s.version_label as test_space_version_label, b.title, b.priority,
         b.severity, b.status, b.updated_at, b.assignee_user_id, assignee.email as assignee_email,
         assignee.display_name as assignee_display_name
       from test_bugs b
@@ -845,6 +846,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       id: Number(task.id),
       kind: 'bug' as const,
       projectName: decryptText(task.test_space_name),
+      testSpaceVersionLabel: task.test_space_version_label ? decryptText(task.test_space_version_label) : undefined,
       status: task.status,
       title: decryptText(task.title),
       updatedAt: task.updated_at.toISOString(),

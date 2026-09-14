@@ -70,9 +70,10 @@ export type TestSpaceInvitation = {
   invitedByName: string
   spaceId: number
   spaceName: string
+  versionLabel?: string
 }
 
-export type TestSpaceOwnershipTransfer = { id:number; spaceId:number; spaceName:string; requestedByName:string; createdAt:string; expiresAt:string }
+export type TestSpaceOwnershipTransfer = { id:number; spaceId:number; spaceName:string; versionLabel?: string; requestedByName:string; createdAt:string; expiresAt:string }
 
 export type TestSpaceSettings = {
   ownershipTransfers?: TestSpaceOwnershipTransfer[]
@@ -301,6 +302,8 @@ export type TestWorkbenchNotification = {
   createdAt: string
   kind: 'test_plan_assigned' | 'test_bug_status_changed' | 'test_bug_rejected' | 'test_bug_comment_added'
   sourceId: number
+  testSpaceName?: string
+  testSpaceVersionLabel?: string
 } | {
   authorName: string
   commentPreview: string
@@ -311,6 +314,8 @@ export type TestWorkbenchNotification = {
   projectId: number
   projectName: string
   sourceId: number
+  testSpaceName?: string
+  testSpaceVersionLabel?: string
 }
 
 export type TestWorkbenchData = {

@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import { MentionTextarea } from './mention-textarea'
 import { MarkdownPreview } from './markdown-preview'
 import { UserName } from './user-name'
+import { formatTestSpaceReference } from '../../shared/test-space-reference'
 
 const statusLabels: Record<string, string> = {
   assigned: '已分配',
@@ -114,7 +115,7 @@ export function BugShareView({ authUser, onBack, onBackToVeges, onLogin, onOpenA
 
   return <main className="bug-share-screen">
     <div className="bug-share-shell">
-      <header className="bug-share-header"><div><span className="eyebrow">Veges · Bug 分享</span><h1>{data?.title || 'Bug'}</h1><p>BUG-{data?.bugId} · {data?.testSpaceName || '测试工作台'}</p></div>{authUser && onBackToVeges ? <Button className="bug-share-return-button" variant="outline" onClick={onBackToVeges}><ArrowLeft /> 返回 Veges</Button> : onBack ? <Button variant="ghost" onClick={onBack}><ArrowLeft /> 返回</Button> : null}</header>
+      <header className="bug-share-header"><div><span className="eyebrow">Veges · Bug 分享</span><h1>{data?.title || 'Bug'}</h1><p>BUG-{data?.bugId} · {data ? formatTestSpaceReference(data.testSpaceName, data.testSpaceVersionLabel) : '测试工作台'}</p></div>{authUser && onBackToVeges ? <Button className="bug-share-return-button" variant="outline" onClick={onBackToVeges}><ArrowLeft /> 返回 Veges</Button> : onBack ? <Button variant="ghost" onClick={onBack}><ArrowLeft /> 返回</Button> : null}</header>
       {data ? <>
         <div className="bug-share-badges"><span>{statusLabels[data.status] || data.status}</span><span>{severityLabels[data.severity] || data.severity}</span><span>{priorityLabels[data.priority] || data.priority}</span>{data.projectName ? <span>{data.projectName}</span> : null}</div>
         <div className="bug-share-meta"><span>测试用例：{data.testCaseId ? `CASE-${data.testCaseId} ${data.testCaseTitle || ''}` : '待补关联'}</span><span>用例目录：{data.testCaseId ? data.testCaseFolderName || '未分类' : '待补关联'}</span>{data.testPlanName ? <span>测试计划：{data.testPlanName}</span> : null}{data.assigneeName ? <span>负责人：<UserName departedUserIds={data.departedUserIds} name={data.assigneeName} userId={data.assigneeUserId} /></span> : null}<span>更新时间：{new Date(data.updatedAt).toLocaleString()}</span></div>

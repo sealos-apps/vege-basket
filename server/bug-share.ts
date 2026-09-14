@@ -44,6 +44,7 @@ export type BugShareView = {
   status: string
   testPlanName: string | null
   testSpaceName: string
+  testSpaceVersionLabel?: string
   testSubjectName: string
   testCaseId?: number
   testCaseTitle?: string
@@ -72,6 +73,7 @@ type ShareBugRow = {
   status: string
   test_plan_name: string | null
   test_space_name: string
+  test_space_version_label: string | null
   test_subject_name: string
   title: string
   updated_at: Date
@@ -122,6 +124,7 @@ async function readView(token: string, userId?: number | null) {
            b.created_at, b.updated_at, b.assignee_user_id,
            space.organization_id,
            space.name as test_space_name,
+           space.version_label as test_space_version_label,
            subject.name as test_subject_name,
            plan.name as test_plan_name,
            project.name as project_name,
@@ -211,6 +214,7 @@ async function readView(token: string, userId?: number | null) {
     status: bug.status,
     testPlanName: bug.test_plan_name ? decryptText(bug.test_plan_name) : null,
     testSpaceName: decryptText(bug.test_space_name),
+    testSpaceVersionLabel: bug.test_space_version_label ? decryptText(bug.test_space_version_label) : undefined,
     testSubjectName: decryptText(bug.test_subject_name),
     testCaseId: bug.test_case_id ? Number(bug.test_case_id) : undefined,
     testCaseTitle: bug.test_case_title ? decryptText(bug.test_case_title) : undefined,

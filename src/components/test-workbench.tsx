@@ -185,6 +185,7 @@ import type {
 } from '@/test-workbench-types'
 import type { OrganizationContext } from '../../shared/organization-context'
 import { containerImageReferenceKey, normalizeContainerImageReference } from '../../shared/container-image-reference'
+import { formatTestSpaceReference } from '../../shared/test-space-reference'
 import type { PackageMarketRule, PackageMarketVersion, Priority } from '@/types'
 import './test-workbench.css'
 
@@ -1100,7 +1101,7 @@ export function TestWorkbench({
   async function handleDeclineInvitation(invitationSpaceId: number) {
     const invitation = spaceSettings.invitations.find((item) => item.spaceId === invitationSpaceId)
     return confirmAction({ title: '确认拒绝测试空间邀请？',
-      actionKey: `decline-space:${currentUserId}:${invitationSpaceId}`, description: `“${invitation?.spaceName ?? `测试空间 #${invitationSpaceId}`}”的邀请将退出待处理列表，你不会加入该空间。`, confirmLabel: '拒绝邀请',
+      actionKey: `decline-space:${currentUserId}:${invitationSpaceId}`, description: `“${invitation ? formatTestSpaceReference(invitation.spaceName, invitation.versionLabel) : `测试空间 #${invitationSpaceId}`}”的邀请将退出待处理列表，你不会加入该空间。`, confirmLabel: '拒绝邀请',
     }, async () => {
       setError('')
       const result = await reconcileAction(() => declineTestSpaceInvitation(invitationSpaceId), fetchTestSpaceSettings,
@@ -1794,7 +1795,7 @@ function NotificationsView({
           </header>
           <div className="test-notification-list">
             {notificationItems.map((item) => {
-              if (item.kind === 'ownership_transfer') return <article key={item.key} className="test-notification-card unread"><div className="test-notification-copy"><span className="test-notification-kind unread">所有权转移</span><div><strong>{item.transfer.spaceName}</strong><p>{item.transfer.requestedByName} 申请将测试空间所有权转移给你。接受后你将成为所有者，原所有者保留可编辑权限。</p><small>有效期至 {formatTimestamp(item.transfer.expiresAt)}</small></div></div><div><Button variant="outline" disabled={busy} onClick={()=>onRespondOwnershipTransfer(item.transfer.id,'decline')}>拒绝</Button><Button disabled={busy} onClick={()=>onRespondOwnershipTransfer(item.transfer.id,'accept')}>接受所有权</Button></div></article>
+              if (item.kind === 'ownership_transfer') return <article key={item.key} className="test-notification-card unread"><div className="test-notification-copy"><span className="test-notification-kind unread">所有权转移</span><div><strong>{formatTestSpaceReference(item.transfer.spaceName, item.transfer.versionLabel)}</strong><p>{item.transfer.requestedByName} 申请将测试空间所有权转移给你。接受后你将成为所有者，原所有者保留可编辑权限。</p><small>有效期至 {formatTimestamp(item.transfer.expiresAt)}</small></div></div><div><Button variant="outline" disabled={busy} onClick={()=>onRespondOwnershipTransfer(item.transfer.id,'decline')}>拒绝</Button><Button disabled={busy} onClick={()=>onRespondOwnershipTransfer(item.transfer.id,'accept')}>接受所有权</Button></div></article>
               if (item.kind === 'invitation') {
                 const invitation = item.invitation
                 return (
@@ -1802,7 +1803,7 @@ function NotificationsView({
                     <div className="test-notification-copy">
                       <span className="test-notification-kind unread">邀请</span>
                       <div>
-                        <strong>{invitation.spaceName}</strong>
+                        <strong>{formatTestSpaceReference(invitation.spaceName, invitation.versionLabel)}</strong>
                         <p>{invitation.invitedByName} 邀请你加入测试空间。</p>
                         <small>{invitation.accessLevel === 'editor' ? '可编辑' : '只读'} · {formatTimestamp(invitation.createdAt)}</small>
                       </div>
@@ -1816,7 +1817,8 @@ function NotificationsView({
               }
               if (item.kind === 'plan_assignment') {
                 const plan = item.plan
-                const spaceName = data.spaces.find((space) => space.id === plan.testSpaceId)?.name ?? '未知测试空间'
+                const planSpace = data.spaces.find((space) => space.id === plan.testSpaceId)
+                const spaceName = planSpace ? formatTestSpaceReference(planSpace.name, planSpace.versionLabel) : '未知测试空间'
                 const subjectNames = (plan.testSubjectIds.length ? plan.testSubjectIds : [plan.testSubjectId])
                   .map((id) => data.subjects.find((subject) => subject.id === id)?.name)
                   .filter(Boolean)
@@ -1864,7 +1866,8 @@ function NotificationsView({
                 )
               }
               const bug = item.bug
-              const spaceName = data.spaces.find((space) => space.id === bug.testSpaceId)?.name ?? '未知测试空间'
+              const bugSpace = data.spaces.find((space) => space.id === bug.testSpaceId)
+              const spaceName = bugSpace ? formatTestSpaceReference(bugSpace.name, bugSpace.versionLabel) : '未知测试空间'
               const caseName = bug.testCaseId ? `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}` : '待补关联'
               if (item.kind === 'bug_comment') {
                 const comment = item.comment
@@ -2516,7 +2519,7 @@ function BugSpaceTransferDialog({ bug, busy, cases, onOpenChange, onSubmit, open
               <SelectContent>
                 {bug.transferSpaceCandidates?.map((space) => (
                   <SelectItem key={space.id} value={String(space.id)}>
-                    {space.name}{space.versionLabel ? ` · ${space.versionLabel}` : ''}
+                    {formatTestSpaceReference(space.name, space.versionLabel)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -3555,7 +3558,7 @@ function TestSpaceDataImportDialog({ busy, error, onOpenChange, onSubmit, open, 
             return (
               <section className="test-space-import-source" key={space.id}>
                 <div className="test-space-import-source-heading">
-                  <label><Checkbox aria-label={`选择${space.name}`} checked={selected.length === options.length ? true : selected.length > 0 ? 'indeterminate' : false} onCheckedChange={(checked) => toggleSpace(space.id, checked === true)} /><strong>{space.name}</strong></label>
+                  <label><Checkbox aria-label={`选择${formatTestSpaceReference(space.name, space.versionLabel)}`} checked={selected.length === options.length ? true : selected.length > 0 ? 'indeterminate' : false} onCheckedChange={(checked) => toggleSpace(space.id, checked === true)} /><strong>{formatTestSpaceReference(space.name, space.versionLabel)}</strong></label>
                   <small>{space.versionLabel || '未指定版本号'}</small>
                 </div>
                 <div className="test-space-import-options">
@@ -3745,7 +3748,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
               <div className="test-space-admin-list">
                 {settings.spaces.map((space) => (
                   <button key={space.id} type="button" className={space.id === selectedSpaceId ? 'active' : ''} onClick={() => setSelectedSpaceId(space.id)}>
-                    <strong>{space.name}</strong>
+                    <strong>{formatTestSpaceReference(space.name, space.versionLabel)}</strong>
                     <small>{space.accessLevel === 'owner' ? '所有者' : space.canManageSettings ? '组织管理' : space.accessLevel === 'editor' ? '可编辑' : '只读'} · {space.members.filter((member) => member.status === 'active').length} 位成员 · {space.organizationName ?? '无组织'}</small>
                   </button>
                 ))}
@@ -3837,7 +3840,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
                           )}
                           {member.accessLevel === 'owner' || !canManageMembers ? <span /> : (
                             <Button size="icon" variant="ghost" aria-label={`移除成员${member.displayName}`} title="移除成员" disabled={busy} onClick={() => void confirmAction({ title: '确认移除测试空间成员？',
-                              description: `「${member.displayName}」将失去「${selectedSpace.name}」的成员权限，其创建的测试数据保留。`, confirmLabel: '移除成员',
+                              description: `「${member.displayName}」将失去「${formatTestSpaceReference(selectedSpace.name, selectedSpace.versionLabel)}」的成员权限，其创建的测试数据保留。`, confirmLabel: '移除成员',
                             }, () => mutateSettings(() => removeTestSpaceMember(selectedSpace.id, member.userId), undefined, true,
                               (next) => next.spaces.some((space) => space.id === selectedSpace.id && !space.members.some((item) => item.userId === member.userId))))}><Trash /></Button>
                           )}

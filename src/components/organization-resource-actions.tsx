@@ -60,6 +60,7 @@ import {
 import { Textarea } from './ui/textarea'
 import { ConfirmActionDialog } from './confirm-action-dialog'
 import { useConfirmAction } from '../hooks/use-confirm-action'
+import { formatTestSpaceReference } from '../../shared/test-space-reference'
 
 function message(error: unknown) {
   return error instanceof Error ? error.message : '操作失败，请重试。'
@@ -489,7 +490,7 @@ export function OrganizationTestSpaces({
                     <Button
                       variant="ghost"
                       size="icon"
-                      aria-label={`管理测试空间 ${space.name}`}
+                      aria-label={`管理测试空间 ${formatTestSpaceReference(space.name, space.versionLabel)}`}
                     >
                       <DotsThree />
                     </Button>
@@ -653,7 +654,7 @@ function SpaceActionDialog({
         if (target && transferTarget)
           await confirmAction(
             {
-              title: `立即转移测试空间“${space.name}”？`,
+              title: `立即转移测试空间“${formatTestSpaceReference(space.name, space.versionLabel)}”？`,
               description: `所有权将立即转移给 ${transferTarget.displayName}，无需对方确认。${space.members.find((member) => member.userId === space.ownerUserId)?.displayName ?? '原所有者'}将保留可编辑权限。`,
               confirmLabel: '立即转移所有权',
               variant: 'default',
@@ -707,7 +708,7 @@ function SpaceActionDialog({
           <DialogDescription>
             {action === 'create'
               ? `新空间将直接归属 ${detail.name}。`
-              : `${detail.name} · ${space?.name ?? '测试空间'}`}
+              : `${detail.name} · ${formatTestSpaceReference(space?.name, space?.versionLabel)}`}
           </DialogDescription>
         </DialogHeader>
         {error ? (
@@ -835,7 +836,7 @@ function SpaceActionDialog({
                         <ConfirmActionDialog
                           actionKey={`organization-test-space-member-remove:${detail.id}:${space.id}:${member.userId}`}
                           title={`移除测试空间成员“${member.displayName}”？`}
-                          description={`该成员将失去“${space.name}”的测试空间访问权限，已有测试数据保留。`}
+                          description={`该成员将失去“${formatTestSpaceReference(space.name, space.versionLabel)}”的测试空间访问权限，已有测试数据保留。`}
                           confirmLabel="移除成员"
                           onConfirm={async () => {
                             const removed = await mutate(() =>

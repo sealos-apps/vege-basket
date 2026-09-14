@@ -4,6 +4,7 @@ import { query } from './db.ts'
 import { managedOrganizationReadScopeSql } from './organization-scope.ts'
 import { workBucket, workItemKey } from './my-work-policy.ts'
 import type { OrganizationContext } from '../shared/organization-context.ts'
+import { formatTestSpaceReference } from '../shared/test-space-reference.ts'
 
 type MyWorkRow = {
   kind: MyWorkItem['kind']
@@ -12,6 +13,7 @@ type MyWorkRow = {
   organization_id: string | null
   project_name: string | null
   context_name: string | null
+  context_version_label: string | null
   creator_name: string | null
   can_complete: boolean | null
   title: string
@@ -57,7 +59,7 @@ export async function getMyWork(
     `
     select * from (
       select 'todo'::text as kind, t.id as source_id, t.project_id, p.organization_id,
-        p.name as project_name, subproject.name as context_name,
+        p.name as project_name, subproject.name as context_name, null::text as context_version_label,
         coalesce(nullif(todo_creator.display_name, ''), todo_creator.email)::text as creator_name,
         (
           t.reviewer_user_id = $1::bigint
@@ -97,7 +99,7 @@ export async function getMyWork(
         and (${managedOrganizationReadScopeSql('p.organization_id', '$1')} or p.user_id = $1 or mine.id is not null)
         and t.confirmation_status <> 'rejected'
       union all
-      select 'delivery'::text, e.id, e.project_id, p.organization_id, p.name, null::text,
+      select 'delivery'::text, e.id, e.project_id, p.organization_id, p.name, null::text, null::text,
         coalesce(nullif(delivery_creator.display_name, ''), delivery_creator.email)::text,
         null::boolean,
         e.title,
@@ -111,7 +113,7 @@ export async function getMyWork(
       where e.assignee_user_id = $1
         and (${managedOrganizationReadScopeSql('p.organization_id', '$1')} or p.user_id = $1 or mine.id is not null)
       union all
-      select 'milestone'::text, m.id, m.project_id, p.organization_id, p.name, null::text,
+      select 'milestone'::text, m.id, m.project_id, p.organization_id, p.name, null::text, null::text,
         coalesce(nullif(milestone_creator.display_name, ''), milestone_creator.email)::text,
         null::boolean,
         m.title,
@@ -125,7 +127,7 @@ export async function getMyWork(
       where m.responsible_user_id = $1
         and (${managedOrganizationReadScopeSql('p.organization_id', '$1')} or p.user_id = $1 or mine.id is not null)
       union all
-      select 'bug'::text, b.id, bug_project.id, space.organization_id, bug_project.name, space.name,
+      select 'bug'::text, b.id, bug_project.id, space.organization_id, bug_project.name, space.name, space.version_label,
         coalesce(nullif(bug_creator.display_name, ''), bug_creator.email)::text,
         null::boolean,
         b.title,
@@ -184,7 +186,14 @@ export async function getMyWork(
     sourceId: Number(row.source_id),
     projectId: row.project_id ? Number(row.project_id) : undefined,
     projectName: row.project_name ? decryptText(row.project_name) : undefined,
-    contextName: row.context_name ? decryptText(row.context_name) : undefined,
+    contextName: row.context_name
+      ? (row.kind === 'bug'
+        ? formatTestSpaceReference(
+          decryptText(row.context_name),
+          row.context_version_label ? decryptText(row.context_version_label) : undefined,
+        )
+        : decryptText(row.context_name))
+      : undefined,
     creatorName: row.creator_name ?? undefined,
     canComplete: row.can_complete ?? undefined,
     title: decryptText(row.title),

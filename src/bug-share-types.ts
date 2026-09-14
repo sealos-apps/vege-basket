@@ -30,6 +30,7 @@ export type BugShareView = {
   status: string
   testPlanName: string | null
   testSpaceName: string
+  testSpaceVersionLabel?: string
   testSubjectName: string
   testCaseId?: number
   testCaseTitle?: string

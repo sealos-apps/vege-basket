@@ -3,6 +3,7 @@ import { ConfirmActionDialog } from './confirm-action-dialog'
 import { useConfirmAction } from '../hooks/use-confirm-action'
 import { reconcileAction } from '../confirmed-action'
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { formatTestSpaceReference } from '../../shared/test-space-reference'
 import { createPortal } from 'react-dom'
 import {
   Buildings,
@@ -2600,7 +2601,7 @@ function TaskTable({ departedUserIds, tasks }: { departedUserIds: number[]; task
           <span className={`organization-task-kind ${task.kind}`}>
             {task.kind === 'bug' ? <Bug size={14} /> : null}{taskKindLabel[task.kind]}
           </span>
-          <div><strong>{task.title}</strong><span>{task.projectName}</span></div>
+          <div><strong>{task.title}</strong><span>{task.kind === 'bug' ? formatTestSpaceReference(task.projectName, task.testSpaceVersionLabel) : task.projectName}</span></div>
           <UserName departedUserIds={departedUserIds} name={task.assigneeName || '未分配'} userId={task.assigneeUserId} />
           <span>{taskStatusLabel[task.status] ?? task.status}</span>
           <time>{formatDateTime(task.updatedAt)}</time>
