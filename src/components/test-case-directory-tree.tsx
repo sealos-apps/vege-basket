@@ -118,6 +118,9 @@ export function DirectoryTree({
   onCollapse,
   readOnly,
   busy,
+  onCreateRoot,
+  onEditRoot,
+  onDeleteRoot,
   onCreate,
   onUpdate,
   onDelete,
@@ -131,6 +134,9 @@ export function DirectoryTree({
   onCollapse: () => void
   readOnly: boolean
   busy: boolean
+  onCreateRoot: () => void
+  onEditRoot: (subject: TestSubject) => void
+  onDeleteRoot: (subject: TestSubject) => void
   onCreate: (testSubjectId: number, name: string, parentId: number | null) => Promise<boolean>
   onUpdate: (
     folder: TestCaseFolder,
@@ -182,7 +188,6 @@ export function DirectoryTree({
     if (matching && !matchingSubjects.has(subject.id)) continue
     visibleIds.push(`subject:${subject.id}`)
     if (matching || expandedSubjects.has(subject.id)) {
-      visibleIds.push(`uncategorized:${subject.id}`)
       visibleIds.push(...visible.filter(({ folder }) => folder.testSubjectId === subject.id).map(({ folder }) => `folder:${folder.id}`))
     }
   }
@@ -298,23 +303,26 @@ export function DirectoryTree({
         >
           全部收起
         </Button>
-        {!readOnly && selected !== 'all' && (
+        {!readOnly && (
           <Button
             size="icon"
             variant="ghost"
-            aria-label="新增目录"
+            aria-label={selected === 'all' ? '新增一级目录' : '新增子目录'}
+            title={selected === 'all' ? '新增一级目录' : '新增子目录'}
             disabled={busy}
-            onClick={() =>
+            onClick={() => {
+              if (selected === 'all') {
+                onCreateRoot()
+                return
+              }
               setAction({
                 kind: 'create',
                 parentId: selected.startsWith('folder:') ? Number(selected.slice(7)) : null,
                 testSubjectId: selected.startsWith('subject:')
                   ? Number(selected.slice(8))
-                  : selected.startsWith('uncategorized:')
-                    ? Number(selected.slice(14))
-                    : index.byId.get(Number(selected.slice(7)))!.testSubjectId,
+                  : index.byId.get(Number(selected.slice(7)))!.testSubjectId,
               })
-            }
+            }}
           >
             <FolderPlus />
           </Button>
@@ -343,7 +351,6 @@ export function DirectoryTree({
         </div>
         {subjects.filter((subject) => !matching || matchingSubjects.has(subject.id)).map((subject) => {
           const subjectId = `subject:${subject.id}`
-          const uncategorizedId = `uncategorized:${subject.id}`
           const subjectCases = cases.filter((item) => item.testSubjectId === subject.id)
           const open = Boolean(matching) || expandedSubjects.has(subject.id)
           return <div key={subject.id} role="group" className="test-directory-subject-group">
@@ -365,8 +372,22 @@ export function DirectoryTree({
             <Stack />
             <span>{subject.name}</span>
             <small>{subjectCases.length}</small>
+            {!readOnly && (subject.canEdit || subject.canDelete) && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label={`${subject.name}一级目录操作`} onClick={(event) => event.stopPropagation()}>
+                    <DotsThreeVertical />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent onClick={(event) => event.stopPropagation()}>
+                  <DropdownMenuGroup>
+                    {subject.canEdit && <DropdownMenuItem disabled={busy} onSelect={() => onEditRoot(subject)}>重命名一级目录</DropdownMenuItem>}
+                    {subject.canDelete && <DropdownMenuItem disabled={busy} onSelect={() => onDeleteRoot(subject)}>删除一级目录</DropdownMenuItem>}
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
-          {open && <div role="treeitem" aria-level={2} aria-selected={selected === uncategorizedId} tabIndex={tabStop === uncategorizedId ? 0 : -1} data-directory-id={uncategorizedId} onFocus={() => setFocusId(uncategorizedId)} onKeyDown={(event) => keyDown(event, uncategorizedId)} onClick={() => onSelect(uncategorizedId)} className={cn('test-directory-node', selected === uncategorizedId && 'active')} style={{ paddingLeft: 24 }}><Folder /><span>未分类</span><small>{subjectCases.filter((item) => !item.folderId).length}</small></div>}
         {open && visible.filter(({ folder }) => folder.testSubjectId === subject.id).map(({ folder: f, depth }) => {
           const hasChildren = Boolean(index.children.get(f.id)?.length)
           const open = Boolean(matching) || expanded.has(f.id)
