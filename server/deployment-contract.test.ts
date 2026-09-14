@@ -41,17 +41,17 @@ test('Sealos does not grant system administration to a predictable default usern
   assert.doesNotMatch(adminInput, /default: admin/u)
 })
 
-test('main image workflow deploys the same immutable image to both Kubernetes workloads', () => {
+test('main image workflow deploys the immutable image to the application Deployment', () => {
   const deployJob = dockerPushWorkflow.slice(dockerPushWorkflow.indexOf('  deploy-k8s:'))
 
   assert.match(deployJob, /needs: merge-manifest/u)
   assert.match(deployJob, /environment: production/u)
   assert.match(deployJob, /secrets\.KUBE_CONFIG/u)
+  assert.match(deployJob, /config view --minify/u)
+  assert.match(deployJob, /test -n "\$KUBE_NAMESPACE"/u)
   assert.match(deployJob, /deployment\/\$K8S_DEPLOYMENT_NAME/u)
-  assert.match(deployJob, /cronjob\/\$K8S_CRONJOB_NAME/u)
   assert.match(deployJob, /grep -Fx "\$K8S_DEPLOYMENT_NAME"/u)
-  assert.match(deployJob, /grep -Fx 'todo-digest-worker'/u)
   assert.match(deployJob, /rollout status/u)
   assert.match(deployJob, /test "\$DEPLOYMENT_IMAGE" = "\$EXPECTED_IMAGE"/u)
-  assert.match(deployJob, /test "\$CRONJOB_IMAGE" = "\$EXPECTED_IMAGE"/u)
+  assert.doesNotMatch(deployJob, /K8S_NAMESPACE|--namespace|K8S_CRONJOB_NAME|cronjob\//u)
 })
