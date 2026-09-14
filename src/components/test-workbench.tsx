@@ -37,6 +37,7 @@ import {
   MagnifyingGlass,
   PencilSimple,
   Plus,
+  Stack,
   Trash,
   UploadSimple,
   UserPlus,
@@ -4166,52 +4167,74 @@ type TestPlanFormPayload = {
 function PlanDirectoryTree({
   cases,
   folders,
-  onCollapseAll,
-  onExpandAll,
   onSelect,
   onToggle,
   selected,
   expanded,
+  subjects,
 }: {
   cases: TestCase[]
   folders: TestCaseFolder[]
-  onCollapseAll: () => void
-  onExpandAll: () => void
   onSelect: (id: string) => void
   onToggle: (id: number) => void
   selected: string
   expanded: Set<number>
+  subjects: TestSubject[]
 }) {
   const index = useMemo(() => createDirectoryIndex(folders), [folders])
   const counts = useMemo(() => countDirectoryCases(folders, cases), [cases, folders])
-  const selectedFolder = selected !== 'all' && selected !== 'uncategorized' ? index.byId.get(Number(selected)) : undefined
+  const [expandedSubjects, setExpandedSubjects] = useState<Set<number>>(() => new Set(subjects.map((subject) => subject.id)))
+  const selectedFolder = selected.startsWith('folder:') ? index.byId.get(Number(selected.slice(7))) : undefined
+  const selectedSubject = selected.startsWith('subject:') ? subjects.find((subject) => subject.id === Number(selected.slice(8))) : undefined
   const visible: Array<{ folder: TestCaseFolder; depth: number }> = []
-  const visit = (parentId: number | null, depth: number) => {
+  const visit = (testSubjectId: number, parentId: number | null, depth: number) => {
     for (const folder of index.children.get(parentId) ?? []) {
+      if (folder.testSubjectId !== testSubjectId) continue
       visible.push({ folder, depth })
-      if (expanded.has(folder.id)) visit(folder.id, depth + 1)
+      if (expanded.has(folder.id)) visit(testSubjectId, folder.id, depth + 1)
     }
   }
-  visit(null, 1)
+  subjects.forEach((subject) => {
+    if (expandedSubjects.has(subject.id)) visit(subject.id, null, 2)
+  })
+  const selectedLabel = selected === 'all'
+    ? '全部用例'
+    : selectedSubject?.name
+      ?? (selectedFolder
+        ? [subjects.find((subject) => subject.id === selectedFolder.testSubjectId)?.name, ...index.path(selectedFolder.id).map((folder) => folder.name)].filter(Boolean).join(' / ')
+        : '全部用例')
   return (
     <aside className="test-plan-directory-pane" aria-label="选择用例目录">
       <div className="test-plan-directory-heading">
-        <div><span>用例目录</span><strong>{selected === 'all' ? '全部目录' : selected === 'uncategorized' ? '未分类' : selectedFolder ? index.path(selectedFolder.id).map((folder) => folder.name).join(' / ') : '全部目录'}</strong></div>
+        <div><span>用例目录</span><strong>{selectedLabel}</strong></div>
         <small>{cases.length} 条可选用例</small>
       </div>
       <div className="test-plan-directory-actions">
-        <Button type="button" size="sm" variant="ghost" onClick={onExpandAll}>全部展开</Button>
-        <Button type="button" size="sm" variant="ghost" onClick={onCollapseAll}>全部收起</Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => { setExpandedSubjects(new Set(subjects.map((subject) => subject.id))); folders.forEach((folder) => { if (!expanded.has(folder.id)) onToggle(folder.id) }) }}>全部展开</Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => { setExpandedSubjects(new Set()); [...expanded].forEach(onToggle) }}>全部收起</Button>
       </div>
       <div className="test-plan-directory-tree" role="tree" aria-label="测试用例目录">
         <button type="button" role="treeitem" aria-selected={selected === 'all'} className={`test-plan-directory-node test-plan-directory-node-root ${selected === 'all' ? 'active' : ''}`} onClick={() => onSelect('all')}>
-          <Folder /><span>全部目录</span><small>{cases.length}</small>
+          <FolderOpen /><span>全部用例</span><small>{cases.length}</small>
         </button>
-        {visible.map(({ folder, depth }) => {
+        {subjects.map((subject) => {
+          const subjectNodeId = `subject:${subject.id}`
+          const subjectExpanded = expandedSubjects.has(subject.id)
+          return <div key={subject.id} role="group" className="test-plan-directory-subject-group">
+            <div role="treeitem" aria-level={1} aria-expanded={subjectExpanded} aria-selected={selected === subjectNodeId} className={`test-plan-directory-node test-plan-directory-subject ${selected === subjectNodeId ? 'active' : ''}`} onClick={() => onSelect(subjectNodeId)}>
+              <button type="button" className="test-plan-directory-toggle" tabIndex={-1} aria-label={`${subjectExpanded ? '收起' : '展开'} ${subject.name}`} onClick={(event) => { event.stopPropagation(); setExpandedSubjects((current) => { const next = new Set(current); if (next.has(subject.id)) next.delete(subject.id); else next.add(subject.id); return next }) }}>
+                {subjectExpanded ? <CaretDown /> : <CaretRight />}
+              </button>
+              <Stack />
+              <span title={subject.name}>{subject.name}</span>
+              <small>{cases.filter((testCase) => testCase.testSubjectId === subject.id).length}</small>
+            </div>
+        {subjectExpanded && visible.filter(({ folder }) => folder.testSubjectId === subject.id).map(({ folder, depth }) => {
           const hasChildren = Boolean(index.children.get(folder.id)?.length)
           const isExpanded = expanded.has(folder.id)
+          const folderNodeId = `folder:${folder.id}`
           return (
-            <div key={folder.id} role="treeitem" aria-level={depth} aria-expanded={hasChildren ? isExpanded : undefined} aria-selected={selected === String(folder.id)} className={`test-plan-directory-node ${selected === String(folder.id) ? 'active' : ''}`} style={{ paddingLeft: 8 + (depth - 1) * 15 }} onClick={() => onSelect(String(folder.id))}>
+            <div key={folder.id} role="treeitem" aria-level={depth} aria-expanded={hasChildren ? isExpanded : undefined} aria-selected={selected === folderNodeId} className={`test-plan-directory-node ${selected === folderNodeId ? 'active' : ''}`} style={{ paddingLeft: 8 + (depth - 1) * 15 }} onClick={() => onSelect(folderNodeId)}>
               <button type="button" className="test-plan-directory-toggle" tabIndex={-1} aria-label={`${isExpanded ? '收起' : '展开'} ${folder.name}`} disabled={!hasChildren} onClick={(event) => { event.stopPropagation(); onToggle(folder.id) }}>
                 {hasChildren ? isExpanded ? <CaretDown /> : <CaretRight /> : null}
               </button>
@@ -4220,11 +4243,8 @@ function PlanDirectoryTree({
               <small>{counts.total.get(folder.id) ?? 0}</small>
             </div>
           )
-        })}
-        <button type="button" role="treeitem" aria-selected={selected === 'uncategorized'} className={`test-plan-directory-node test-plan-directory-node-root ${selected === 'uncategorized' ? 'active' : ''}`} onClick={() => onSelect('uncategorized')}>
-          <Folder /><span>未分类</span><small>{counts.direct.get(null) ?? 0}</small>
-        </button>
-        {!folders.length ? <p className="test-list-empty">当前测试空间还没有目录。</p> : null}
+        })}</div>})}
+        {!subjects.length ? <p className="test-list-empty">当前测试空间还没有一级目录。</p> : null}
       </div>
       <small className="test-plan-directory-footnote">目录数量包含所有下级用例</small>
     </aside>
@@ -4268,8 +4288,10 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
     .map((item) => item.testCaseId as number))
   const available = cases.filter((item) => subjectIds.includes(item.testSubjectId) && item.status === 'active' && !existingCaseIds.has(item.id))
   const planDirectoryIndex = useMemo(() => createDirectoryIndex(scopedFolders), [scopedFolders])
-  const effectiveCaseFolderFilter = caseFolderFilter === 'all' || caseFolderFilter === 'uncategorized' || planDirectoryIndex.byId.has(Number(caseFolderFilter)) ? caseFolderFilter : 'all'
-  const planScopeIds = effectiveCaseFolderFilter === 'all' || effectiveCaseFolderFilter === 'uncategorized' ? new Set<number>() : planDirectoryIndex.descendants(Number(effectiveCaseFolderFilter))
+  const selectedPlanSubjectId = caseFolderFilter.startsWith('subject:') ? Number(caseFolderFilter.slice(8)) : undefined
+  const selectedPlanFolderId = caseFolderFilter.startsWith('folder:') ? Number(caseFolderFilter.slice(7)) : undefined
+  const effectiveCaseFolderFilter = caseFolderFilter === 'all' || selectedPlanSubjectId && subjectIds.includes(selectedPlanSubjectId) || selectedPlanFolderId && planDirectoryIndex.byId.has(selectedPlanFolderId) ? caseFolderFilter : 'all'
+  const planScopeIds = selectedPlanFolderId ? planDirectoryIndex.descendants(selectedPlanFolderId) : new Set<number>()
   const normalizedCaseQuery = caseSearchQuery.trim().toLocaleLowerCase('zh-CN')
   const filteredAvailable = available.filter((item) => {
     const folder = folders.find((candidate) => candidate.id === item.folderId)
@@ -4284,7 +4306,7 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
       item.customTags.join(' '),
     ].some((value) => value.toLocaleLowerCase('zh-CN').includes(normalizedCaseQuery))
     const matchesFolder = effectiveCaseFolderFilter === 'all'
-      || (effectiveCaseFolderFilter === 'uncategorized' ? !item.folderId : planScopeIds.has(item.folderId ?? -1))
+      || (selectedPlanSubjectId ? item.testSubjectId === selectedPlanSubjectId : planScopeIds.has(item.folderId ?? -1))
     return matchesSearch
       && matchesFolder
       && (caseTypeFilter === 'all' || item.caseType === caseTypeFilter)
@@ -4301,8 +4323,9 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
   useEffect(() => {
     const validIds = new Set(scopedFolders.map((folder) => folder.id))
     setExpandedDirectories((current) => new Set([...current].filter((id) => validIds.has(id))))
-    if (caseFolderFilter !== 'all' && caseFolderFilter !== 'uncategorized' && !validIds.has(Number(caseFolderFilter))) setCaseFolderFilter('all')
-  }, [caseFolderFilter, scopedFolders])
+    if (caseFolderFilter.startsWith('folder:') && !validIds.has(Number(caseFolderFilter.slice(7)))) setCaseFolderFilter('all')
+    if (caseFolderFilter.startsWith('subject:') && !subjectIds.includes(Number(caseFolderFilter.slice(8)))) setCaseFolderFilter('all')
+  }, [caseFolderFilter, scopedFolders, subjectIds])
 
   useEffect(() => {
     if (selectAllRef.current) {
@@ -4321,7 +4344,7 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
     <DialogContent fixedHeader className={`test-wide-dialog test-plan-dialog ${step === 2 ? 'test-plan-dialog-fixed' : 'test-plan-dialog-auto'}`}>
       <DialogHeader>
         <DialogTitle>{plan ? `编辑 PLAN-${plan.id}` : '新建测试计划'}</DialogTitle>
-        <DialogDescription>{plan ? '先修改计划基础信息，再追加测试对象或活动用例。已有快照不会改变。' : '先填写计划基础信息，再选择测试对象和要纳入计划的用例。'}</DialogDescription>
+        <DialogDescription>{plan ? '先修改计划基础信息，再从用例目录追加活动用例。已有快照不会改变。' : '先填写计划基础信息，再从用例目录选择要纳入计划的用例。'}</DialogDescription>
       </DialogHeader>
       <form className="test-dialog-form test-plan-dialog-form" onSubmit={(event) => {
         event.preventDefault()
@@ -4387,12 +4410,11 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
               <PlanDirectoryTree
                 cases={available}
                 folders={scopedFolders}
+                subjects={subjects.filter((subject) => subjectIds.includes(subject.id))}
                 selected={caseFolderFilter}
                 expanded={expandedDirectories}
                 onSelect={setCaseFolderFilter}
                 onToggle={(id) => setExpandedDirectories((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })}
-                onExpandAll={() => setExpandedDirectories(new Set(scopedFolders.map((folder) => folder.id)))}
-                onCollapseAll={() => setExpandedDirectories(new Set())}
               />
               <fieldset className="test-plan-case-picker">
                 <legend>{plan ? '追加用例' : '选择用例'}</legend>
@@ -4453,11 +4475,12 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
                 <div className="test-case-checklist" role="group" aria-label={plan ? '可追加用例' : '可选择用例'}>
                   {filteredAvailable.length ? filteredAvailable.map((item) => {
                     const folder = folders.find((candidate) => candidate.id === item.folderId)
+                    const subjectName = subjects.find((subject) => subject.id === item.testSubjectId)?.name
                     return <label key={item.id}>
                       <input type="checkbox" checked={caseIds.includes(item.id)} onChange={(event) => setCaseIds((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} />
                       <span className="test-plan-case-option">
                         <span><code>CASE-{item.id}</code><strong>{item.title}</strong></span>
-                        <small>{folder ? planDirectoryIndex.path(folder.id).map((node) => node.name).join(' / ') : '未分类'} · {caseTypeLabel[item.caseType]} · {caseLevelLabel[item.priority]}</small>
+                        <small>{[subjectName, ...(folder ? planDirectoryIndex.path(folder.id).map((node) => node.name) : [])].filter(Boolean).join(' / ')} · {caseTypeLabel[item.caseType]} · {caseLevelLabel[item.priority]}</small>
                       </span>
                     </label>
                   }) : <p className="test-list-empty">{available.length ? '没有符合条件的可选用例。' : '没有可追加的活动用例。'}</p>}

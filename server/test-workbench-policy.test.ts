@@ -59,7 +59,11 @@ test('test spaces persist encrypted organization-scoped unique versions', () => 
 test('test plan root directory entries reserve the correct grid columns', () => {
   assert.match(testWorkbenchClientSource, /test-plan-directory-node-root/u)
   assert.match(testWorkbenchClientSource, /className=\{`test-plan-directory-node test-plan-directory-node-root \$\{selected === 'all'/u)
-  assert.match(testWorkbenchClientSource, /className=\{`test-plan-directory-node test-plan-directory-node-root \$\{selected === 'uncategorized'/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /selected === 'uncategorized'/u)
+  assert.match(testWorkbenchClientSource, /const subjectNodeId = `subject:\$\{subject\.id\}`/u)
+  assert.match(testWorkbenchClientSource, /const folderNodeId = `folder:\$\{folder\.id\}`/u)
+  assert.match(testWorkbenchClientSource, /selectedPlanSubjectId \? item\.testSubjectId === selectedPlanSubjectId/u)
+  assert.match(testWorkbenchClientSource, /\[subjectName, \.\.\.\(folder \? planDirectoryIndex\.path/u)
   assert.match(readFileSync(new URL('../src/components/test-workbench.css', import.meta.url), 'utf8'), /\.test-plan-directory-node-root\s*\{\s*grid-template-columns: 16px minmax\(0, 1fr\) auto;/u)
 })
 

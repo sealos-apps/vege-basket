@@ -2804,6 +2804,9 @@
 .test-plan-directory-node-root {
   grid-template-columns: 16px minmax(0, 1fr) auto;
 }
+.test-plan-directory-subject-group { display: contents; }
+.test-plan-directory-node.test-plan-directory-subject { font-weight: 600; }
+.test-plan-directory-node.test-plan-directory-subject > svg { color: var(--primary); }
 
 .test-plan-directory-node > svg {
   width: 15px;
