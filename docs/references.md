@@ -143,9 +143,10 @@ visible when the global dependency switch or parent component channel is disable
 
 镜像合并成功后，同一工作流会通过 `production` GitHub Environment 自动发布到
 Kubernetes。Environment Secret `KUBE_CONFIG` 保存 kubeconfig 原文；Environment
-variables `K8S_NAMESPACE` 和 `K8S_DEPLOYMENT_NAME` 分别指定命名空间和应用 Deployment。
-Deployment 的容器名必须与 Deployment 同名。自动发布不更新日报 CronJob，也不需要
-`K8S_CRONJOB_NAME`；该身份仅需对目标 Deployment 及其注解具有读取、更新和 patch 权限。
+variable `K8S_DEPLOYMENT_NAME` 指定应用 Deployment。kubeconfig 的 current context 必须显式
+配置目标 namespace，工作流不需要 `K8S_NAMESPACE`。Deployment 的容器名必须与 Deployment
+同名。自动发布不更新日报 CronJob，也不需要 `K8S_CRONJOB_NAME`；该身份仅需对目标
+Deployment 及其注解具有读取、更新和 patch 权限。
 
 ## HTTP API Families
 

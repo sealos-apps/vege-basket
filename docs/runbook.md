@@ -279,14 +279,15 @@ Before an encryption-key change:
 
 首次启用前，在 GitHub 仓库创建 `production` Environment，并配置：
 
-- Secret `KUBE_CONFIG`：可访问目标集群的 kubeconfig 原文。使用仅能读取并 patch/update
-  目标 Deployment 和 Deployment 注解的专用身份。
-- Variables `K8S_NAMESPACE`、`K8S_DEPLOYMENT_NAME`：目标命名空间和应用 Deployment 名。
-  Sealos 当前实例对应值可从授权的集群读取，不能以 `.sealos/state.json` 作为实时依据。
+- Secret `KUBE_CONFIG`：可访问目标集群的 kubeconfig 原文；其 current context 必须显式配置
+  目标 namespace。使用仅能读取并 patch/update 目标 Deployment 和 Deployment 注解的专用身份。
+- Variable `K8S_DEPLOYMENT_NAME`：应用 Deployment 名。Sealos 当前实例对应值可从授权的
+  集群读取，不能以 `.sealos/state.json` 作为实时依据。
 
-应用容器名必须与 Deployment 名相同。自动发布不更新日报 CronJob，也不需要配置
-`K8S_CRONJOB_NAME`。如 `production` Environment 配置了 required reviewers，push 后会停在
-发布审批处；需要完全无人值守时不要配置 required reviewers。发布 job 会：
+应用容器名必须与 Deployment 名相同。自动发布使用 kubeconfig current context 的 namespace，
+不需要配置 `K8S_NAMESPACE`；它也不更新日报 CronJob，不需要配置 `K8S_CRONJOB_NAME`。如
+`production` Environment 配置了 required reviewers，push 后会停在发布审批处；需要完全
+无人值守时不要配置 required reviewers。发布 job 会：
 
 1. 将 Deployment 的 `originImageName` 注解和应用容器更新为同一个 `main-<12位sha>` 镜像。
 2. 等待 Deployment rollout 完成，并再次读取该工作负载确认镜像一致。
