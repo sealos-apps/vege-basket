@@ -280,24 +280,22 @@ Before an encryption-key change:
 首次启用前，在 GitHub 仓库创建 `production` Environment，并配置：
 
 - Secret `KUBE_CONFIG`：可访问目标集群的 kubeconfig 原文。使用仅能读取并 patch/update
-  目标 Deployment、CronJob 和 Deployment 注解的专用身份。
-- Variables `K8S_NAMESPACE`、`K8S_DEPLOYMENT_NAME`、`K8S_CRONJOB_NAME`：目标命名空间、
-  应用 Deployment 名和日报 CronJob 名。Sealos 当前实例对应值可从授权的集群读取，不能
-  以 `.sealos/state.json` 作为实时依据。
+  目标 Deployment 和 Deployment 注解的专用身份。
+- Variables `K8S_NAMESPACE`、`K8S_DEPLOYMENT_NAME`：目标命名空间和应用 Deployment 名。
+  Sealos 当前实例对应值可从授权的集群读取，不能以 `.sealos/state.json` 作为实时依据。
 
-应用容器名必须与 Deployment 名相同；CronJob 容器名必须为 `todo-digest-worker`，与模板一致。
-如 `production` Environment 配置了 required reviewers，push 后会停在发布审批处；需要完全
-无人值守时不要配置 required reviewers。发布 job 会：
+应用容器名必须与 Deployment 名相同。自动发布不更新日报 CronJob，也不需要配置
+`K8S_CRONJOB_NAME`。如 `production` Environment 配置了 required reviewers，push 后会停在
+发布审批处；需要完全无人值守时不要配置 required reviewers。发布 job 会：
 
-1. 将 Deployment 的 `originImageName` 注解、应用容器和日报 CronJob 更新为同一个
-   `main-<12位sha>` 镜像。
-2. 等待 Deployment rollout 完成，并再次读取两个工作负载确认镜像完全一致。
+1. 将 Deployment 的 `originImageName` 注解和应用容器更新为同一个 `main-<12位sha>` 镜像。
+2. 等待 Deployment rollout 完成，并再次读取该工作负载确认镜像一致。
 3. 任一步失败即令 workflow 失败，不自动重试写操作或回滚数据库。
 
 发布负责人应：
 
 1. 查看 `main` 推送触发的构建与推送结果，确认合并镜像已生成。
-2. 查看自动发布 job，确认 Deployment rollout 完成且应用与 CronJob 镜像校验通过。
+2. 查看自动发布 job，确认 Deployment rollout 完成且应用镜像校验通过。
 3. Pass database, encryption, shared AI, Feishu, and OSS configuration through the
    deployment environment; confirm real credential values are absent from the image and Git.
    The Sealos template derives `APP_PUBLIC_URL` from its TLS ingress host; custom deployments
@@ -312,8 +310,8 @@ Before an encryption-key change:
    workspace-review turn disappears from history.
    For Feishu OAuth, re-check the custom application's availability scope is limited to
    the intended company users; the server treats successful OAuth as internal identity.
-5. Re-read the live application image digest and the CronJob template image. Do not infer
-   deployment success from `.sealos/build/build-result.json` or `.sealos/state.json` alone.
+5. Re-read the live application image digest. Do not infer deployment success from
+   `.sealos/build/build-result.json` or `.sealos/state.json` alone.
 6. For the digest workflow, verify the CronJob schedule, one completed Job, and the run
    record in an authorized test database before enabling a real user's subscription.
    Confirm the recipient receives a passive Feishu JSON 2.0 card titled with the

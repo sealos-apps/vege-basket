@@ -233,8 +233,9 @@ was exercised in an authorized environment.
 - Production container images default to `linux/amd64`; publish ARM only when explicitly
   requested.
 - Use immutable image tags or digests. Keep `VEGES_IMAGE` as the single Sealos template
-  source for `originImageName`, the application container, and the todo-digest CronJob;
-  verify both live workload images after deployment.
+  source for `originImageName`, the application container, and the todo-digest CronJob.
+  The automated main-branch deployment updates and verifies only the application Deployment;
+  keep CronJob lifecycle changes separate and do not require `K8S_CRONJOB_NAME` there.
 - `.sealos/build/build-result.json` and `.sealos/state.json` are receipts, not proof of
   current source or runtime state.
 - App rollback does not roll back PostgreSQL. Keep a pre-release database snapshot and

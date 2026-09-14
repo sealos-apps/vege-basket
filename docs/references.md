@@ -139,14 +139,13 @@ visible when the global dependency switch or parent component channel is disable
 `ghcr.io/<仓库>/vege-basket:main-<12位sha>-arm64`，再用 `docker manifest` 合并为
 `ghcr.io/<仓库>/vege-basket:main-<12位sha>`。Sealos 模板要求 `VEGES_IMAGE` 使用
 由当前源码构建的不可变合并镜像标签或分架构标签/摘要；Deployment 注解、应用容器和
-待办日报 CronJob 共用这一个值，避免 API 与 worker 静默运行不同源码版本。
+待办日报 CronJob 在模板安装时共用这一个值。
 
 镜像合并成功后，同一工作流会通过 `production` GitHub Environment 自动发布到
 Kubernetes。Environment Secret `KUBE_CONFIG` 保存 kubeconfig 原文；Environment
-variables `K8S_NAMESPACE`、`K8S_DEPLOYMENT_NAME` 和 `K8S_CRONJOB_NAME` 分别指定命名空间、
-应用 Deployment 和日报 CronJob。Deployment 的容器名必须与 Deployment 同名，CronJob
-容器名保持 `todo-digest-worker`。该身份仅需对这两个工作负载及 Deployment 注解具有读取、
-更新和 patch 权限。
+variables `K8S_NAMESPACE` 和 `K8S_DEPLOYMENT_NAME` 分别指定命名空间和应用 Deployment。
+Deployment 的容器名必须与 Deployment 同名。自动发布不更新日报 CronJob，也不需要
+`K8S_CRONJOB_NAME`；该身份仅需对目标 Deployment 及其注解具有读取、更新和 patch 权限。
 
 ## HTTP API Families
 
