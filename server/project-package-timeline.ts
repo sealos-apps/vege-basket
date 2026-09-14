@@ -6,6 +6,7 @@ import {
   isPackageMarketObjectKeyAllowedForRule,
 } from './package-market.ts'
 import { getDepartedUserIds } from './user-lifecycle.ts'
+import { lockProjectMutation } from './project-lock.ts'
 
 export type ProjectPackageEventType = 'init' | 'upgrade'
 export type ProjectPackageEventStatus = 'draft' | 'delivering' | 'delivered'
@@ -1594,6 +1595,7 @@ export async function saveProjectPackageEvent(params: {
   }
 
   return withTransaction(async (client) => {
+    await lockProjectMutation(client, params.projectId)
     await ensureProjectTodoIds(
       params.projectId,
       documents.flatMap((document) => document.relatedTodoIds),
@@ -1898,17 +1900,22 @@ export async function updateProjectPackageEvent(params: {
     throw new Error('No supported fields to update')
   }
   values.push(params.eventId, params.projectId)
-  const result = await (params.client ?? pool).query(
-    `
-    update project_package_events
-    set ${updates.join(', ')}, updated_at = now()
-    where id = $${values.length - 1}
-      and project_id = $${values.length}
-      and published_at is null
-    `,
-    values,
-  )
-  if (result.rowCount !== 1) throw new Error('Event not found or already published')
+  const update = async (client: PoolClient) => {
+    await lockProjectMutation(client, params.projectId)
+    const result = await client.query(
+      `
+      update project_package_events
+      set ${updates.join(', ')}, updated_at = now()
+      where id = $${values.length - 1}
+        and project_id = $${values.length}
+        and published_at is null
+      `,
+      values,
+    )
+    if (result.rowCount !== 1) throw new Error('Event not found or already published')
+  }
+  if (params.client) await update(params.client)
+  else await withTransaction(update)
 }
 
 export async function deleteProjectPackageEvent(params: { eventId: number; projectId: number }) {

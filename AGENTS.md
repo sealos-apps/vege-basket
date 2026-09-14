@@ -173,6 +173,15 @@ historical product context; current code and these operational docs take precede
   Keep names encrypted and retain the lookup key recorded in `project_module_settings`
   across active encryption-key rotation. Initialization imports the organization name union
   once; workspace reads must never backfill it.
+- Moving a project between organizations requires the actor to be an active Owner/Admin in both
+  organizations with the `organization_admin` role. Under both catalog locks and the project
+  lock, recheck that the target organization contains the project owner and every active member,
+  that no project invitation is pending and no active member remains unbound, and that every module referenced by any todo has an
+  exact enabled target-catalog match. Preserve project-local module IDs, revoke stale invitation
+  and ownership-transfer paths, disable project chat integration, and audit both organizations.
+  Project member removal must fail while the member has actionable todo, delivery, or milestone
+  work; organization removal additionally checks active Bug and test-plan assignments. Preserve
+  finished-work attribution instead of clearing it during membership removal.
 - Test-case directory and assignment writes must lock the test space, then test subject,
   then resources, and recheck access in the transaction. Lock multiple spaces and subjects
   in numeric order for space imports. Directories may be deleted only when they have no

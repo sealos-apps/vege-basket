@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg'
+import { lockProjectMutation } from './project-lock.ts'
 
 export type ManagedResource = {
   ownerUserId: number
@@ -46,7 +47,7 @@ export async function lockResourceManager(
     await client.query('select id from organizations where id = any($1::bigint[]) order by id for share', [organizationIds])
   }
   if (kind === 'project') {
-    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`ai-project:${resourceId}`])
+    await lockProjectMutation(client, resourceId)
   }
   const result = await client.query<{ owner_user_id: string; organization_id: string | null }>(
     `${resourceSql} for update`,

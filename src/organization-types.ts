@@ -67,6 +67,31 @@ export type OrganizationProject = {
   updatedAt: string
 }
 
+export type ProjectOrganizationTransferBlockers = {
+  missingMembers: Array<{ name: string; userId: number }>
+  pendingInvitationCount: number
+  unboundActiveMemberCount: number
+  unavailableModules: Array<{
+    name: string
+    projectModuleId: number
+    reason: 'disabled' | 'missing'
+    todoCount: number
+  }>
+}
+
+export type ProjectOrganizationTransferOption = {
+  blockers: ProjectOrganizationTransferBlockers
+  eligible: boolean
+  id: number
+  name: string
+}
+
+export type ProjectOrganizationTransferOptions = {
+  options: ProjectOrganizationTransferOption[]
+  projectId: number
+  sourceOrganizationId: number
+}
+
 export type OrganizationProjectMilestone = {
   acceptanceCriteria: string
   baselineDate: string

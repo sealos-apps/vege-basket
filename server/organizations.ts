@@ -60,6 +60,19 @@ import {
   lockProjectModules, normalizeOrganizationModuleUpdate, ProjectModuleError,
   requireProjectModuleName, syncOrganizationProjectModules, updateOrganizationProjectModule,
 } from './project-modules.ts'
+import {
+  getOrganizationMemberTaskBlockers,
+  getProjectMemberTaskBlockers,
+  hasMemberTaskBlockers,
+  memberTaskBlockerMessage,
+} from './project-membership-policy.ts'
+import {
+  canTransferProjectOrganization,
+  getProjectOrganizationTransferBlockers,
+  getProjectOrganizationTransferBlockersByTarget,
+  ProjectOrganizationTransferError,
+} from './project-organization-transfer.ts'
+import { lockProjectMutation } from './project-lock.ts'
 
 type OrganizationRouterDependencies = {
   generateWeeklySummary: (userId: number, source: string) => Promise<{
@@ -288,6 +301,45 @@ async function lockManagedOrganization(
   return result.rows[0] ?? null
 }
 
+async function lockOrganizationProjectManagers(
+  client: PoolClient,
+  organizationIds: number[],
+  userId: number,
+) {
+  const result = await client.query<{ organization_id: string }>(
+    `select membership.organization_id
+       from organization_memberships membership
+       join user_roles role on role.user_id = membership.user_id
+         and role.role = 'organization_admin'
+      where membership.organization_id = any($1::bigint[])
+        and membership.user_id = $2::bigint
+        and membership.status = 'active'
+        and membership.access_role in ('owner', 'admin')
+      order by membership.organization_id
+      for share of membership, role`,
+    [organizationIds, userId],
+  )
+  return result.rows.map((row) => Number(row.organization_id))
+}
+
+async function lockOrganizationAdministrator(
+  client: PoolClient,
+  organizationId: number,
+  userId: number,
+) {
+  const result = await client.query(
+    `select membership.user_id
+       from organization_memberships membership
+       join user_roles role on role.user_id = membership.user_id
+         and role.role = 'organization_admin'
+      where membership.organization_id = $1::bigint and membership.user_id = $2::bigint
+        and membership.status = 'active'
+      for share of membership, role`,
+    [organizationId, userId],
+  )
+  return Boolean(result.rows[0])
+}
+
 function databaseErrorCode(error: unknown) {
   return error && typeof error === 'object' && 'code' in error
     ? String(error.code)
@@ -331,13 +383,6 @@ function weeklyReportAssigneeIds(value: unknown) {
   if (!Array.isArray(value) || value.length > 1_000) return null
   const ids = Array.from(new Set(value.map(positiveId)))
   return ids.every((id): id is number => id !== null) ? ids : null
-}
-
-async function lockProjectMutation(client: PoolClient, projectId: number) {
-  await client.query(
-    'select pg_advisory_xact_lock(hashtextextended($1::text, 0))',
-    [`ai-project:${projectId}`],
-  )
 }
 
 async function writeMilestoneEvent(
@@ -1914,70 +1959,46 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     const userId = positiveId(request.params.userId)
     const admin = await requireOrganizationAdmin(response, organizationId, session.userId)
     if (!admin || !userId) return
-    const target = await query<{ access_role: OrganizationAccessRole }>(
-      `select access_role from organization_memberships
-       where organization_id = $1 and user_id = $2 and status = 'active'`,
-      [organizationId, userId],
-    )
-    if (!target.rows[0] || target.rows[0].access_role === 'owner') {
-      response.status(409).json({ error: 'Organization owner cannot be removed' })
-      return
-    }
-    const ownedResources = await query<{ count: string }>(
-      `select (
-        (select count(*) from projects where organization_id = $1 and user_id = $2) +
-        (select count(*) from test_spaces where organization_id = $1 and owner_user_id = $2)
-      )::text as count`,
-      [organizationId, userId],
-    )
-    if (Number(ownedResources.rows[0]?.count ?? 0) > 0) {
-      response.status(409).json({ error: 'Transfer projects and test spaces owned by this member before removal' })
-      return
-    }
     const client = await pool.connect()
     try {
       await client.query('begin')
-      await client.query(
-        `update todos set assignee_user_id = null, assigned_by_user_id = null, assigned_at = null
-         where assignee_user_id = $1 and project_id in
-           (select id from projects where organization_id = $2)`,
-        [userId, organizationId],
+      await client.query('select id from organizations where id = $1 for share', [organizationId])
+      const projects = await client.query<{ id: string }>(
+        'select id from projects where organization_id = $1 order by id',
+        [organizationId],
       )
-      await client.query(
-        `update todos set watcher_user_id = null, watched_by_user_id = null, watched_at = null
-         where watcher_user_id = $1 and project_id in
-           (select id from projects where organization_id = $2)`,
-        [userId, organizationId],
+      for (const project of projects.rows) await lockProjectMutation(client, Number(project.id))
+      await client.query('select id from projects where organization_id = $1 order by id for update', [organizationId])
+      await client.query('select id from test_spaces where organization_id = $1 order by id for update', [organizationId])
+      if (!await lockOrganizationAdministrator(client, organizationId!, session.userId)) {
+        throw new ProjectModuleError('ORGANIZATION_ACCESS_CHANGED', '组织管理权限已变化，请刷新后重试。', 409)
+      }
+      const target = await client.query<{ access_role: OrganizationAccessRole }>(
+        `select access_role from organization_memberships
+         where organization_id = $1 and user_id = $2 and status = 'active' for update`,
+        [organizationId, userId],
       )
-      await client.query(
-        `update todos set reviewer_user_id = null
-         where reviewer_user_id = $1 and project_id in
-           (select id from projects where organization_id = $2)`,
-        [userId, organizationId],
+      if (!target.rows[0] || target.rows[0].access_role === 'owner') {
+        throw new ProjectModuleError('ORGANIZATION_MEMBER_NOT_REMOVABLE', '组织所有者不能被移除。', 409)
+      }
+      const ownedResources = await client.query<{ count: string }>(
+        `select (
+          (select count(*) from projects where organization_id = $1 and user_id = $2) +
+          (select count(*) from test_spaces where organization_id = $1 and owner_user_id = $2)
+        )::text as count`,
+        [organizationId, userId],
       )
-      await client.query(
-        `update project_package_events set assignee_user_id = null, assigned_by_user_id = null, assigned_at = null
-         where assignee_user_id = $1 and project_id in
-           (select id from projects where organization_id = $2)`,
-        [userId, organizationId],
-      )
-      await client.query(
-        `insert into test_bug_comments (test_bug_id, author_user_id, content)
-         select b.id, $3, $4 from test_bugs b
-         join test_spaces s on s.id = b.test_space_id
-         where s.organization_id = $2 and b.assignee_user_id = $1
-           and b.status not in ('closed', 'rejected', 'duplicate')`,
-        [userId, organizationId, session.userId, encryptText('负责人已移出组织，系统已清除指派。')],
-      )
-      await client.query(
-        `update test_bugs b set assignee_user_id = null,
-           status = case when b.status in ('assigned', 'in_progress', 'reopened', 'confirmed') then 'pending_confirmation' else b.status end,
-           updated_at = now()
-         from test_spaces s
-         where s.id = b.test_space_id and s.organization_id = $2 and b.assignee_user_id = $1
-           and b.status not in ('closed', 'rejected', 'duplicate')`,
-        [userId, organizationId],
-      )
+      if (Number(ownedResources.rows[0]?.count ?? 0) > 0) {
+        throw new ProjectModuleError(
+          'ORGANIZATION_MEMBER_OWNS_RESOURCES',
+          '请先转移该成员拥有的项目和测试空间，再将其移出组织。',
+          409,
+        )
+      }
+      const blockers = await getOrganizationMemberTaskBlockers(client, organizationId!, userId)
+      if (hasMemberTaskBlockers(blockers)) {
+        throw new ProjectModuleError('ORGANIZATION_MEMBER_HAS_TASKS', memberTaskBlockerMessage(blockers), 409)
+      }
       await client.query(
         `delete from project_memberships where invited_user_id = $1 and project_id in
            (select id from projects where organization_id = $2)`,
@@ -2213,6 +2234,200 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     response.json(await getOrganizationDetail(organizationId!, session.userId))
   }))
 
+  router.get('/organizations/:organizationId/projects/:projectId/organization-transfer-options', asyncRoute(async (request, response) => {
+    const session = await requireSession(request, response)
+    if (!session) return
+    const organizationId = positiveId(request.params.organizationId)
+    const projectId = positiveId(request.params.projectId)
+    if (!(await requireOrganizationProjectManager(response, organizationId, session.userId))) return
+    if (!projectId) {
+      response.status(400).json({ error: '请选择有效项目。' })
+      return
+    }
+    const project = await query<{ id: string }>(
+      'select id from projects where id = $1 and organization_id = $2',
+      [projectId, organizationId],
+    )
+    if (!project.rows[0]) {
+      response.status(404).json({ error: 'Organization project not found' })
+      return
+    }
+    const targets = await query<{ id: string; name: string }>(
+      `select organization.id, organization.name
+         from organizations organization
+         join organization_memberships membership on membership.organization_id = organization.id
+         join user_roles role on role.user_id = membership.user_id
+          and role.role = 'organization_admin'
+        where membership.user_id = $1::bigint and membership.status = 'active'
+          and membership.access_role in ('owner', 'admin') and organization.id <> $2::bigint
+        order by organization.created_at, organization.id`,
+      [session.userId, organizationId],
+    )
+    const targetIds = targets.rows.map((target) => Number(target.id))
+    const blockersByTarget = await getProjectOrganizationTransferBlockersByTarget(pool, projectId, targetIds)
+    const options = targets.rows.map((target) => {
+      const targetId = Number(target.id)
+      const blockers = blockersByTarget.get(targetId)!
+      return {
+        blockers,
+        eligible: canTransferProjectOrganization(blockers),
+        id: targetId,
+        name: decryptText(target.name),
+      }
+    })
+    response.json({ options, projectId, sourceOrganizationId: organizationId })
+  }))
+
+  router.post('/organizations/:organizationId/projects/:projectId/organization-transfer', asyncRoute(async (request, response) => {
+    const session = await requireSession(request, response)
+    if (!session) return
+    const sourceOrganizationId = positiveId(request.params.organizationId)
+    const projectId = positiveId(request.params.projectId)
+    const targetOrganizationId = positiveId(request.body?.targetOrganizationId)
+    if (!(await requireOrganizationProjectManager(response, sourceOrganizationId, session.userId))) return
+    if (!projectId || !targetOrganizationId) {
+      response.status(400).json({ error: '请选择有效项目和目标组织。' })
+      return
+    }
+    if (sourceOrganizationId === targetOrganizationId) {
+      response.status(400).json({ error: '请选择其他组织作为迁移目标。' })
+      return
+    }
+
+    const transferableScope = await query<{ id: string }>(
+      `select project.id
+         from projects project
+        where project.id = $1::bigint and project.organization_id = $2::bigint
+          and exists (
+            select 1
+              from organization_memberships membership
+              join user_roles role on role.user_id = membership.user_id
+               and role.role = 'organization_admin'
+             where membership.organization_id = $3::bigint
+               and membership.user_id = $4::bigint
+               and membership.status = 'active'
+               and membership.access_role in ('owner', 'admin')
+          )`,
+      [projectId, sourceOrganizationId, targetOrganizationId, session.userId],
+    )
+    if (!transferableScope.rows[0]) {
+      response.status(404).json({ error: '项目或目标组织不可用，请刷新后重试。' })
+      return
+    }
+
+    const client = await pool.connect()
+    try {
+      await client.query('begin')
+      const organizationIds = [sourceOrganizationId!, targetOrganizationId].sort((left, right) => left - right)
+      for (const organizationId of organizationIds) {
+        await lockOrganizationModuleCatalog(client, organizationId)
+      }
+      await lockProjectModules(client, projectId)
+      const project = await client.query<{ id: string }>(
+        `select id from projects
+          where id = $1::bigint and organization_id = $2::bigint
+          for update`,
+        [projectId, sourceOrganizationId],
+      )
+      if (!project.rows[0]) {
+        throw new ProjectModuleError('PROJECT_ORGANIZATION_CHANGED', '项目所属组织已变化，请刷新后重试。', 409)
+      }
+      await client.query('select id from project_memberships where project_id = $1 order by id for update', [projectId])
+      await client.query('select id from project_modules where project_id = $1 order by id for update', [projectId])
+      await client.query('select id from todos where project_id = $1 order by id for update', [projectId])
+      const managerOrganizations = await lockOrganizationProjectManagers(client, organizationIds, session.userId)
+      if (managerOrganizations.length !== 2) {
+        throw new ProjectModuleError(
+          'PROJECT_ORGANIZATION_TRANSFER_FORBIDDEN',
+          '仅同时管理源组织和目标组织的组织管理员可以迁移项目。',
+          403,
+        )
+      }
+      await client.query(
+        `select membership.organization_id, membership.user_id
+           from organization_memberships membership
+          where membership.organization_id = $2::bigint
+            and membership.status = 'active'
+            and membership.user_id in (
+              select owner.user_id from projects owner where owner.id = $1::bigint
+              union
+              select project_member.invited_user_id from project_memberships project_member
+               where project_member.project_id = $1::bigint and project_member.status = 'active'
+                 and project_member.invited_user_id is not null
+            )
+          order by membership.user_id
+          for share`,
+        [projectId, targetOrganizationId],
+      )
+      const blockers = await getProjectOrganizationTransferBlockers(client, projectId, targetOrganizationId)
+      if (!canTransferProjectOrganization(blockers)) {
+        throw new ProjectOrganizationTransferError(blockers)
+      }
+
+      await detachOrganizationProjectModules(client, sourceOrganizationId!, projectId)
+      await client.query(
+        `update projects set organization_id = $1::bigint, updated_at = now()
+          where id = $2::bigint and organization_id = $3::bigint`,
+        [targetOrganizationId, projectId, sourceOrganizationId],
+      )
+      await syncOrganizationProjectModules(client, targetOrganizationId, projectId)
+      await client.query(
+        `update project_transfer_requests
+            set status = 'revoked', last_error = 'Project moved to another organization', responded_at = now()
+          where project_id = $1::bigint and status = 'pending'`,
+        [projectId],
+      )
+      await client.query(
+        `update project_invite_links set revoked_at = now()
+          where project_id = $1::bigint and revoked_at is null`,
+        [projectId],
+      )
+      await client.query(
+        `update project_integrations set enabled = false, updated_at = now()
+          where project_id = $1::bigint and provider = 'feishu'`,
+        [projectId],
+      )
+      await client.query(
+        `delete from organization_weekly_report_sources
+          where project_id = $1::bigint and revision_id is null`,
+        [projectId],
+      )
+      await writeAudit(
+        client,
+        sourceOrganizationId!,
+        session.userId,
+        'project.transferred_out',
+        'project',
+        String(projectId),
+        JSON.stringify({ targetOrganizationId }),
+      )
+      await writeAudit(
+        client,
+        targetOrganizationId,
+        session.userId,
+        'project.transferred_in',
+        'project',
+        String(projectId),
+        JSON.stringify({ sourceOrganizationId }),
+      )
+      await client.query('commit')
+    } catch (error) {
+      await client.query('rollback')
+      if (error instanceof ProjectOrganizationTransferError) {
+        response.status(error.status).json({
+          blockers: error.blockers,
+          code: error.code,
+          error: error.message,
+        })
+        return
+      }
+      throw error
+    } finally {
+      client.release()
+    }
+    response.json(await getOrganizationDetail(targetOrganizationId, session.userId))
+  }))
+
   router.post('/organizations/:organizationId/projects/:projectId/members', asyncRoute(async (request, response) => {
     const session = await requireSession(request, response)
     if (!session) return
@@ -2351,50 +2566,18 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       const invitedUserId = membership.rows[0].invited_user_id
         ? Number(membership.rows[0].invited_user_id)
         : null
+      if (invitedUserId) {
+        const blockers = await getProjectMemberTaskBlockers(client, projectId, invitedUserId)
+        if (hasMemberTaskBlockers(blockers)) {
+          throw new ProjectModuleError('PROJECT_MEMBER_HAS_TASKS', memberTaskBlockerMessage(blockers), 409)
+        }
+      }
       await client.query(
         `update project_invite_links
          set revoked_at = now()
          where project_id = $1 and revoked_at is null`,
         [projectId],
       )
-      if (invitedUserId) {
-        await client.query(
-          `delete from todo_watchers
-           where todo_id in (select id from todos where project_id = $1)
-             and user_id = $2`,
-          [projectId, invitedUserId],
-        )
-        await client.query(
-          `update todos
-           set assignee_user_id = null,
-               assigned_by_user_id = null,
-               assigned_at = null
-           where project_id = $1 and assignee_user_id = $2`,
-          [projectId, invitedUserId],
-        )
-        await client.query(
-          `update todos
-           set watcher_user_id = null,
-               watched_by_user_id = null,
-               watched_at = null
-           where project_id = $1 and watcher_user_id = $2`,
-          [projectId, invitedUserId],
-        )
-        await client.query(
-          `update todos
-           set reviewer_user_id = null
-           where project_id = $1 and reviewer_user_id = $2`,
-          [projectId, invitedUserId],
-        )
-        await client.query(
-          `update project_package_events
-           set assignee_user_id = null,
-               assigned_by_user_id = null,
-               assigned_at = null
-           where project_id = $1 and assignee_user_id = $2`,
-          [projectId, invitedUserId],
-        )
-      }
       await client.query(
         'delete from project_memberships where id = $1 and project_id = $2',
         [membershipId, projectId],

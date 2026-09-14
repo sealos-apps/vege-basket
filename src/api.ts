@@ -58,6 +58,7 @@ import type {
   OrganizationPackageMarketCatalogRule,
   OrganizationListItem,
   OrganizationProjectHealthStatus,
+  ProjectOrganizationTransferOptions,
   OrganizationProjectMilestoneStatus,
   OrganizationProjectStatus,
   PersonalWeeklyReport,
@@ -721,6 +722,23 @@ export function attachProjectToOrganization(organizationId: number, projectId: n
   return request<OrganizationDetail>(`/api/organizations/${organizationId}/projects/${projectId}`, {
     method: 'POST',
   })
+}
+
+export function fetchProjectOrganizationTransferOptions(organizationId: number, projectId: number) {
+  return request<ProjectOrganizationTransferOptions>(
+    `/api/organizations/${organizationId}/projects/${projectId}/organization-transfer-options`,
+  )
+}
+
+export function transferProjectOrganization(
+  organizationId: number,
+  projectId: number,
+  targetOrganizationId: number,
+) {
+  return request<OrganizationDetail>(
+    `/api/organizations/${organizationId}/projects/${projectId}/organization-transfer`,
+    { method: 'POST', body: JSON.stringify({ targetOrganizationId }) },
+  )
 }
 
 export function addOrganizationProjectMember(

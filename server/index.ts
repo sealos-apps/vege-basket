@@ -119,6 +119,11 @@ import {
 } from './project-modules.ts'
 import { projectModuleAvailability, type ProjectModuleAvailability } from '../shared/project-modules.ts'
 import {
+  getProjectMemberTaskBlockers,
+  hasMemberTaskBlockers,
+  memberTaskBlockerMessage,
+} from './project-membership-policy.ts'
+import {
   createProjectSubproject, listProjectSubprojects, lockProjectSubprojects, parseProjectSubprojectId,
   ProjectSubprojectError, projectSubprojectNameLookup, requireProjectSubprojectName, resolveProjectSubprojectId,
   requireProjectSubprojectManager,
@@ -3487,7 +3492,7 @@ async function acceptProjectInviteTokenWithClient(
   const token = String(rawToken ?? '').trim()
   if (!token) return false
 
-  const invite = await client.query<{
+  const inviteSnapshot = await client.query<{
     organization_id: string | null
     password_hash: string
     project_id: string
@@ -3504,13 +3509,36 @@ async function acceptProjectInviteTokenWithClient(
       and l.revoked_at is null
       and l.expires_at > now()
     limit 1
-    for update of l
     `,
+    [token],
+  )
+  const snapshot = inviteSnapshot.rows[0]
+  if (!snapshot) return false
+  if (!(await verifyProjectInvitePassword(snapshot.password_hash, rawPassword))) return false
+  if (snapshot.organization_id) {
+    await client.query('select id from organizations where id = $1 for share', [Number(snapshot.organization_id)])
+  }
+  await lockProjectModules(client, Number(snapshot.project_id))
+  const invite = await client.query<{
+    organization_id: string | null
+    password_hash: string
+    project_id: string
+    owner_user_id: string
+  }>(
+    `select l.password_hash, l.project_id, p.organization_id, p.user_id as owner_user_id
+       from project_invite_links l
+       join projects p on p.id = l.project_id
+      where l.token = $1 and l.revoked_at is null and l.expires_at > now()
+      limit 1 for update of l, p`,
     [token],
   )
   const inviteRow = invite.rows[0]
   if (!inviteRow) return false
-  if (!(await verifyProjectInvitePassword(inviteRow.password_hash, rawPassword))) return false
+  if (
+    inviteRow.password_hash !== snapshot.password_hash
+    || inviteRow.project_id !== snapshot.project_id
+    || inviteRow.organization_id !== snapshot.organization_id
+  ) return false
 
   const projectId = Number(inviteRow.project_id)
   const ownerUserId = Number(inviteRow.owner_user_id)
@@ -9303,34 +9331,62 @@ app.patch('/api/notifications/:kind/:sourceId/read', asyncHandler(async (request
 app.post('/api/invitations/:membershipId/accept', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
-  const result = await query<{ id: string }>(
-    `
-    update project_memberships
-    set status = 'active',
-        accepted_at = now(),
-        declined_at = null
-    where id = $1
-      and invited_user_id = $2
-      and status = 'pending'
-    returning id
-    `,
-    [Number(request.params.membershipId), userId],
-  )
-  if (!result.rows[0]) {
-    response.status(404).json({ error: 'Invitation not found' })
-    return
+  const membershipId = Number(request.params.membershipId)
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const snapshot = await client.query<{ organization_id: string | null; project_id: string }>(
+      `select project.organization_id, membership.project_id
+         from project_memberships membership
+         join projects project on project.id = membership.project_id
+        where membership.id = $1 and membership.invited_user_id = $2 and membership.status = 'pending'`,
+      [membershipId, userId],
+    )
+    if (!snapshot.rows[0]) {
+      await client.query('rollback')
+      response.status(404).json({ error: 'Invitation not found' })
+      return
+    }
+    const organizationId = snapshot.rows[0].organization_id
+      ? Number(snapshot.rows[0].organization_id)
+      : null
+    if (organizationId) await client.query('select id from organizations where id = $1 for share', [organizationId])
+    await lockProjectModules(client, Number(snapshot.rows[0].project_id))
+    const result = await client.query<{ id: string }>(
+      `update project_memberships membership
+          set status = 'active', accepted_at = now(), declined_at = null
+         from projects project
+        where membership.id = $1 and membership.invited_user_id = $2
+          and membership.status = 'pending' and project.id = membership.project_id
+          and (
+            project.organization_id is null or exists (
+              select 1 from organization_memberships organization_member
+               where organization_member.organization_id = project.organization_id
+                 and organization_member.user_id = $2 and organization_member.status = 'active'
+            )
+          )
+        returning membership.id`,
+      [membershipId, userId],
+    )
+    if (!result.rows[0]) {
+      await client.query('rollback')
+      response.status(409).json({ error: '请先加入项目当前所属组织，再接受项目邀请。' })
+      return
+    }
+    await client.query(
+      `insert into notification_states (user_id, kind, source_id, read_at, dismissed_at, updated_at)
+       values ($1, 'project_invite', $2, now(), now(), now())
+       on conflict (user_id, kind, source_id) do update
+         set read_at = now(), dismissed_at = now(), updated_at = now()`,
+      [userId, membershipId],
+    )
+    await client.query('commit')
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
   }
-  await query(
-    `
-    insert into notification_states (user_id, kind, source_id, read_at, dismissed_at, updated_at)
-    values ($1, 'project_invite', $2, now(), now(), now())
-    on conflict (user_id, kind, source_id) do update
-      set read_at = now(),
-          dismissed_at = now(),
-          updated_at = now()
-    `,
-    [userId, Number(request.params.membershipId)],
-  )
   response.json({
     notifications: await getNotifications(userId),
     workspace: await getWorkspace(userId),
@@ -10405,6 +10461,31 @@ app.delete('/api/projects/:projectId/invitations/:membershipId', asyncHandler(as
   if (!userId) return
   const projectId = Number(request.params.projectId)
   if (!await withProjectManager(projectId, userId, response, async (client, access) => {
+    const membershipId = Number(request.params.membershipId)
+    const membership = await client.query<{ invited_user_id: string | null }>(
+      `select invited_user_id from project_memberships
+        where id = $1 and project_id = $2 and owner_user_id = $3
+        for update`,
+      [membershipId, projectId, access.ownerUserId],
+    )
+    if (!membership.rows[0]) {
+      response.status(404).json({ error: 'Project member not found' })
+      return
+    }
+    const invitedUserId = membership.rows[0].invited_user_id
+      ? Number(membership.rows[0].invited_user_id)
+      : null
+    if (invitedUserId) {
+      const blockers = await getProjectMemberTaskBlockers(client, projectId, invitedUserId)
+      if (hasMemberTaskBlockers(blockers)) {
+        response.status(409).json({
+          blockers,
+          code: 'PROJECT_MEMBER_HAS_TASKS',
+          error: memberTaskBlockerMessage(blockers),
+        })
+        return
+      }
+    }
     await client.query(
       `
       update project_invite_links
@@ -10415,65 +10496,10 @@ app.delete('/api/projects/:projectId/invitations/:membershipId', asyncHandler(as
     )
     await client.query(
       `
-      delete from todo_watchers
-      where todo_id in (select id from todos where project_id = $1)
-        and user_id = (
-          select invited_user_id
-          from project_memberships
-          where id = $2 and project_id = $1 and owner_user_id = $3
-        )
-      `,
-      [projectId, Number(request.params.membershipId), access.ownerUserId],
-    )
-    await client.query(
-      `
-      update todos
-      set assignee_user_id = null,
-          assigned_by_user_id = null,
-          assigned_at = null
-      where project_id = $1
-        and assignee_user_id = (
-          select invited_user_id
-          from project_memberships
-          where id = $2 and project_id = $1 and owner_user_id = $3
-        )
-      `,
-      [projectId, Number(request.params.membershipId), access.ownerUserId],
-    )
-    await client.query(
-      `
-      update todos
-      set watcher_user_id = null,
-          watched_by_user_id = null,
-          watched_at = null
-      where project_id = $1
-        and watcher_user_id = (
-          select invited_user_id
-          from project_memberships
-          where id = $2 and project_id = $1 and owner_user_id = $3
-        )
-      `,
-      [projectId, Number(request.params.membershipId), access.ownerUserId],
-    )
-    await client.query(
-      `
-      update todos
-      set reviewer_user_id = null
-      where project_id = $1
-        and reviewer_user_id = (
-          select invited_user_id
-          from project_memberships
-          where id = $2 and project_id = $1 and owner_user_id = $3
-        )
-      `,
-      [projectId, Number(request.params.membershipId), access.ownerUserId],
-    )
-    await client.query(
-      `
       delete from project_memberships
       where id = $1 and project_id = $2 and owner_user_id = $3
       `,
-      [Number(request.params.membershipId), projectId, access.ownerUserId],
+      [membershipId, projectId, access.ownerUserId],
     )
   })) return
   response.json(await getWorkspace(userId))

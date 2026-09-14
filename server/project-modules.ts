@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg'
 import { decryptText, encryptText, isEncryptedText, keyedDigest } from './crypto.ts'
 import { projectModulesFinalizeSql } from './schema.ts'
 import { normalizeProjectModuleName, projectModuleAvailability } from '../shared/project-modules.ts'
+import { lockProjectMutation } from './project-lock.ts'
 
 type ModuleClient = Pick<PoolClient, 'query'>
 
@@ -55,7 +56,7 @@ export async function lockOrganizationModuleCatalog(client: ModuleClient, organi
 }
 
 export async function lockProjectModules(client: ModuleClient, projectId: number) {
-  await client.query('select pg_advisory_xact_lock(hashtextextended($1::text, 0))', [`ai-project:${projectId}`])
+  await lockProjectMutation(client, projectId)
 }
 
 export async function lockOrganizationModuleProjects(client: ModuleClient, organizationId: number) {
@@ -206,13 +207,18 @@ export async function deleteOrganizationProjectModule(client: ModuleClient, orga
   )
 }
 
-export async function detachOrganizationProjectModules(client: ModuleClient, organizationId: number) {
+export async function detachOrganizationProjectModules(
+  client: ModuleClient,
+  organizationId: number,
+  projectId: number | null = null,
+) {
   await client.query(
     `update project_modules pm set name = module.name, name_lookup = module.name_lookup,
        organization_module_id = null
      from organization_project_modules module, projects p
      where pm.organization_module_id = module.id and module.organization_id = $1::bigint
-       and p.id = pm.project_id and p.organization_id = $1::bigint`, [organizationId],
+       and p.id = pm.project_id and p.organization_id = $1::bigint
+       and ($2::bigint is null or p.id = $2::bigint)`, [organizationId, projectId],
   )
 }
 

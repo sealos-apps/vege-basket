@@ -173,7 +173,7 @@ test('aggregate event save validates and persists document todo links transactio
   assert.match(indexSource, /relatedTodoIds: Array\.isArray\(value\.relatedTodoIds\)/u)
   assert.match(
     timelineSource,
-    /return withTransaction\(async \(client\) => \{\s*await ensureProjectTodoIds\([\s\S]*?let eventId = params\.eventId/u,
+    /return withTransaction\(async \(client\) => \{\s*await lockProjectMutation\(client, params\.projectId\)\s*await ensureProjectTodoIds\([\s\S]*?let eventId = params\.eventId/u,
   )
   assert.match(
     timelineSource,

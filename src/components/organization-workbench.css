@@ -737,6 +737,66 @@
   overscroll-behavior: contain;
 }
 
+.organization-transfer-target {
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.organization-transfer-checks {
+  display: grid;
+  gap: 8px;
+}
+
+.organization-transfer-condition {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--soft);
+}
+
+.organization-transfer-condition.met > svg {
+  color: var(--primary);
+}
+
+.organization-transfer-condition.blocked {
+  border-color: color-mix(in oklch, var(--destructive) 28%, var(--line));
+  background: color-mix(in oklch, var(--destructive) 5%, var(--surface));
+}
+
+.organization-transfer-condition.blocked > svg {
+  color: var(--destructive);
+}
+
+.organization-transfer-condition span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.organization-transfer-condition strong,
+.organization-transfer-condition small,
+.organization-transfer-empty {
+  overflow-wrap: anywhere;
+}
+
+.organization-transfer-condition strong {
+  font-size: 13px;
+}
+
+.organization-transfer-condition small,
+.organization-transfer-empty {
+  color: var(--muted-text);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .organization-project-detail-heading {
   min-height: 64px;
   display: flex;

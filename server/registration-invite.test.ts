@@ -41,7 +41,7 @@ test('shared-AI password registration accepts project or organization invites in
   assert.doesNotMatch(route, /isActiveProjectInviteToken/u)
 })
 
-test('registration invite acceptance locks and validates the live invite record', () => {
+test('registration invite acceptance verifies the password before locking and validates the live record', () => {
   const helper = sourceBetween(
     'async function acceptProjectInviteTokenWithClient',
     'async function acceptProjectInviteToken(',
@@ -50,5 +50,8 @@ test('registration invite acceptance locks and validates the live invite record'
   assert.match(helper, /l\.revoked_at is null/u)
   assert.match(helper, /l\.expires_at > now\(\)/u)
   assert.match(helper, /for update of l/u)
-  assert.match(helper, /verifyProjectInvitePassword\(inviteRow\.password_hash, rawPassword\)/u)
+  const passwordIndex = helper.indexOf('verifyProjectInvitePassword(snapshot.password_hash, rawPassword)')
+  const projectLockIndex = helper.indexOf('lockProjectModules(client')
+  assert.ok(passwordIndex >= 0 && passwordIndex < projectLockIndex)
+  assert.match(helper, /inviteRow\.password_hash !== snapshot\.password_hash/u)
 })

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { createPortal } from 'react-dom'
 import {
   Buildings,
+  ArrowsLeftRight,
   Bug,
   CalendarBlank,
   CaretDown,
@@ -26,9 +27,11 @@ import {
   Trash,
   UserSwitch,
   Users,
+  WarningCircle,
 } from '@phosphor-icons/react'
 import {
   attachProjectToOrganization,
+  ApiError,
   attachTestSpaceToOrganization,
   createProject,
   createOrganizationInviteLink,
@@ -38,6 +41,7 @@ import {
   fetchOrganization,
   fetchOrganizationPackageMarketCatalog,
   fetchOrganizations,
+  fetchProjectOrganizationTransferOptions,
   fetchWeeklyReportCollection,
   generateOrganizationWeeklySummary,
   addOrganizationProjectMember,
@@ -47,6 +51,7 @@ import {
   removeProject,
   remindWeeklyReportMembers,
   transferOrganizationProjectOwnership,
+  transferProjectOrganization,
   saveOrganizationWeeklyReport,
   updateOrganization,
   updateOrganizationPackageMarketPolicy,
@@ -66,6 +71,8 @@ import type {
   OrganizationProjectMilestone,
   OrganizationProjectMilestoneStatus,
   OrganizationProjectStatus,
+  ProjectOrganizationTransferOption,
+  ProjectOrganizationTransferBlockers,
   OrganizationTask,
   OrganizationPackageMarketCatalogRule,
   WeeklyReportCollection,
@@ -523,6 +530,22 @@ export function OrganizationWorkbench({
   async function refreshResources() {
     if (!selectedOrganizationId) return
     setDetail(await fetchOrganization(selectedOrganizationId))
+  }
+
+  async function applyProjectOrganizationTransfer(
+    targetOrganizationId: number,
+    nextDetail: OrganizationDetail,
+  ) {
+    setDetail(nextDetail)
+    setSelectedOrganizationId(targetOrganizationId)
+    setProjectHealth('all')
+    setProjectQuery('')
+    setProjectStatus('all')
+    setTab('projects')
+    setError('')
+    onOrganizationsChanged?.()
+    onProjectModulesChanged?.()
+    return true
   }
 
   async function submitOrganization(event: FormEvent) {
@@ -1107,6 +1130,7 @@ export function OrganizationWorkbench({
                   detail={detail}
                   key={project.id}
                   onMutate={mutate}
+                  onOrganizationTransferred={applyProjectOrganizationTransfer}
                   project={project}
                 />
               ))}
@@ -1283,7 +1307,7 @@ export function OrganizationWorkbench({
                       variant="ghost"
                       onClick={() => void confirmAction({
                         title: `移除组织成员“${member.displayName}”？`,
-                        description: `该成员将失去“${detail.name}”及其项目、测试空间的成员权限，相关待办、交付和未结束 Bug 的指派将被清理。已有业务记录保留。`,
+                        description: `该成员将失去“${detail.name}”及其项目、测试空间的成员权限。若仍有待处理待办、未交付事件、未结束里程碑、未关闭 Bug 或进行中的测试计划，系统将阻止移除。`,
                         confirmLabel: '移除成员',
                       }, () => mutate(() => removeOrganizationMember(detail.id, member.id), true, (data) => !data.members.some((item) => item.id === member.id)))}
                     >
@@ -1608,6 +1632,7 @@ function OrganizationProjectRow({
   canManage,
   detail,
   onMutate,
+  onOrganizationTransferred,
   project,
 }: {
   canManageSubprojects: boolean
@@ -1616,6 +1641,7 @@ function OrganizationProjectRow({
   canManage: boolean
   detail: OrganizationDetail
   onMutate: (operation: () => Promise<OrganizationDetail>, confirmed?: boolean, matches?: (data: OrganizationDetail) => boolean) => Promise<boolean>
+  onOrganizationTransferred: (targetOrganizationId: number, detail: OrganizationDetail) => Promise<boolean>
   project: OrganizationProject
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -1696,6 +1722,12 @@ function OrganizationProjectRow({
               detail={detail}
               project={project}
               onMutate={onMutate}
+            />
+            <ProjectOrganizationTransferDialog
+              busy={busy}
+              detail={detail}
+              project={project}
+              onTransferred={onOrganizationTransferred}
             />
             {project.canManageSettings ? (
               <Button
@@ -1940,6 +1972,181 @@ function OrganizationProjectCreateForm({
   )
 }
 
+function ProjectOrganizationTransferDialog({
+  busy,
+  detail,
+  onTransferred,
+  project,
+}: {
+  busy: boolean
+  detail: OrganizationDetail
+  onTransferred: (targetOrganizationId: number, detail: OrganizationDetail) => Promise<boolean>
+  project: OrganizationProject
+}) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [options, setOptions] = useState<ProjectOrganizationTransferOption[]>([])
+  const [targetOrganizationId, setTargetOrganizationId] = useState('')
+  const attemptedTargetIdRef = useRef(0)
+  const selectedOption = options.find((option) => option.id === Number(targetOrganizationId))
+
+  const loadOptions = useCallback(async () => {
+    setLoading(true)
+    setLoadError('')
+    try {
+      const result = await fetchProjectOrganizationTransferOptions(detail.id, project.id)
+      setOptions(result.options)
+      setTargetOrganizationId((current) => (
+        result.options.some((option) => option.id === Number(current))
+          ? current
+          : result.options[0] ? String(result.options[0].id) : ''
+      ))
+    } catch (error) {
+      setLoadError(errorMessage(error))
+      setOptions([])
+      setTargetOrganizationId('')
+    } finally {
+      setLoading(false)
+    }
+  }, [detail.id, project.id])
+
+  useEffect(() => {
+    if (open) void loadOptions()
+  }, [loadOptions, open])
+
+  async function transfer() {
+    if (!selectedOption?.eligible) return false
+    attemptedTargetIdRef.current = selectedOption.id
+    try {
+      const nextDetail = await transferProjectOrganization(detail.id, project.id, selectedOption.id)
+      return onTransferred(selectedOption.id, nextDetail)
+    } catch (error) {
+      const response = error instanceof ApiError && error.responseBody && typeof error.responseBody === 'object'
+        ? error.responseBody as { blockers?: ProjectOrganizationTransferBlockers }
+        : null
+      if (
+        response?.blockers &&
+        Array.isArray(response.blockers.missingMembers) &&
+        Array.isArray(response.blockers.unavailableModules) &&
+        Number.isSafeInteger(response.blockers.pendingInvitationCount) &&
+        Number.isSafeInteger(response.blockers.unboundActiveMemberCount)
+      ) {
+        setOptions((current) => current.map((option) => option.id === selectedOption.id
+          ? { ...option, blockers: response.blockers!, eligible: false }
+          : option))
+      }
+      throw error
+    }
+  }
+
+  async function reconcileTransfer() {
+    const attemptedTargetId = attemptedTargetIdRef.current
+    if (!attemptedTargetId) return 'unknown' as const
+    try {
+      const target = await fetchOrganization(attemptedTargetId)
+      if (target.projects.some((item) => item.id === project.id)) {
+        await onTransferred(attemptedTargetId, target)
+        return 'succeeded' as const
+      }
+      const source = await fetchOrganization(detail.id)
+      return source.projects.some((item) => item.id === project.id)
+        ? 'unchanged' as const
+        : 'unknown' as const
+    } catch {
+      return 'unknown' as const
+    }
+  }
+
+  const blockers = selectedOption?.blockers
+  return (
+    <ConfirmActionDialog
+      actionKey={`project-organization-transfer:${detail.id}:${project.id}`}
+      busy={busy}
+      confirmDisabled={loading || !selectedOption?.eligible}
+      confirmLabel="迁移项目"
+      description={`项目、成员关系和历史数据将迁移到目标组织；旧邀请、待确认的所有权转移和飞书项目群配置会失效。`}
+      error={loadError}
+      open={open}
+      reconcile={reconcileTransfer}
+      title={`迁移项目“${project.name}”到其他组织？`}
+      trigger={(
+        <Button
+          aria-label={`迁移${project.name}到其他组织`}
+          disabled={busy}
+          size="icon"
+          title="迁移所属组织"
+          type="button"
+          variant="ghost"
+        >
+          <ArrowsLeftRight size={17} />
+        </Button>
+      )}
+      variant="default"
+      onConfirm={transfer}
+      onOpenChange={setOpen}
+    >
+      <Label className="organization-transfer-target">
+        目标组织
+        <Select value={targetOrganizationId} onValueChange={setTargetOrganizationId}>
+          <SelectTrigger aria-label="选择项目迁移目标组织">
+            <SelectValue placeholder={loading ? '正在检查可迁移组织…' : '选择目标组织'} />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((option) => (
+              <SelectItem key={option.id} value={String(option.id)}>
+                {option.name}{option.eligible ? '' : '（条件未满足）'}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Label>
+      {!loading && options.length === 0 && !loadError ? (
+        <p className="organization-transfer-empty">没有其他同时由你管理的组织。</p>
+      ) : null}
+      {selectedOption && blockers ? (
+        <div className="organization-transfer-checks" aria-live="polite">
+          <TransferCondition
+            met={blockers.missingMembers.length === 0}
+            title="项目人员均在目标组织"
+            detail={blockers.missingMembers.length
+              ? `缺少：${blockers.missingMembers.map((member) => member.name).join('、')}`
+              : '项目所有者和全部有效成员均已加入'}
+          />
+          <TransferCondition
+            met={blockers.pendingInvitationCount === 0 && blockers.unboundActiveMemberCount === 0}
+            title="项目成员身份已确认"
+            detail={blockers.pendingInvitationCount || blockers.unboundActiveMemberCount
+              ? [
+                  blockers.pendingInvitationCount ? `${blockers.pendingInvitationCount} 个邀请待处理` : '',
+                  blockers.unboundActiveMemberCount ? `${blockers.unboundActiveMemberCount} 个有效成员尚未绑定账号` : '',
+                ].filter(Boolean).join('、')
+              : '没有待接受邀请或未绑定账号的有效成员'}
+          />
+          <TransferCondition
+            met={blockers.unavailableModules.length === 0}
+            title="已使用模块在目标组织可用"
+            detail={blockers.unavailableModules.length
+              ? blockers.unavailableModules.map((module) => (
+                `${module.name}（${module.reason === 'missing' ? '缺少' : '已停用'}，关联 ${module.todoCount} 个待办）`
+              )).join('、')
+              : '全部已使用模块均有同名启用项'}
+          />
+        </div>
+      ) : null}
+    </ConfirmActionDialog>
+  )
+}
+
+function TransferCondition({ detail, met, title }: { detail: string; met: boolean; title: string }) {
+  return (
+    <div className={`organization-transfer-condition ${met ? 'met' : 'blocked'}`}>
+      {met ? <CheckCircle size={18} weight="fill" /> : <WarningCircle size={18} weight="fill" />}
+      <span><strong>{title}</strong><small>{detail}</small></span>
+    </div>
+  )
+}
+
 function ProjectMemberDialog({
   busy,
   detail,
@@ -2035,7 +2242,7 @@ function ProjectMemberDialog({
                     </span>
                     <ConfirmActionDialog
                       title={`移除项目成员“${membership.memberName}”？`}
-                      description={`该成员将失去“${project.name}”的项目成员权限，相关待办负责人、验收人、关注关系及交付指派将按项目规则清理。已有业务记录保留。`}
+                      description={`该成员将失去“${project.name}”的项目成员权限。若仍有待处理待办、未交付事件或未结束里程碑，系统将阻止移除；已完成历史记录会保留人员归属。`}
                       confirmLabel="移除成员"
                       onConfirm={() => onMutate(() => removeOrganizationProjectMember(detail.id, project.id, membership.id), true, (data) => data.projects.some((item) => item.id === project.id && !item.memberships.some((member) => member.id === membership.id)))}
                       trigger={(

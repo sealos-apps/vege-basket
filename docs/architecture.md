@@ -548,6 +548,27 @@ Atomicity rules:
 - Concurrency safety must be enforced by database constraints plus conflict-safe SQL,
   not by a standalone select-before-insert check.
 
+### Project organization transfer
+
+An attached project can move directly between organizations only when the actor has the
+`organization_admin` account role and active Owner/Admin membership in both organizations.
+Preflight and commit use the same checks: the project owner and every active project member
+must already be active in the target organization, no project invitation may remain pending,
+and every project module referenced by any todo must have an exact, case-sensitive, enabled
+counterpart in the target catalog. The complete target catalog does not need to match.
+
+The commit locks both organization module catalogs in numeric order, then the project advisory
+lock and project row, then revalidates manager and participant memberships. It detaches and
+rebinds catalog associations without replacing project-local module IDs, so todo and AI foreign
+keys remain stable. The move revokes pending ownership transfers and invite links, disables the
+Feishu project integration, removes only draft weekly-report source references, and writes audit
+events to both organizations. Submitted weekly-report snapshots remain unchanged.
+
+Removing a project member is rejected while that person owns an actionable todo role, an
+undelivered package event, or a pending/in-review milestone. Organization removal additionally
+checks nonterminal Bug assignments and draft/in-progress test plans. Finished history keeps its
+person attribution and does not block removal.
+
 ## Startup And Deployment Boundary
 
 ### Bug 分享边界
