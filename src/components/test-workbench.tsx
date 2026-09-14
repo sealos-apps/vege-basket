@@ -5,7 +5,15 @@ import { useDirectoryTreeState } from '../use-case-directory-tree'
 import { buildTestCaseCsv, testCaseCsvHeaders } from '../test-case-csv'
 import { DirectoryPicker, DirectoryTree } from './test-case-directory-tree'
 import { countDirectoryCases, createDirectoryIndex } from '../../shared/test-case-directories'
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type DragEvent, type FormEvent, type ReactNode } from 'react'
+import {
+  clampDirectoryPanelWidth,
+  directoryPanelMinWidth,
+  directorySplitterWidth,
+  getDefaultDirectoryPanelWidth,
+  getDirectoryPanelMaxWidth,
+  hasDirectoryPanelResizeMoved,
+} from '../test-directory-panel-width'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import {
   ArrowCounterClockwise,
   ArrowLeft,
@@ -1887,6 +1895,14 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
   onSelect: (id: number) => void
 }) {
   const listPanelRef = useRef<HTMLDivElement>(null)
+  const directoryWorkspaceRef = useRef<HTMLDivElement>(null)
+  const directoryResizeRef = useRef<{
+    pointerId: number
+    startX: number
+    startPreferredWidth: number | null
+    startWidth: number
+    target: HTMLDivElement
+  } | undefined>(undefined)
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(6)
   const [searchQuery, setSearchQuery] = useState('')
@@ -1897,13 +1913,21 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
   const directoryIndex = useMemo(() => createDirectoryIndex(folders), [folders])
   const treeState = useDirectoryTreeState(folders)
   const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 760px)').matches)
+  const [compactDirectory, setCompactDirectory] = useState(() => window.matchMedia('(max-width: 1200px)').matches)
   const [drawerOpen, setDrawerOpen] = useState(false)
   useEffect(() => { const media = window.matchMedia('(max-width: 760px)'); const change = () => { setNarrow(media.matches); setDrawerOpen(false) }; media.addEventListener('change', change); return () => media.removeEventListener('change', change) }, [])
+  useEffect(() => { const media = window.matchMedia('(max-width: 1200px)'); const change = () => setCompactDirectory(media.matches); media.addEventListener('change', change); return () => media.removeEventListener('change', change) }, [])
   const [includeChildren, setIncludeChildren] = useState(true)
   const directoryPanelStorageKey = currentUserId && spaceId
     ? `veges.case-directories.v3.${currentUserId}.${spaceId}`
     : ''
+  const directoryPanelWidthStorageKey = currentUserId && spaceId
+    ? `veges.case-directories.width.v1.${currentUserId}.${spaceId}`
+    : ''
   const [panelHidden, setPanelHidden] = useState(false)
+  const [directoryWorkspaceWidth, setDirectoryWorkspaceWidth] = useState(0)
+  const [preferredDirectoryPanelWidth, setPreferredDirectoryPanelWidth] = useState<number | null>(null)
+  const [directoryPanelResizing, setDirectoryPanelResizing] = useState(false)
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set())
   const [moveIds, setMoveIds] = useState<number[]>()
   const [moveTarget, setMoveTarget] = useState<number | null>(null)
@@ -1922,6 +1946,12 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
   const selectedSubjectName = subjects.find((subject) => subject.id === selectedSubjectId)?.name
   const scopeLabel = effectiveFolderFilter === 'all' ? '全部用例' : activeFolderId === null ? `${selectedSubjectName ?? '一级目录'} / 全部用例` : directoryIndex.byId.has(activeFolderId) ? [selectedSubjectName, ...directoryIndex.path(activeFolderId).map(f => f.name)].filter(Boolean).join(' / ') : '目录已删除'
   const selectedCaseIds = cases.filter(c => checkedIds.has(c.id)).map(c => c.id)
+  const defaultDirectoryPanelWidth = getDefaultDirectoryPanelWidth(compactDirectory)
+  const directoryPanelWidth = clampDirectoryPanelWidth(
+    preferredDirectoryPanelWidth ?? defaultDirectoryPanelWidth,
+    directoryWorkspaceWidth,
+  )
+  const directoryPanelMax = getDirectoryPanelMaxWidth(directoryWorkspaceWidth)
   useEffect(() => {
     try {
       setPanelHidden(directoryPanelStorageKey
@@ -1931,7 +1961,114 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
       setPanelHidden(false)
     }
   }, [directoryPanelStorageKey])
+  useEffect(() => {
+    try {
+      const storedWidth = directoryPanelWidthStorageKey
+        ? Number(localStorage.getItem(directoryPanelWidthStorageKey))
+        : Number.NaN
+      setPreferredDirectoryPanelWidth(Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : null)
+    } catch {
+      setPreferredDirectoryPanelWidth(null)
+    }
+  }, [directoryPanelWidthStorageKey])
+  useEffect(() => {
+    const workspace = directoryWorkspaceRef.current
+    if (!workspace) return
+    const updateWidth = () => setDirectoryWorkspaceWidth(workspace.getBoundingClientRect().width)
+    updateWidth()
+    const observer = new ResizeObserver(updateWidth)
+    observer.observe(workspace)
+    return () => {
+      observer.disconnect()
+      const resize = directoryResizeRef.current
+      directoryResizeRef.current = undefined
+      if (resize?.target.hasPointerCapture(resize.pointerId)) {
+        resize.target.releasePointerCapture(resize.pointerId)
+      }
+    }
+  }, [])
+  useEffect(() => {
+    if (!narrow && !panelHidden) return
+    const resize = directoryResizeRef.current
+    if (!resize) return
+    directoryResizeRef.current = undefined
+    setPreferredDirectoryPanelWidth(resize.startPreferredWidth)
+    setDirectoryPanelResizing(false)
+    if (resize.target.hasPointerCapture(resize.pointerId)) {
+      resize.target.releasePointerCapture(resize.pointerId)
+    }
+  }, [narrow, panelHidden])
   function togglePanel() { if (narrow) { setDrawerOpen(prev => !prev); return } setPanelHidden(prev => { try { if (directoryPanelStorageKey) localStorage.setItem(directoryPanelStorageKey, String(!prev)) } catch { /* Storage may be disabled. */ } return !prev }) }
+  function persistDirectoryPanelWidth(width: number | null) {
+    try {
+      if (!directoryPanelWidthStorageKey) return
+      if (width === null) localStorage.removeItem(directoryPanelWidthStorageKey)
+      else localStorage.setItem(directoryPanelWidthStorageKey, String(width))
+    } catch { /* Storage may be disabled. */ }
+  }
+  function setDirectoryPanelWidth(width: number) {
+    const nextWidth = clampDirectoryPanelWidth(width, directoryWorkspaceRef.current?.getBoundingClientRect().width ?? directoryWorkspaceWidth)
+    setPreferredDirectoryPanelWidth(nextWidth)
+    return nextWidth
+  }
+  function startDirectoryPanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    directoryResizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startPreferredWidth: preferredDirectoryPanelWidth,
+      startWidth: directoryPanelWidth,
+      target: event.currentTarget,
+    }
+    setDirectoryPanelResizing(true)
+  }
+  function moveDirectoryPanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = directoryResizeRef.current
+    if (!resize || resize.pointerId !== event.pointerId) return
+    if (hasDirectoryPanelResizeMoved(resize.startX, event.clientX)) {
+      setDirectoryPanelWidth(resize.startWidth + event.clientX - resize.startX)
+    } else {
+      setPreferredDirectoryPanelWidth(resize.startPreferredWidth)
+    }
+  }
+  function finishDirectoryPanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = directoryResizeRef.current
+    if (!resize || resize.pointerId !== event.pointerId) return
+    if (hasDirectoryPanelResizeMoved(resize.startX, event.clientX)) {
+      const nextWidth = setDirectoryPanelWidth(resize.startWidth + event.clientX - resize.startX)
+      persistDirectoryPanelWidth(nextWidth)
+    } else {
+      setPreferredDirectoryPanelWidth(resize.startPreferredWidth)
+    }
+    directoryResizeRef.current = undefined
+    setDirectoryPanelResizing(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+  function cancelDirectoryPanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = directoryResizeRef.current
+    if (!resize || resize.pointerId !== event.pointerId) return
+    setPreferredDirectoryPanelWidth(resize.startPreferredWidth)
+    directoryResizeRef.current = undefined
+    setDirectoryPanelResizing(false)
+  }
+  function resizeDirectoryPanelWithKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
+    let nextWidth: number | undefined
+    const step = event.shiftKey ? 40 : 16
+    if (event.key === 'ArrowLeft') nextWidth = directoryPanelWidth - step
+    if (event.key === 'ArrowRight') nextWidth = directoryPanelWidth + step
+    if (event.key === 'Home') nextWidth = directoryPanelMinWidth
+    if (event.key === 'End') nextWidth = directoryPanelMax
+    if (nextWidth === undefined) return
+    event.preventDefault()
+    const width = setDirectoryPanelWidth(nextWidth)
+    persistDirectoryPanelWidth(width)
+  }
+  function resetDirectoryPanelWidth() {
+    setPreferredDirectoryPanelWidth(null)
+    persistDirectoryPanelWidth(null)
+  }
   function selectDirectory(id: string) {
     setFolderFilter(id)
     const nextSubjectId = id.startsWith('subject:') ? Number(id.slice(8)) : id.startsWith('folder:') ? directoryIndex.byId.get(Number(id.slice(7)))?.testSubjectId : undefined
@@ -2014,8 +2151,37 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
         <div><span>用例库</span><h1>用例管理</h1></div>
         <div><Button variant="outline" disabled={!filteredCases.length} onClick={() => setExportOpen(true)}><UploadSimple /> 导出用例 ({filteredCases.length})</Button>{!readOnly && <><Button variant="outline" disabled={!selectedSubjectId} onClick={() => selectedSubjectId && onImport(selectedSubjectId, activeFolderId)}><DownloadSimple /> 导入用例</Button><Button disabled={!selectedSubjectId} onClick={() => selectedSubjectId && onCreate(selectedSubjectId, activeFolderId)}><Plus /> 新建用例</Button></>}</div>
       </div>
-      <div className="test-directory-workspace" data-panel-hidden={panelHidden || narrow}>
-      <div className="test-directory-desktop" style={{ display: panelHidden || narrow ? 'none' : undefined }}><DirectoryTree viewState={treeState} subjects={subjects} folders={folders} cases={cases} selected={effectiveFolderFilter} onSelect={selectDirectory} onCollapse={togglePanel} busy={busy} readOnly={readOnly} onCreateRoot={onCreateRoot} onEditRoot={onEditRoot} onDeleteRoot={onDeleteRoot} onCreate={onCreateFolder} onUpdate={onUpdateFolder} onDelete={onDeleteFolder} /></div>
+      <div
+        ref={directoryWorkspaceRef}
+        className="test-directory-workspace"
+        data-panel-hidden={panelHidden || narrow}
+        data-panel-resizing={directoryPanelResizing}
+        style={{
+          '--test-directory-panel-width': `${directoryPanelWidth}px`,
+          '--test-directory-splitter-width': `${directorySplitterWidth}px`,
+        } as CSSProperties}
+      >
+      <div id="test-case-directory-panel" className="test-directory-desktop" style={{ display: panelHidden || narrow ? 'none' : undefined }}><DirectoryTree viewState={treeState} subjects={subjects} folders={folders} cases={cases} selected={effectiveFolderFilter} onSelect={selectDirectory} onCollapse={togglePanel} busy={busy} readOnly={readOnly} onCreateRoot={onCreateRoot} onEditRoot={onEditRoot} onDeleteRoot={onDeleteRoot} onCreate={onCreateFolder} onUpdate={onUpdateFolder} onDelete={onDeleteFolder} /></div>
+      {!panelHidden && !narrow && <div
+        className="test-directory-resizer"
+        role="separator"
+        aria-label="调整用例目录宽度"
+        aria-controls="test-case-directory-panel"
+        aria-orientation="vertical"
+        aria-valuemin={directoryPanelMinWidth}
+        aria-valuemax={directoryPanelMax}
+        aria-valuenow={directoryPanelWidth}
+        aria-valuetext={`${directoryPanelWidth} 像素`}
+        tabIndex={0}
+        title="拖动调整目录宽度，双击恢复默认宽度"
+        onDoubleClick={resetDirectoryPanelWidth}
+        onKeyDown={resizeDirectoryPanelWithKeyboard}
+        onPointerDown={startDirectoryPanelResize}
+        onPointerMove={moveDirectoryPanelResize}
+        onPointerUp={finishDirectoryPanelResize}
+        onPointerCancel={cancelDirectoryPanelResize}
+        onLostPointerCapture={cancelDirectoryPanelResize}
+      ><span aria-hidden="true" /></div>}
       <Dialog open={narrow && drawerOpen} onOpenChange={setDrawerOpen}><DialogContent className="test-directory-drawer"><DialogHeader><DialogTitle>用例目录</DialogTitle><DialogDescription>选择目录查看对应范围的用例。</DialogDescription></DialogHeader><DirectoryTree viewState={treeState} subjects={subjects} folders={folders} cases={cases} selected={effectiveFolderFilter} onSelect={selectDirectory} onCollapse={() => setDrawerOpen(false)} busy={busy} readOnly={readOnly} onCreateRoot={onCreateRoot} onEditRoot={onEditRoot} onDeleteRoot={onDeleteRoot} onCreate={onCreateFolder} onUpdate={onUpdateFolder} onDelete={onDeleteFolder} /></DialogContent></Dialog>
       <div className="test-directory-content">
       <div className="test-directory-scope"><Button size="sm" variant="outline" aria-label={(panelHidden || narrow) ? "展开用例目录" : "收缩用例目录"} onClick={togglePanel}><FolderPlus /> {(panelHidden || narrow) ? "展开目录" : "收缩目录"}</Button><strong title={scopeLabel}>{scopeLabel}</strong><span>{filteredCases.length} 条用例</span>{activeFolderId !== null && <Label><Checkbox checked={includeChildren} onCheckedChange={value => setIncludeChildren(value === true)} /> 包含下级目录</Label>}</div>
