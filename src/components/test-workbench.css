@@ -2804,6 +2804,9 @@
 .test-plan-directory-node-root {
   grid-template-columns: 16px minmax(0, 1fr) auto;
 }
+.test-plan-directory-subject-group { display: contents; }
+.test-plan-directory-node.test-plan-directory-subject { font-weight: 600; }
+.test-plan-directory-node.test-plan-directory-subject > svg { color: var(--primary); }
 
 .test-plan-directory-node > svg {
   width: 15px;
@@ -5042,6 +5045,9 @@
 .test-directory-node { display: flex; align-items: center; gap: 6px; min-height: 38px; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; outline-offset: -2px; }
 .test-directory-node:hover { background: var(--muted); }
 .test-directory-node.active { background: var(--accent); color: var(--primary); font-weight: 600; }
+.test-directory-subject-group { display: contents; }
+.test-directory-node.test-directory-subject { font-weight: 600; }
+.test-directory-node.test-directory-subject > svg { color: var(--primary); }
 .test-directory-node > span { flex: 1; min-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .test-directory-node > svg { flex: 0 0 16px; }
 .test-directory-node > small { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }

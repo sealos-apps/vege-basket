@@ -275,11 +275,29 @@ Before an encryption-key change:
 （amd64）与 `ubuntu-24.04-arm`（arm64）原生 runner 上用普通 `docker build` 构建镜像，
 推送 `ghcr.io/<仓库>/vege-basket:main-<12位sha>-amd64` 与
 `ghcr.io/<仓库>/vege-basket:main-<12位sha>-arm64`，最后用 `docker manifest` 合并为同一个镜像
-`ghcr.io/<仓库>/vege-basket:main-<12位sha>`。部署负责人应：
+`ghcr.io/<仓库>/vege-basket:main-<12位sha>`，随后自动发布到 Kubernetes。
+
+首次启用前，在 GitHub 仓库创建 `production` Environment，并配置：
+
+- Secret `KUBE_CONFIG`：可访问目标集群的 kubeconfig 原文。使用仅能读取并 patch/update
+  目标 Deployment、CronJob 和 Deployment 注解的专用身份。
+- Variables `K8S_NAMESPACE`、`K8S_DEPLOYMENT_NAME`、`K8S_CRONJOB_NAME`：目标命名空间、
+  应用 Deployment 名和日报 CronJob 名。Sealos 当前实例对应值可从授权的集群读取，不能
+  以 `.sealos/state.json` 作为实时依据。
+
+应用容器名必须与 Deployment 名相同；CronJob 容器名必须为 `todo-digest-worker`，与模板一致。
+如 `production` Environment 配置了 required reviewers，push 后会停在发布审批处；需要完全
+无人值守时不要配置 required reviewers。发布 job 会：
+
+1. 将 Deployment 的 `originImageName` 注解、应用容器和日报 CronJob 更新为同一个
+   `main-<12位sha>` 镜像。
+2. 等待 Deployment rollout 完成，并再次读取两个工作负载确认镜像完全一致。
+3. 任一步失败即令 workflow 失败，不自动重试写操作或回滚数据库。
+
+发布负责人应：
 
 1. 查看 `main` 推送触发的构建与推送结果，确认合并镜像已生成。
-2. 将同一个不可变合并标签 `main-<12位sha>` 填入 Sealos 模板的必填输入 `VEGES_IMAGE`。
-   模板会把它复用于 `originImageName`、应用容器和待办日报 CronJob。
+2. 查看自动发布 job，确认 Deployment rollout 完成且应用与 CronJob 镜像校验通过。
 3. Pass database, encryption, shared AI, Feishu, and OSS configuration through the
    deployment environment; confirm real credential values are absent from the image and Git.
    The Sealos template derives `APP_PUBLIC_URL` from its TLS ingress host; custom deployments

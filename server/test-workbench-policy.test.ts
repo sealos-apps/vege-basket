@@ -22,6 +22,7 @@ import {
 
 const schemaSource = readFileSync(new URL('./schema.ts', import.meta.url), 'utf8')
 const testWorkbenchClientSource = readFileSync(new URL('../src/components/test-workbench.tsx', import.meta.url), 'utf8')
+const testCaseDirectoryTreeSource = readFileSync(new URL('../src/components/test-case-directory-tree.tsx', import.meta.url), 'utf8')
 const testWorkbenchApiSource = readFileSync(new URL('../src/test-workbench-api.ts', import.meta.url), 'utf8')
 const testWorkbenchSource = readFileSync(new URL('./test-workbench.ts', import.meta.url), 'utf8')
 const encryptExistingSource = readFileSync(new URL('./encrypt-existing.ts', import.meta.url), 'utf8')
@@ -58,8 +59,39 @@ test('test spaces persist encrypted organization-scoped unique versions', () => 
 test('test plan root directory entries reserve the correct grid columns', () => {
   assert.match(testWorkbenchClientSource, /test-plan-directory-node-root/u)
   assert.match(testWorkbenchClientSource, /className=\{`test-plan-directory-node test-plan-directory-node-root \$\{selected === 'all'/u)
-  assert.match(testWorkbenchClientSource, /className=\{`test-plan-directory-node test-plan-directory-node-root \$\{selected === 'uncategorized'/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /selected === 'uncategorized'/u)
+  assert.match(testWorkbenchClientSource, /const subjectNodeId = `subject:\$\{subject\.id\}`/u)
+  assert.match(testWorkbenchClientSource, /const folderNodeId = `folder:\$\{folder\.id\}`/u)
+  assert.match(testWorkbenchClientSource, /selectedPlanSubjectId \? item\.testSubjectId === selectedPlanSubjectId/u)
+  assert.match(testWorkbenchClientSource, /\[subjectName, \.\.\.\(folder \? planDirectoryIndex\.path/u)
   assert.match(readFileSync(new URL('../src/components/test-workbench.css', import.meta.url), 'utf8'), /\.test-plan-directory-node-root\s*\{\s*grid-template-columns: 16px minmax\(0, 1fr\) auto;/u)
+})
+
+test('case workbench loads the whole space and treats test subjects as virtual root directories', () => {
+  assert.match(testWorkbenchClientSource, /const cases = spaceCases/u)
+  assert.match(testWorkbenchClientSource, /key=\{`\$\{spaceId\}`\}/u)
+  assert.match(testWorkbenchClientSource, /createTestCaseFolder\(spaceId!, \{ name, parentId, testSubjectId \}\)/u)
+  assert.match(testWorkbenchClientSource, /moveTestCases\(spaceId!, testSubjectId, ids, target\)/u)
+  assert.match(testWorkbenchClientSource, /importTestCases\(spaceId!, subjectId, csvText/u)
+  assert.match(testWorkbenchClientSource, /folder\.testSpaceId === spaceId/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /fetchTestWorkbench\(scope\)/u)
+  assert.doesNotMatch(testWorkbenchSource, /scopePlans|scopePlanCases/u)
+  assert.match(testWorkbenchClientSource, /veges\.case-directories\.v3\.\$\{currentUserId\}\.\$\{spaceId\}/u)
+  assert.match(testCaseDirectoryTreeSource, /`subject:\$\{subject\.id\}`/u)
+  assert.doesNotMatch(testCaseDirectoryTreeSource, /`uncategorized:\$\{subject\.id\}`/u)
+  assert.match(testCaseDirectoryTreeSource, /`folder:\$\{folder\.id\}`/u)
+  assert.match(testCaseDirectoryTreeSource, /selected === 'all' \? '新增一级目录' : '新增子目录'/u)
+  assert.match(testCaseDirectoryTreeSource, /onCreateRoot\(\)/u)
+  assert.match(testCaseDirectoryTreeSource, /onEditRoot\(subject\)/u)
+  assert.match(testCaseDirectoryTreeSource, /onDeleteRoot\(subject\)/u)
+  assert.match(testWorkbenchClientSource, /plan\.testSubjectIds\.includes\(Number\(subjectFilter\)\)/u)
+  assert.match(testWorkbenchClientSource, /aria-label="按测试用例目录筛选计划"/u)
+  assert.match(testWorkbenchClientSource, /<SelectItem value="all">全部测试用例目录<\/SelectItem>\{planSubjects\.map\(\(subject\)/u)
+  assert.doesNotMatch(testWorkbenchClientSource, />全部测试对象<\/SelectItem>/u)
+  assert.match(testWorkbenchClientSource, /setSubjectId\(undefined\)[\s\S]*setSelectedPlanId\(plan\.id\)/u)
+  assert.match(testWorkbenchClientSource, /key=\{`plans:\$\{spaceId\}`\}/u)
+  assert.match(testWorkbenchClientSource, /onEdit=\{\(testCase\) => \{ setSubjectId\(testCase\.testSubjectId\); setEditingCase\(testCase\)/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /veges\.case-directories\.hidden/u)
 })
 
 test('test-space member settings do not show unrelated departed accounts', () => {
@@ -77,7 +109,7 @@ test('Bug scope stays within the current space and exposes its case instead of a
   assert.match(testWorkbenchSource, /testSubjectName: decryptText\(row\.test_subject_name\)/u)
   assert.match(testWorkbenchClientSource, /const bugs = data\.bugs\.filter\(\s*\(bug\) => bug\.testSpaceId === spaceId,/u)
   assert.doesNotMatch(testWorkbenchClientSource, /const bugs = data\.bugs\.filter\(\s*\(bug\) => bug\.testSpaceId === spaceId && \(!subjectId/u)
-  assert.match(testWorkbenchClientSource, /activeSpace && tab === 'cases' \?/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /<section className="test-subject-browser"/u)
   assert.doesNotMatch(testWorkbenchClientSource, /tab === 'cases' && !activeSubject \?/u)
   assert.match(testWorkbenchClientSource, /test-bug-detail-meta/u)
   assert.match(testWorkbenchClientSource, /测试用例\s*<strong>\{bug\.testCaseId/u)
@@ -86,7 +118,7 @@ test('Bug scope stays within the current space and exposes its case instead of a
   assert.match(testWorkbenchClientSource, /aria-label="关联测试用例"/u)
 })
 
-test('assigned Bug details include their test case and space version label', () => {
+test('Bug workbenches include their test case and space version label', () => {
   assert.match(testWorkbenchSource, /space\.version_label as test_space_version_label/u)
   assert.match(testWorkbenchSource, /testSpaceVersionLabel: row\.test_space_version_label\s*\? decryptText\(row\.test_space_version_label\)\s*:\s*undefined/u)
   assert.match(testWorkbenchClientSource, /selected\.testCaseTitle/u)
@@ -310,15 +342,23 @@ test('test-space data import supports copied cases and plans only', () => {
 test('Bug details offer same-organization space transfer with the existing transfer transaction', () => {
   assert.match(testWorkbenchSource, /router\.post\('\/test-spaces\/:spaceId\/bugs\/:bugId\/transfer-space'/u)
   assert.match(testWorkbenchSource, /bugIds: \[bugId\], categories: \['bugs'\], spaceId/u)
-  assert.match(testWorkbenchSource, /canTransferSpace: canEditTestSpaceVersion/u)
-  assert.match(testWorkbenchSource, /transferSpaceCandidates: ownedSpaces/u)
+  assert.match(testWorkbenchSource, /canTransferSpace: row\.direct_access_level != null && row\.direct_access_level !== 'viewer'/u)
+  assert.match(testWorkbenchSource, /transferSpaceCandidates: editableSpaces/u)
   assert.match(testWorkbenchSource, /space\.organization_id === row\.organization_id/u)
-  assert.match(testWorkbenchSource, /allowBugCreatorTransfer: true/u)
+  assert.match(testWorkbenchSource, /allowBugEditorTransfer: true/u)
+  assert.match(testWorkbenchSource, /目标测试空间需要直接编辑权限/u)
+  assert.match(testWorkbenchSource, /来源测试空间需要直接编辑权限/u)
   assert.match(testWorkbenchSource, /目标用例不存在或不属于目标测试空间/u)
   assert.match(testWorkbenchClientSource, /bug\.canTransferSpace/u)
   assert.match(testWorkbenchClientSource, /<BugSpaceTransferDialog/u)
   assert.match(testWorkbenchClientSource, /<DialogTitle>转移 Bug 到其他空间<\/DialogTitle>/u)
   assert.match(testWorkbenchClientSource, /transferTestBugToSpace\(bug\.testSpaceId, bug\.id, targetSpaceId, targetTestCaseId\)/u)
+})
+
+test('test workbench leaves test environment maintenance to organization management', () => {
+  assert.doesNotMatch(testWorkbenchClientSource, /管理测试环境/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /OrganizationTestEnvironmentPanel/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /fetchOrganization/u)
 })
 
 test('assigned Bug selection keeps the current item when parent callbacks refresh counts', () => {
