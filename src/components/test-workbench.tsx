@@ -710,15 +710,18 @@ export function TestWorkbench({
   }, [busy, loading, spaceId, subjectId, tab])
 
   useEffect(() => {
-    if (loading || (tab !== 'bugs' && tab !== 'plans')) return
+    if (loading || (tab !== 'bugs' && tab !== 'plans' && tab !== 'cases')) return
     let cancelled = false
-    fetchTestWorkbench().then((result) => {
+    const scope = tab === 'cases' && spaceId && subjectId
+      ? { spaceId, subjectId }
+      : undefined
+    fetchTestWorkbench(scope).then((result) => {
       if (!cancelled) setData(result)
     }).catch((loadError: unknown) => {
       if (!cancelled) setError(loadError instanceof Error ? loadError.message : '用例加载失败。')
     })
     return () => { cancelled = true }
-  }, [loading, tab, spaceId])
+  }, [loading, tab, spaceId, subjectId])
 
   useEffect(() => {
     setInvitePasswordDraft('')
@@ -817,8 +820,14 @@ export function TestWorkbench({
   const activeSpaceReadOnly = activeSpace?.accessLevel === 'viewer'
   const subjects = data.subjects.filter((subject) => subject.testSpaceId === spaceId)
   const activeSubject = subjects.find((subject) => subject.id === subjectId)
-  const spaceCases = data.cases.filter((testCase) => testCase.testSpaceId === spaceId)
-  const cases = spaceCases
+  const spaceCases = useMemo(
+    () => data.cases.filter((testCase) => testCase.testSpaceId === spaceId),
+    [data.cases, spaceId],
+  )
+  const cases = useMemo(
+    () => subjectId ? spaceCases.filter((testCase) => testCase.testSubjectId === subjectId) : [],
+    [spaceCases, subjectId],
+  )
   const plans = data.plans.filter(
     (plan) => plan.testSpaceId === spaceId,
   )
@@ -1357,15 +1366,20 @@ export function TestWorkbench({
             <>
               <WorkspaceError message={error} />
               <CasesView
-                key={`${spaceId}`}
+                key={`${spaceId}:${subjectId}`}
                 busy={busy}
-                subjectId={subjects[0]?.id}
+                currentUserId={currentUserId}
+                subjectId={subjectId}
                 spaceId={spaceId}
-                onCreateFolder={(name, parentId) => mutate(() => createTestCaseFolder(spaceId!, { name, parentId, testSubjectId: subjects[0]!.id }))}
+                onCreateFolder={(name, parentId) => subjectId
+                  ? mutate(() => createTestCaseFolder(spaceId!, { name, parentId, testSubjectId: subjectId }))
+                  : Promise.resolve(false)}
                 onUpdateFolder={(folder, name, parentId) => mutate(() => updateTestCaseFolder(spaceId!, folder.id, { name, parentId }))}
                 onDeleteFolder={(folder) => mutate(() => deleteTestCaseFolder(spaceId!, folder.id), true,
                   (next) => !next.folders.some((item) => item.id === folder.id))}
-                onMove={(ids, target) => mutate(() => moveTestCases(spaceId!, subjects[0]!.id, ids, target))}
+                onMove={(ids, target) => subjectId
+                  ? mutate(() => moveTestCases(spaceId!, subjectId, ids, target))
+                  : Promise.resolve(false)}
                 cases={cases}
                 data={data}
                 readOnly={activeSpaceReadOnly}
@@ -1587,13 +1601,17 @@ export function TestWorkbench({
       <ImportCasesDialog
         key={`${caseImportDialogOpen}-${spaceId}-${subjectId}-${caseTargetFolderId}`}
         targetFolderId={caseTargetFolderId}
-        folders={data.folders.filter(f => f.testSpaceId === spaceId)}
+        folders={data.folders.filter((folder) => (
+          folder.testSpaceId === spaceId && folder.testSubjectId === subjectId
+        ))}
         busy={busy}
         open={caseImportDialogOpen}
         spaceId={spaceId}
         subject={activeSubject}
         onOpenChange={setCaseImportDialogOpen}
-        onSubmit={(csvText, directoryMode) => mutate(() => importTestCases(spaceId!, subjects[0]!.id, csvText, { directoryMode, targetFolderId: caseTargetFolderId }))}
+        onSubmit={(csvText, directoryMode) => subjectId
+          ? mutate(() => importTestCases(spaceId!, subjectId, csvText, { directoryMode, targetFolderId: caseTargetFolderId }))
+          : Promise.resolve(false)}
       />
       <PlanDialog
         key={`${planDialogOpen}-${editingPlan?.id ?? 'new'}`}
@@ -1934,8 +1952,9 @@ function NotificationsView({
   )
 }
 
-export function CasesView({ busy, subjectId, spaceId, cases, data, readOnly, selectedId, onCreate, onCreateFolder, onUpdateFolder, onDeleteFolder, onMove, onDelete, onEdit, onExport, onImport, onSelect }: {
+export function CasesView({ busy, currentUserId, subjectId, spaceId, cases, data, readOnly, selectedId, onCreate, onCreateFolder, onUpdateFolder, onDeleteFolder, onMove, onDelete, onEdit, onExport, onImport, onSelect }: {
   busy: boolean
+  currentUserId?: number
   subjectId?: number
   spaceId?: number
   onUpdateFolder: (folder: TestCaseFolder, name: string, parentId: number | null) => Promise<boolean>
@@ -1960,14 +1979,19 @@ export function CasesView({ busy, subjectId, spaceId, cases, data, readOnly, sel
   const [folderFilter, setFolderFilter] = useState('all')
   const [typeFilter, setTypeFilter] = useState('all')
   const [priorityFilter, setPriorityFilter] = useState('all')
-  const folders = useMemo(() => data.folders.filter(f => f.testSpaceId === spaceId), [data.folders, spaceId])
+  const folders = useMemo(() => data.folders.filter((folder) => (
+    folder.testSpaceId === spaceId && folder.testSubjectId === subjectId
+  )), [data.folders, spaceId, subjectId])
   const directoryIndex = useMemo(() => createDirectoryIndex(folders), [folders])
   const treeState = useDirectoryTreeState(folders)
   const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 760px)').matches)
   const [drawerOpen, setDrawerOpen] = useState(false)
   useEffect(() => { const media = window.matchMedia('(max-width: 760px)'); const change = () => { setNarrow(media.matches); setDrawerOpen(false) }; media.addEventListener('change', change); return () => media.removeEventListener('change', change) }, [])
   const [includeChildren, setIncludeChildren] = useState(true)
-  const [panelHidden, setPanelHidden] = useState(() => { try { return localStorage.getItem('veges.case-directories.hidden') === 'true' } catch { return false } })
+  const directoryPanelStorageKey = currentUserId && spaceId && subjectId
+    ? `veges.case-directories.v2.${currentUserId}.${spaceId}.${subjectId}`
+    : ''
+  const [panelHidden, setPanelHidden] = useState(false)
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set())
   const [moveIds, setMoveIds] = useState<number[]>()
   const [moveTarget, setMoveTarget] = useState<number | null>(null)
@@ -1978,7 +2002,16 @@ export function CasesView({ busy, subjectId, spaceId, cases, data, readOnly, sel
   const scopeIds = useMemo(() => activeFolderId === null ? new Set<number>() : includeChildren ? directoryIndex.descendants(activeFolderId) : new Set([activeFolderId]), [activeFolderId, directoryIndex, includeChildren])
   const scopeLabel = activeFolderId === null ? effectiveFolderFilter === 'all' ? '全部用例' : '未分类' : directoryIndex.byId.has(activeFolderId) ? directoryIndex.path(activeFolderId).map(f => f.name).join(' / ') : '目录已删除'
   const selectedCaseIds = cases.filter(c => checkedIds.has(c.id)).map(c => c.id)
-  function togglePanel() { if (narrow) { setDrawerOpen(prev => !prev); return } setPanelHidden(prev => { try { localStorage.setItem('veges.case-directories.hidden', String(!prev)) } catch { /* Storage may be disabled. */ } return !prev }) }
+  useEffect(() => {
+    try {
+      setPanelHidden(directoryPanelStorageKey
+        ? localStorage.getItem(directoryPanelStorageKey) === 'true'
+        : false)
+    } catch {
+      setPanelHidden(false)
+    }
+  }, [directoryPanelStorageKey])
+  function togglePanel() { if (narrow) { setDrawerOpen(prev => !prev); return } setPanelHidden(prev => { try { if (directoryPanelStorageKey) localStorage.setItem(directoryPanelStorageKey, String(!prev)) } catch { /* Storage may be disabled. */ } return !prev }) }
   function selectDirectory(id: string) { setFolderFilter(id); setCheckedIds(new Set()); setIncludeChildren(true); setDrawerOpen(false) }
   function startMove(ids: number[]) { setMoveTarget(activeFolderId); setMoveError(''); setMoveIds(ids) }
   const filteredCases = useMemo(() => {

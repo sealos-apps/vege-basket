@@ -62,6 +62,18 @@ test('test plan root directory entries reserve the correct grid columns', () => 
   assert.match(readFileSync(new URL('../src/components/test-workbench.css', import.meta.url), 'utf8'), /\.test-plan-directory-node-root\s*\{\s*grid-template-columns: 16px minmax\(0, 1fr\) auto;/u)
 })
 
+test('case workbench scopes directory operations to the selected test subject', () => {
+  assert.match(testWorkbenchClientSource, /\(\) => subjectId \? spaceCases\.filter\(\(testCase\) => testCase\.testSubjectId === subjectId\) : \[\]/u)
+  assert.match(testWorkbenchClientSource, /key=\{`\$\{spaceId\}:\$\{subjectId\}`\}/u)
+  assert.match(testWorkbenchClientSource, /createTestCaseFolder\(spaceId!, \{ name, parentId, testSubjectId: subjectId \}\)/u)
+  assert.match(testWorkbenchClientSource, /moveTestCases\(spaceId!, subjectId, ids, target\)/u)
+  assert.match(testWorkbenchClientSource, /importTestCases\(spaceId!, subjectId, csvText/u)
+  assert.match(testWorkbenchClientSource, /folder\.testSpaceId === spaceId && folder\.testSubjectId === subjectId/u)
+  assert.match(testWorkbenchClientSource, /fetchTestWorkbench\(scope\)/u)
+  assert.match(testWorkbenchClientSource, /veges\.case-directories\.v2\.\$\{currentUserId\}\.\$\{spaceId\}\.\$\{subjectId\}/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /veges\.case-directories\.hidden/u)
+})
+
 test('test-space member settings do not show unrelated departed accounts', () => {
   assert.doesNotMatch(testWorkbenchSource, /getDepartedUsers/u)
   assert.doesNotMatch(testWorkbenchClientSource, /departedUsers.*TestSpaceSettingsDialog/u)
