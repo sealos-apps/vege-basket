@@ -1,5 +1,3 @@
-import { OrganizationTestEnvironmentPanel } from './organization-test-environments'
-import type { OrganizationDetail } from '../organization-types'
 import { ConfirmActionDialog } from './confirm-action-dialog'
 import { useConfirmAction } from '../hooks/use-confirm-action'
 import { reconcileAction } from '../confirmed-action'
@@ -93,7 +91,6 @@ import {
   type BugFilterJoin,
 } from './bug-filter'
 import {
-  fetchOrganization,
   fetchPackageMarketDetail,
   fetchPackageMarketCiVersions,
   fetchPackageMarketReleaseVersions,
@@ -558,10 +555,6 @@ export function TestWorkbench({
   const [bugFilterConditions, setBugFilterConditions] = useState<BugFilterCondition[]>([])
   const [bugSearchQuery, setBugSearchQuery] = useState('')
   const [spaceSwitcherOpen, setSpaceSwitcherOpen] = useState(false)
-  const [environmentManagerOpen,setEnvironmentManagerOpen]=useState(false)
-  const [environmentDetail,setEnvironmentDetail]=useState<OrganizationDetail|null>(null)
-  const [environmentError,setEnvironmentError]=useState('')
-  const [environmentBusy,setEnvironmentBusy]=useState(false)
   const [spaceAdministrationOpen, setSpaceAdministrationOpen] = useState(false)
   const [spaceCreateOpen, setSpaceCreateOpen] = useState(false)
   const [spaceSettings, setSpaceSettings] = useState<TestSpaceSettings>(emptyTestSpaceSettings)
@@ -1080,14 +1073,6 @@ export function TestWorkbench({
     catch(error){setError(error instanceof Error?error.message:'转移处理失败。')}
     finally{setBusy(false)}
   }
-  async function openEnvironmentManager(){
-    const organizationId=data.spaces.find(s=>s.id===spaceId)?.organizationId
-    if(!organizationId)return
-    setEnvironmentManagerOpen(true);setEnvironmentDetail(null);setEnvironmentError('');setEnvironmentBusy(true)
-    try{setEnvironmentDetail(await fetchOrganization(organizationId))}
-    catch(error){setEnvironmentError(error instanceof Error?error.message:'环境加载失败。')}
-    finally{setEnvironmentBusy(false)}
-  }
   async function handleAcceptInvitation(invitationSpaceId: number) {
     setBusy(true)
     setError('')
@@ -1218,7 +1203,6 @@ export function TestWorkbench({
                 <GearSix aria-hidden />
                 管理测试空间
               </DropdownMenuItem>
-              {data.spaces.find(s=>s.id===spaceId)?.organizationId ? <DropdownMenuItem onSelect={()=>{setSpaceSwitcherOpen(false);void openEnvironmentManager()}}><GearSix aria-hidden/>管理测试环境</DropdownMenuItem>:null}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -1513,12 +1497,6 @@ export function TestWorkbench({
           setBugFilterJoin(next.join)
         }}
       />
-      <Dialog open={environmentManagerOpen} onOpenChange={open=>{if(!environmentBusy)setEnvironmentManagerOpen(open)}}><DialogContent className="organization-resource-dialog" fixedHeader><DialogHeader><DialogTitle>管理测试环境</DialogTitle><DialogDescription>当前组织统一配置，所有测试空间共享。</DialogDescription></DialogHeader>
-        {environmentError?<p role="alert">{environmentError}</p>:null}
-        {!environmentDetail&&environmentBusy?<p role="status">正在加载…</p>:null}
-        {environmentDetail && !environmentDetail.canManageTestEnvironments ? <div className="organization-list">{data.testEnvironments.filter(environment=>environment.testSpaceIds.some(id=>data.spaces.some(space=>space.id===id&&space.organizationId===environmentDetail.id))).map(environment=><div key={environment.id} className="organization-resource-row"><strong>{environment.name}</strong><a href={environment.accessUrl} target="_blank" rel="noreferrer">{environment.accessUrl}</a></div>)}</div>:null}
-        {environmentDetail?.canManageTestEnvironments?<OrganizationTestEnvironmentPanel busy={environmentBusy} detail={environmentDetail} onMutate={async operation=>{setEnvironmentBusy(true);setEnvironmentError('');try{setEnvironmentDetail(await operation());await refreshWorkbench();return true}catch(error){setEnvironmentError(error instanceof Error?error.message:'环境保存失败。');return false}finally{setEnvironmentBusy(false)}}}/>:null}
-      </DialogContent></Dialog>
       <TestSpaceCreateDialog
         busy={busy}
         organizations={spaceSettings.organizations}

@@ -1023,7 +1023,7 @@ async function importTestSpaceData(
   targetSpaceId: number,
   sources: TestSpaceImportSource[],
   userId: number,
-  options: { allowBugCreatorTransfer?: boolean; targetTestCaseId?: number } = {},
+  options: { allowBugEditorTransfer?: boolean; targetTestCaseId?: number } = {},
 ) {
   return transaction(async (client) => {
     const sourceIds = sources.map((source) => source.spaceId)
@@ -1039,8 +1039,15 @@ async function importTestSpaceData(
     await client.query('select id from test_subjects where test_space_id = any($1::bigint[]) order by id for update', [Array.from(new Set([...sourceIds, targetSpaceId]))])
     const spacesById = new Map(spaces.rows.map((space) => [Number(space.id), space]))
     const targetSpace = spacesById.get(targetSpaceId)
-    if (!targetSpace || Number(targetSpace.owner_user_id) !== userId) {
-      throw importFailure('只有当前测试空间所有者可以转入数据', 403)
+    const targetAccess = targetSpace
+      ? await getDirectSpaceAccess(targetSpaceId, userId, client)
+      : null
+    if (!targetSpace || (options.allowBugEditorTransfer
+      ? !targetAccess || targetAccess === 'viewer'
+      : Number(targetSpace.owner_user_id) !== userId)) {
+      throw importFailure(options.allowBugEditorTransfer
+        ? '目标测试空间需要直接编辑权限'
+        : '只有当前测试空间所有者可以转入数据', 403)
     }
     const targetCase = options.targetTestCaseId
       ? (await client.query<{ id: string; test_subject_id: string }>(
@@ -1059,19 +1066,15 @@ async function importTestSpaceData(
       if (!sourceSpace.organization_id || sourceSpace.organization_id !== targetSpace.organization_id) {
         throw importFailure('Bug 只能迁移到同一归属组织的测试空间', 400)
       }
-      if (options.allowBugCreatorTransfer && !(await getDirectSpaceAccess(source.spaceId, userId, client))) {
-        throw importFailure('来源测试空间不存在', 404)
-      }
-      const sourceBug = options.allowBugCreatorTransfer && source.categories.length === 1 && source.categories[0] === 'bugs'
-        ? await client.query<{ reporter_user_id: string | null }>(
-          `select reporter_user_id from test_bugs where test_space_id = $1 and id = any($2::bigint[]) for update`,
-          [source.spaceId, source.bugIds ?? []],
-        )
+      const sourceAccess = options.allowBugEditorTransfer
+        ? await getDirectSpaceAccess(source.spaceId, userId, client)
         : null
-      const sourceOwnedByUser = Number(sourceSpace.owner_user_id) === userId
-      const sourceBugCreatedByUser = Boolean(sourceBug?.rows.length && sourceBug.rows.every((row) => Number(row.reporter_user_id) === userId))
-      if (!sourceOwnedByUser && !sourceBugCreatedByUser) {
-        throw importFailure('只能从自己拥有的测试空间转入数据', 403)
+      if (options.allowBugEditorTransfer
+        ? !sourceAccess || sourceAccess === 'viewer'
+        : Number(sourceSpace.owner_user_id) !== userId) {
+        throw importFailure(options.allowBugEditorTransfer
+          ? '来源测试空间需要直接编辑权限'
+          : '只能从自己拥有的测试空间转入数据', 403)
       }
     }
 
@@ -1805,6 +1808,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       test_case_directory_path: BugCaseDirectoryRow
       test_space_id: string
       test_space_name: string
+      test_space_version_label: string | null
       test_subject_id: string
       test_subject_name: string
       test_plan_name: string | null
@@ -1817,6 +1821,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       select b.*, space.owner_user_id as space_owner_user_id,
         m.access_level as direct_access_level,
         space.name as test_space_name,
+        space.version_label as test_space_version_label,
         space.organization_id,
         subject.name as test_subject_name,
         linked_case.title as test_case_title,
@@ -2095,7 +2100,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
     const planId = Number(row.test_plan_id)
     subjectIdsByPlan.set(planId, [...(subjectIdsByPlan.get(planId) ?? []), Number(row.test_subject_id)])
   }
-  const ownedSpaces = spaces.rows.filter((row) => Number(row.owner_user_id) === userId)
+  const editableSpaces = spaces.rows.filter((row) => row.access_level !== 'viewer')
   const testEnvironmentsById = new Map<number, {
     accessUrl: string
     id: number
@@ -2135,11 +2140,8 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       canShare: canEditTestBug(row.reporter_user_id ? Number(row.reporter_user_id) : null, userId)
         || Number(row.assignee_user_id) === userId
         || Boolean(row.organization_admin_access),
-      canTransferSpace: canEditTestSpaceVersion(
-        Number(row.space_owner_user_id),
-        row.reporter_user_id ? Number(row.reporter_user_id) : null,
-        userId,
-      ) && ownedSpaces.some((space) => Number(space.id) !== Number(row.test_space_id)
+      canTransferSpace: row.direct_access_level != null && row.direct_access_level !== 'viewer'
+        && editableSpaces.some((space) => Number(space.id) !== Number(row.test_space_id)
         && space.organization_id === row.organization_id),
       comments: commentsByBug.get(Number(row.id)) ?? [],
       createdAt: row.created_at.toISOString(),
@@ -2169,11 +2171,14 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       testPlanName: row.test_plan_name ? decryptText(row.test_plan_name) : undefined,
       testSpaceId: Number(row.test_space_id),
       testSpaceName: decryptText(row.test_space_name),
+      testSpaceVersionLabel: row.test_space_version_label
+        ? decryptText(row.test_space_version_label)
+        : undefined,
       testSubjectId: Number(row.test_subject_id),
       testSubjectName: decryptText(row.test_subject_name),
       title: decryptText(row.title),
       verificationSubmissions: verificationSubmissionsByBug.get(Number(row.id)) ?? [],
-      transferSpaceCandidates: ownedSpaces
+      transferSpaceCandidates: editableSpaces
         .filter((space) => Number(space.id) !== Number(row.test_space_id)
           && space.organization_id === row.organization_id)
         .map((space) => ({
@@ -4103,7 +4108,7 @@ router.post('/test-spaces/:spaceId/bugs/:bugId/transfer-space', asyncRoute(async
       targetSpaceId,
       [{ bugIds: [bugId], categories: ['bugs'], spaceId }],
       session.userId,
-      { allowBugCreatorTransfer: true, targetTestCaseId },
+      { allowBugEditorTransfer: true, targetTestCaseId },
     )
   } catch (error) {
     if (error instanceof Error && 'status' in error) {

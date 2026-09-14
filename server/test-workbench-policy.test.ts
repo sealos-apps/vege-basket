@@ -98,7 +98,7 @@ test('Bug scope stays within the current space and exposes its case instead of a
   assert.match(testWorkbenchClientSource, /aria-label="关联测试用例"/u)
 })
 
-test('assigned Bug details include their test case and space version label', () => {
+test('Bug workbenches include their test case and space version label', () => {
   assert.match(testWorkbenchSource, /space\.version_label as test_space_version_label/u)
   assert.match(testWorkbenchSource, /testSpaceVersionLabel: row\.test_space_version_label\s*\? decryptText\(row\.test_space_version_label\)\s*:\s*undefined/u)
   assert.match(testWorkbenchClientSource, /selected\.testCaseTitle/u)
@@ -322,15 +322,23 @@ test('test-space data import supports copied cases and plans only', () => {
 test('Bug details offer same-organization space transfer with the existing transfer transaction', () => {
   assert.match(testWorkbenchSource, /router\.post\('\/test-spaces\/:spaceId\/bugs\/:bugId\/transfer-space'/u)
   assert.match(testWorkbenchSource, /bugIds: \[bugId\], categories: \['bugs'\], spaceId/u)
-  assert.match(testWorkbenchSource, /canTransferSpace: canEditTestSpaceVersion/u)
-  assert.match(testWorkbenchSource, /transferSpaceCandidates: ownedSpaces/u)
+  assert.match(testWorkbenchSource, /canTransferSpace: row\.direct_access_level != null && row\.direct_access_level !== 'viewer'/u)
+  assert.match(testWorkbenchSource, /transferSpaceCandidates: editableSpaces/u)
   assert.match(testWorkbenchSource, /space\.organization_id === row\.organization_id/u)
-  assert.match(testWorkbenchSource, /allowBugCreatorTransfer: true/u)
+  assert.match(testWorkbenchSource, /allowBugEditorTransfer: true/u)
+  assert.match(testWorkbenchSource, /目标测试空间需要直接编辑权限/u)
+  assert.match(testWorkbenchSource, /来源测试空间需要直接编辑权限/u)
   assert.match(testWorkbenchSource, /目标用例不存在或不属于目标测试空间/u)
   assert.match(testWorkbenchClientSource, /bug\.canTransferSpace/u)
   assert.match(testWorkbenchClientSource, /<BugSpaceTransferDialog/u)
   assert.match(testWorkbenchClientSource, /<DialogTitle>转移 Bug 到其他空间<\/DialogTitle>/u)
   assert.match(testWorkbenchClientSource, /transferTestBugToSpace\(bug\.testSpaceId, bug\.id, targetSpaceId, targetTestCaseId\)/u)
+})
+
+test('test workbench leaves test environment maintenance to organization management', () => {
+  assert.doesNotMatch(testWorkbenchClientSource, /管理测试环境/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /OrganizationTestEnvironmentPanel/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /fetchOrganization/u)
 })
 
 test('assigned Bug selection keeps the current item when parent callbacks refresh counts', () => {
