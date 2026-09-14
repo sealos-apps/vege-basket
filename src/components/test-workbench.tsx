@@ -2179,14 +2179,14 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
 
   return (
     <div className="test-module-view">
-      <div className="test-module-toolbar"><div><span>执行与回归</span><h1>测试计划</h1></div><div><Select value={subjectFilter} onValueChange={(value) => { setSubjectFilter(value); const first = value === 'all' ? plans[0] : plans.find((plan) => plan.testSubjectIds.includes(Number(value))); if (first) onSelect(first.id) }}><SelectTrigger aria-label="按测试对象筛选计划"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部测试对象</SelectItem>{planSubjects.map((subject) => <SelectItem key={subject.id} value={String(subject.id)}>{subject.name}</SelectItem>)}</SelectContent></Select>{!readOnly ? <Button onClick={onCreate}><Plus /> 新建计划</Button> : null}</div></div>
+      <div className="test-module-toolbar"><div><span>执行与回归</span><h1>测试计划</h1></div><div><Select value={subjectFilter} onValueChange={(value) => { setSubjectFilter(value); const first = value === 'all' ? plans[0] : plans.find((plan) => plan.testSubjectIds.includes(Number(value))); if (first) onSelect(first.id) }}><SelectTrigger aria-label="按测试用例目录筛选计划"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部测试用例目录</SelectItem>{planSubjects.map((subject) => <SelectItem key={subject.id} value={String(subject.id)}>{subject.name}</SelectItem>)}</SelectContent></Select>{!readOnly ? <Button onClick={onCreate}><Plus /> 新建计划</Button> : null}</div></div>
       <div className="test-split-view">
         <div className="test-record-list">
           {visiblePlans.length ? visiblePlans.map((plan) => {
             const rows = data.planCases.filter((item) => item.testPlanId === plan.id)
             const complete = rows.filter((item) => item.result !== 'untested').length
             return <button key={plan.id} className={plan.id === selectedId ? 'active' : ''} onClick={() => onSelect(plan.id)}><div><code>PLAN-{plan.id}</code><Badge variant="outline">{planStatusLabel[plan.status]}</Badge></div><strong>{plan.name}</strong><small>{complete}/{rows.length} 已执行 · {plan.environment || '未设置环境'}</small></button>
-          }) : <p className="test-list-empty">{plans.length ? '当前测试对象没有关联测试计划。' : '当前测试空间还没有测试计划。'}</p>}
+          }) : <p className="test-list-empty">{plans.length ? '当前测试用例目录没有关联测试计划。' : '当前测试空间还没有测试计划。'}</p>}
         </div>
         <div className={selected ? 'test-record-detail test-plan-detail' : 'test-record-detail'}>
           {selected ? <>
