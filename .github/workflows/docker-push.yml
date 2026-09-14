@@ -117,3 +117,60 @@ jobs:
           IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
           IMAGE_TAG="main-${GITHUB_SHA:0:12}"
           docker manifest inspect "$IMAGE_REPO:$IMAGE_TAG" >/dev/null
+
+  deploy-k8s:
+    name: 发布到 Kubernetes
+    needs: merge-manifest
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    env:
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+      K8S_DEPLOYMENT_NAME: ${{ vars.K8S_DEPLOYMENT_NAME }}
+    steps:
+      - name: 安装 kubectl
+        uses: azure/setup-kubectl@v4
+      - name: 配置集群凭据
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          set -euo pipefail
+          test -n "$KUBE_CONFIG"
+          KUBECONFIG_PATH="$RUNNER_TEMP/veges-kubeconfig"
+          printf '%s' "$KUBE_CONFIG" > "$KUBECONFIG_PATH"
+          chmod 600 "$KUBECONFIG_PATH"
+          echo "KUBECONFIG=$KUBECONFIG_PATH" >> "$GITHUB_ENV"
+      - name: 更新工作负载镜像
+        run: |
+          set -euo pipefail
+          test -n "$K8S_NAMESPACE"
+          test -n "$K8S_DEPLOYMENT_NAME"
+
+          IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
+          IMAGE="$IMAGE_REPO:main-${GITHUB_SHA:0:12}"
+
+          kubectl --namespace "$K8S_NAMESPACE" get deployment "$K8S_DEPLOYMENT_NAME" \
+            -o jsonpath="{.spec.template.spec.containers[?(@.name=='$K8S_DEPLOYMENT_NAME')].name}" \
+            | grep -Fx "$K8S_DEPLOYMENT_NAME"
+
+          kubectl --namespace "$K8S_NAMESPACE" annotate \
+            deployment "$K8S_DEPLOYMENT_NAME" \
+            originImageName="$IMAGE" \
+            --overwrite
+          kubectl --namespace "$K8S_NAMESPACE" set image \
+            "deployment/$K8S_DEPLOYMENT_NAME" \
+            "$K8S_DEPLOYMENT_NAME=$IMAGE"
+
+          kubectl --namespace "$K8S_NAMESPACE" rollout status \
+            "deployment/$K8S_DEPLOYMENT_NAME" \
+            --timeout=10m
+      - name: 验证线上镜像
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
+          EXPECTED_IMAGE="$IMAGE_REPO:main-${GITHUB_SHA:0:12}"
+          DEPLOYMENT_IMAGE="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$K8S_DEPLOYMENT_NAME" -o jsonpath="{.spec.template.spec.containers[?(@.name=='$K8S_DEPLOYMENT_NAME')].image}")"
+
+          test "$DEPLOYMENT_IMAGE" = "$EXPECTED_IMAGE"
+          echo "Deployment  已发布镜像 $EXPECTED_IMAGE"
