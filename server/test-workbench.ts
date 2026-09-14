@@ -1585,12 +1585,6 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
   const scopeFolders = scope?.spaceId && scope?.subjectId
     ? ` and f.test_space_id = ${scope.spaceId} and f.test_subject_id = ${scope.subjectId}`
     : ''
-  const scopePlans = scope?.spaceId && scope?.subjectId
-    ? ` and p.test_space_id = ${scope.spaceId} and p.test_subject_id = ${scope.subjectId}`
-    : ''
-  const scopePlanCases = scope?.spaceId && scope?.subjectId
-    ? ` and p.test_space_id = ${scope.spaceId} and p.test_subject_id = ${scope.subjectId}`
-    : ''
 
   const [
     spaces,
@@ -1734,7 +1728,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       join test_spaces space on space.id = p.test_space_id
       left join test_space_memberships m
         on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
-      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlans}
+      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
       order by p.updated_at desc, p.id desc
       `,
       [userId],
@@ -1747,7 +1741,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       join test_spaces space on space.id = p.test_space_id
       left join test_space_memberships m
         on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
-      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlans}
+      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
       order by ps.test_plan_id, ps.test_subject_id
       `,
       [userId],
@@ -1774,7 +1768,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       join test_spaces space on space.id = p.test_space_id
       left join test_space_memberships m
         on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
-      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlanCases}
+      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
       order by pc.id
       `,
       [userId],
