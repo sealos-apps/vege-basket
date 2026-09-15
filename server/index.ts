@@ -3250,7 +3250,15 @@ async function pumpFeishuAiMessages(preferredMessageId?: string) {
   feishuAiPumpRunning = true
   try {
     for (let index = 0; index < 5; index += 1) {
-      const claim = await claimFeishuAiMessage(index === 0 ? preferredMessageId : undefined)
+      let claim: FeishuAiMessageClaim | null
+      try {
+        claim = await claimFeishuAiMessage(index === 0 ? preferredMessageId : undefined)
+      } catch (error) {
+        console.error('Feishu AI message claim failed', {
+          error: error instanceof Error ? error.message : error,
+        })
+        break
+      }
       if (!claim) break
       try {
         await processFeishuAiMessage(claim)
@@ -3275,7 +3283,11 @@ async function pumpFeishuAiMessages(preferredMessageId?: string) {
 
 function scheduleFeishuAiMessages(messageId?: string) {
   queueMicrotask(() => {
-    void pumpFeishuAiMessages(messageId)
+    void pumpFeishuAiMessages(messageId).catch((error: unknown) => {
+      console.error('Feishu AI message pump failed', {
+        error: error instanceof Error ? error.message : error,
+      })
+    })
   })
 }
 

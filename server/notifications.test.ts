@@ -33,6 +33,19 @@ const packageWorkbenchSource = readFileSync(
 )
 const bugShareSource = readFileSync(new URL('./bug-share.ts', import.meta.url), 'utf8')
 
+test('Feishu AI queue database failures do not terminate the API process', () => {
+  const claimStart = serverSource.indexOf('async function claimFeishuAiMessage')
+  const pumpStart = serverSource.indexOf('async function pumpFeishuAiMessages')
+  const scheduleStart = serverSource.indexOf('function scheduleFeishuAiMessages')
+  assert.ok(claimStart >= 0)
+  assert.ok(pumpStart > claimStart)
+  assert.ok(scheduleStart > pumpStart)
+  const pumpSource = serverSource.slice(pumpStart, scheduleStart)
+  const scheduleSource = serverSource.slice(scheduleStart, serverSource.indexOf('function getTokenFromRequest', scheduleStart))
+  assert.match(pumpSource, /try\s*\{\s*claim = await claimFeishuAiMessage[\s\S]*?catch \(error\)[\s\S]*?console\.error\('Feishu AI message claim failed'/u)
+  assert.match(scheduleSource, /void pumpFeishuAiMessages\(messageId\)\.catch\(\(error: unknown\)/u)
+})
+
 test('notification center exposes a read-all endpoint without dismissing notifications', () => {
   const routeStart = serverSource.indexOf("app.patch('/api/notifications/read-all'")
   const nextRoute = serverSource.indexOf("app.get('/api/my-work'", routeStart)
