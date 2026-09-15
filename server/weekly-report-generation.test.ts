@@ -39,7 +39,7 @@ test('developer weekly report source includes identity, Chinese period, journals
   assert.match(source, /项目 A：待办共 8 条，完成 3 条，未完成 4 条，待验收 1 条；交付事件共 2 条，已交付 1 条，未完成 1 条/)
   assert.match(source, /项目 B：待办共 0 条，完成 0 条，未完成 0 条，待验收 0 条；交付事件共 1 条，已交付 0 条，未完成 1 条/)
   assert.doesNotMatch(source, /待办标题|交付标题/)
-  assert.match(source, /## 事项一：<事项名称>[\s\S]+- 本周进展：[\s\S]+- 风险问题：[\s\S]+- 下周计划：/u)
+  assert.match(source, /<!-- veges-weekly-report:v3 -->[\s\S]+#### 任务 1[\s\S]+##### 任务进度\n待填写/u)
 })
 
 test('tester weekly report source names identity, period, plans, and targets without journals', () => {
@@ -67,7 +67,7 @@ test('tester weekly report source names identity, period, plans, and targets wit
   assert.doesNotMatch(source, /角色：/)
   assert.match(source, /回归测试计划/)
   assert.match(source, /测试对象：支付服务/)
-  assert.match(source, /本周执行：12 条/)
+  assert.match(source, /本周期本人保留的最新执行记录：12 条/)
   assert.doesNotMatch(source, /项目日记（总结主体）/)
-  assert.match(source, /## 事项一：<事项名称>[\s\S]+- 本周进展：[\s\S]+- 风险问题：[\s\S]+- 下周计划：/u)
+  assert.match(source, /<!-- veges-weekly-report:v3 -->[\s\S]+#### 任务 1[\s\S]+##### 任务进度\n待填写/u)
 })

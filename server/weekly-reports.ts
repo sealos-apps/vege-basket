@@ -27,24 +27,11 @@ import {
   type WeeklyReportTesterPlanStats,
   type WeeklyReportWorkStats,
 } from './weekly-report-generation.ts'
-import { hasCanonicalWeeklyReportStructure } from '../shared/weekly-report-template.ts'
+import { isWeeklyReportProfile, weeklyReportProfiles, weeklyReportSourceIdentity, type WeeklyReportProfile, type WeeklyReportSourceRef } from '../shared/weekly-report-profile.ts'
+import { WEEKLY_REPORT_CONTENT_LIMIT, WEEKLY_REPORT_DOCUMENT_MARKER, parseWeeklyReportDocument, weeklyReportValidationError, weeklyReportContentProgress, convertLegacyWeeklyReport, serializeWeeklyReportDocument, hasItemContent, hasTaskContent, prepareGeneratedWeeklyReport } from '../shared/weekly-report-document.ts'
+import { normalizeWeeklyReportSources, loadWeeklyReportSources, validateWeeklyReportSources, sourceProjectAccessSql, sourceSpaceAccessSql, todoPeriodSql, deliveryPeriodSql } from './weekly-report-sources.ts'
 
-type WeeklyReportSourceKind = 'delivery' | 'milestone' | 'todo'
 type WeeklyReportSourceMode = 'ai' | 'manual'
-
-type WeeklyReportSourceRef = {
-  id: number
-  kind: WeeklyReportSourceKind
-  projectId: number
-}
-
-type WeeklyReportSourceCandidate = WeeklyReportSourceRef & {
-  date: string
-  projectName: string
-  relatedToMe: boolean
-  status: string
-  title: string
-}
 
 type WeeklyReportRouterDependencies = {
   generateWeeklyReport: (userId: number, source: string) => Promise<{
@@ -135,43 +122,52 @@ function normalizeSourceMode(value: unknown): WeeklyReportSourceMode {
 }
 
 function normalizeSourceRefs(value: unknown) {
-  if (!Array.isArray(value)) throw new WeeklyReportError(400, '周报来源格式无效')
-  if (value.length > 80) throw new WeeklyReportError(400, '每份周报最多关联 80 个工作项')
-  const unique = new Map<string, WeeklyReportSourceRef>()
-  for (const item of value) {
-    if (!item || typeof item !== 'object') throw new WeeklyReportError(400, '周报来源格式无效')
-    const candidate = item as Record<string, unknown>
-    const id = positiveId(candidate.id)
-    const projectId = positiveId(candidate.projectId)
-    const kind = candidate.kind
-    if (!id || !projectId || (kind !== 'todo' && kind !== 'delivery' && kind !== 'milestone')) {
-      throw new WeeklyReportError(400, '周报来源格式无效')
-    }
-    unique.set(`${kind}:${id}`, { id, kind, projectId })
-  }
-  return [...unique.values()]
+  try { return normalizeWeeklyReportSources(value) }
+  catch (error) { throw new WeeklyReportError(400, error instanceof Error ? error.message : '周报来源无效') }
 }
 
-const sourceProjectAccessSql = `
-  project.organization_id = $1
-  and (
-    project.user_id = $2
-    or exists (
-      select 1 from project_memberships mine
-      where mine.project_id = project.id
-        and mine.invited_user_id = $2
-        and mine.status = 'active'
-    )
-    or exists (
-      select 1
-      from organization_memberships manager
-      join user_roles role on role.user_id = manager.user_id
-      where manager.organization_id = $1
-        and manager.user_id = $2
-        and manager.status = 'active'
-        and role.role = 'organization_admin'
-    )
-  )`
+async function requireWeeklyProfile(client: PoolClient, userId: number, profile: unknown): Promise<WeeklyReportProfile> {
+  if (!isWeeklyReportProfile(profile)) throw new WeeklyReportError(403, '请先切换到开发或测试身份')
+  const result = await client.query<{ allowed: boolean }>(
+    "select exists(select 1 from user_roles where user_id = $1::bigint and role in ($2::text, 'organization_admin')) as allowed", [userId, profile])
+  if (!result.rows[0]?.allowed) throw new WeeklyReportError(403, '当前职业身份已失效')
+  return profile
+}
+
+function assertReportContent(content: unknown, profile: WeeklyReportProfile | null, submitting = false) {
+  if (typeof content !== 'string' || content.length > WEEKLY_REPORT_CONTENT_LIMIT) throw new WeeklyReportError(400, '周报正文格式无效或超过 12,000 字符')
+  const document = parseWeeklyReportDocument(content)
+  if (profile && (!document || document.profile !== profile)) throw new WeeklyReportError(400, '周报格式与当前身份不一致，请保留原文并检查任务字段')
+  if (!profile && content.trim().startsWith(WEEKLY_REPORT_DOCUMENT_MARKER)) throw new WeeklyReportError(400, '请通过显式转换入口启用任务填写')
+  if (submitting && document) {
+    const error = weeklyReportValidationError(document)
+    if (error) throw new WeeklyReportError(400, error)
+  }
+}
+
+async function readDraftSources(client: PoolClient, reportId: string | number): Promise<WeeklyReportSourceRef[]> {
+  const project = await client.query<{ id: string; project_id: string; kind: 'todo' | 'delivery' | 'milestone' }>(
+    `select project_id, coalesce(todo_id, package_event_id, milestone_id) as id,
+      case when todo_id is not null then 'todo' when package_event_id is not null then 'delivery' else 'milestone' end as kind
+      from organization_weekly_report_sources where report_id = $1::bigint and revision_id is null`, [reportId])
+  const testing = await client.query<{ id: string; test_space_id: string; kind: 'bug' | 'test_plan' }>(
+    `select coalesce(source.bug_id, source.test_plan_id) as id, coalesce(bug.test_space_id, plan.test_space_id) as test_space_id,
+      case when source.bug_id is not null then 'bug' else 'test_plan' end as kind
+      from organization_weekly_report_test_sources source
+      left join test_bugs bug on bug.id = source.bug_id
+      left join test_plans plan on plan.id = source.test_plan_id
+      where source.report_id = $1::bigint and source.revision_id is null`, [reportId])
+  return [...project.rows.map(r => ({ id: Number(r.id), kind: r.kind, projectId: Number(r.project_id) })),
+    ...testing.rows.map(r => ({ id: Number(r.id), kind: r.kind, testSpaceId: Number(r.test_space_id) }))]
+}
+
+async function checkSources(client: PoolClient, params: Parameters<typeof validateWeeklyReportSources>[1]) {
+  try { return await validateWeeklyReportSources(client, params) }
+  catch (error) {
+    if (error instanceof Error && !('code' in error)) throw new WeeklyReportError(403, error.message)
+    throw error
+  }
+}
 
 async function getMembership(client: PoolClient, organizationId: number, userId: number) {
   const result = await client.query<OrganizationMembership>(
@@ -294,164 +290,6 @@ async function normalizeExistingReportWeek(
   return normalizeOrganizationWeekStart(weekStart, organization.rows[0].week_starts_on) ?? weekStart
 }
 
-async function loadSourceCandidates(
-  client: PoolClient,
-  organizationId: number,
-  userId: number,
-): Promise<WeeklyReportSourceCandidate[]> {
-  const todos = await client.query<{
-      date: Date | string
-      id: string
-      project_id: string
-      project_name: string
-      related_to_me: boolean
-      status: string
-      title: string
-    }>(
-      `select todo.id, todo.project_id, project.name as project_name, todo.title,
-         case when todo.done then 'completed' else todo.confirmation_status end as status,
-         coalesce(todo.completed_at, todo.updated_at, todo.created_at) as date,
-         ($2::bigint = any(array[
-           project.user_id,
-           todo.created_by_user_id,
-           todo.assignee_user_id,
-           todo.watcher_user_id,
-           todo.reviewer_user_id,
-           todo.completed_by_user_id
-         ]::bigint[])) as related_to_me
-       from todos todo
-       join projects project on project.id = todo.project_id
-       where ${sourceProjectAccessSql}
-       order by todo.updated_at desc, todo.id desc
-       limit 160`,
-      [organizationId, userId],
-    )
-  const events = await client.query<{
-      date: Date | string
-      id: string
-      project_id: string
-      project_name: string
-      related_to_me: boolean
-      status: string
-      title: string
-    }>(
-      `select event.id, event.project_id, project.name as project_name, event.title,
-         event.status, coalesce(event.delivery_date, event.updated_at::date) as date,
-         ($2::bigint = any(array[
-           project.user_id,
-           event.created_by_user_id,
-           event.assignee_user_id,
-           event.assigned_by_user_id
-         ]::bigint[])) as related_to_me
-       from project_package_events event
-       join projects project on project.id = event.project_id
-       where ${sourceProjectAccessSql}
-       order by event.updated_at desc, event.id desc
-       limit 120`,
-      [organizationId, userId],
-    )
-  const milestones = await client.query<{
-      date: Date | string
-      id: string
-      project_id: string
-      project_name: string
-      related_to_me: boolean
-      status: string
-      title: string
-    }>(
-      `select milestone.id, milestone.project_id, project.name as project_name,
-         milestone.title, milestone.status, milestone.target_date as date,
-         ($2::bigint = any(array[
-           project.user_id,
-           milestone.responsible_user_id,
-           milestone.created_by_user_id,
-           milestone.updated_by_user_id,
-           milestone.submitted_by_user_id,
-           milestone.completed_by_user_id
-         ]::bigint[])) as related_to_me
-       from project_milestones milestone
-       join projects project on project.id = milestone.project_id
-       where ${sourceProjectAccessSql}
-       order by milestone.target_date desc, milestone.id desc
-       limit 120`,
-      [organizationId, userId],
-    )
-  const mapRows = (
-    kind: WeeklyReportSourceKind,
-    rows: typeof todos.rows,
-  ): WeeklyReportSourceCandidate[] => rows.map((row) => ({
-    date: dateOnly(row.date),
-    id: Number(row.id),
-    kind,
-    projectId: Number(row.project_id),
-    projectName: decryptText(row.project_name),
-    relatedToMe: row.related_to_me,
-    status: row.status,
-    title: decryptText(row.title),
-  }))
-  return [
-    ...mapRows('todo', todos.rows),
-    ...mapRows('delivery', events.rows),
-    ...mapRows('milestone', milestones.rows),
-  ]
-}
-
-async function validateSourceRefs(
-  client: PoolClient,
-  organizationId: number,
-  userId: number,
-  refs: WeeklyReportSourceRef[],
-) {
-  if (refs.length === 0) return
-  const grouped = {
-    delivery: refs.filter((ref) => ref.kind === 'delivery').map((ref) => ref.id),
-    milestone: refs.filter((ref) => ref.kind === 'milestone').map((ref) => ref.id),
-    todo: refs.filter((ref) => ref.kind === 'todo').map((ref) => ref.id),
-  }
-  const todos = await client.query<{ id: string; project_id: string }>(
-      `select todo.id, todo.project_id
-       from todos todo
-       join projects project on project.id = todo.project_id
-       where ${sourceProjectAccessSql} and todo.id = any($3::bigint[])`,
-      [organizationId, userId, grouped.todo],
-    )
-  const events = await client.query<{ id: string; project_id: string }>(
-      `select event.id, event.project_id
-       from project_package_events event
-       join projects project on project.id = event.project_id
-       where ${sourceProjectAccessSql} and event.id = any($3::bigint[])`,
-      [organizationId, userId, grouped.delivery],
-    )
-  const milestones = await client.query<{ id: string; project_id: string }>(
-      `select milestone.id, milestone.project_id
-       from project_milestones milestone
-       join projects project on project.id = milestone.project_id
-       where ${sourceProjectAccessSql} and milestone.id = any($3::bigint[])`,
-      [organizationId, userId, grouped.milestone],
-    )
-  const authorized = new Set([
-    ...todos.rows.map((row) => `todo:${row.id}:${row.project_id}`),
-    ...events.rows.map((row) => `delivery:${row.id}:${row.project_id}`),
-    ...milestones.rows.map((row) => `milestone:${row.id}:${row.project_id}`),
-  ])
-  if (refs.some((ref) => !authorized.has(`${ref.kind}:${ref.id}:${ref.projectId}`))) {
-    throw new WeeklyReportError(403, '存在无权关联的周报来源')
-  }
-}
-
-function assertAuthorizedSources(
-  refs: WeeklyReportSourceRef[],
-  candidates: WeeklyReportSourceCandidate[],
-) {
-  const authorized = new Map(candidates.map((source) => [`${source.kind}:${source.id}`, source]))
-  for (const ref of refs) {
-    const candidate = authorized.get(`${ref.kind}:${ref.id}`)
-    if (!candidate || candidate.projectId !== ref.projectId) {
-      throw new WeeklyReportError(403, '存在无权关联的周报来源')
-    }
-  }
-}
-
 async function replaceDraftSources(
   client: PoolClient,
   reportId: number,
@@ -461,7 +299,12 @@ async function replaceDraftSources(
     'delete from organization_weekly_report_sources where report_id = $1 and revision_id is null',
     [reportId],
   )
+  await client.query('delete from organization_weekly_report_test_sources where report_id = $1::bigint and revision_id is null', [reportId])
   for (const ref of refs) {
+    if (!('projectId' in ref)) {
+      await client.query('insert into organization_weekly_report_test_sources(report_id, bug_id, test_plan_id) values ($1::bigint, $2::bigint, $3::bigint)', [reportId, ref.kind === 'bug' ? ref.id : null, ref.kind === 'test_plan' ? ref.id : null])
+      continue
+    }
     await client.query(
       `insert into organization_weekly_report_sources
         (report_id, project_id, todo_id, package_event_id, milestone_id)
@@ -481,6 +324,9 @@ async function saveDraft(params: {
   content: string
   expectedVersion: number
   organizationId: number
+  profile: WeeklyReportProfile
+  strictSources?: boolean
+  convertLegacy?: boolean
   sourceMode: WeeklyReportSourceMode
   sources: WeeklyReportSourceRef[]
   userId: number
@@ -500,13 +346,14 @@ async function saveDraft(params: {
       params.userId,
       params.weekStart,
     )
-    await validateSourceRefs(client, params.organizationId, params.userId, params.sources)
     const current = await client.query<{
       draft_version: number
       id: string
       published_revision_id: string | null
+      draft_content: string
+      report_profile: WeeklyReportProfile | null
     }>(
-      `select id, draft_version, published_revision_id
+      `select id, draft_version, published_revision_id, report_profile, draft_content
        from organization_weekly_reports
        where organization_id = $1 and user_id = $2 and week_start = $3
        for update`,
@@ -516,6 +363,20 @@ async function saveDraft(params: {
     if ((report?.draft_version ?? 0) !== params.expectedVersion) {
       throw new WeeklyReportError(409, '周报已在其他窗口更新，请刷新后重试')
     }
+    await requireWeeklyProfile(client, params.userId, params.profile)
+    if (report?.report_profile && report.report_profile !== params.profile) throw new WeeklyReportError(409, '本周已有其他身份的周报，请切换到对应身份')
+    if (params.convertLegacy && (!report || report.report_profile || !convertLegacyWeeklyReport(decryptText(report.draft_content), params.profile))) {
+      throw new WeeklyReportError(409, '此周报不能转换，请保留原文编辑')
+    }
+    const profile = report && !params.convertLegacy ? report.report_profile : params.profile
+    assertReportContent(params.content, profile)
+    const existing = report ? await readDraftSources(client, report.id) : []
+    const previous = new Set(existing.map(weeklyReportSourceIdentity))
+    const added = params.sources.filter(ref => !previous.has(weeklyReportSourceIdentity(ref)))
+    if (!profile && (added.length || params.sourceMode === 'ai')) throw new WeeklyReportError(409, '历史周报保留原文编辑，不能新增角色来源或 AI 重写')
+    const base = { organizationId: params.organizationId, userId: params.userId, weekStart, profile: params.profile }
+    await checkSources(client, { ...base, refs: params.sources, enforcePeriod: Boolean(params.strictSources), allowHistoricalKinds: !profile, lock: true })
+    if (!params.strictSources) await checkSources(client, { ...base, refs: added })
     let reportId: number
     if (!report) {
       const rules = await getWeeklyReportRules(client, params.organizationId)
@@ -527,24 +388,25 @@ async function saveDraft(params: {
       const inserted = await client.query<{ id: string }>(
         `insert into organization_weekly_reports (
            organization_id, user_id, week_start, content, status,
-           draft_content, draft_version, draft_source_mode
-         ) values ($1, $2, $3, $4, 'draft', $4, 1, $5)
+           draft_content, draft_version, draft_source_mode, report_profile
+         ) values ($1::bigint, $2::bigint, $3::date, $4::text, 'draft', $4::text, 1, $5::text, $6::text)
          returning id`,
-        [params.organizationId, params.userId, weekStart, encryptText(params.content), params.sourceMode],
+        [params.organizationId, params.userId, weekStart, encryptText(params.content), params.sourceMode, profile],
       )
       reportId = Number(inserted.rows[0].id)
     } else {
       reportId = Number(report.id)
       await client.query(
         `update organization_weekly_reports
-         set draft_content = $1,
+         set draft_content = $1::text,
+             report_profile = $4::text,
              draft_version = draft_version + 1,
              draft_source_mode = $2,
-             content = case when published_revision_id is null then $1 else content end,
+             content = case when published_revision_id is null then $1::text else content end,
              status = case when published_revision_id is null then 'draft' else status end,
              updated_at = now()
          where id = $3`,
-        [encryptText(params.content), params.sourceMode, reportId],
+        [encryptText(params.content), params.sourceMode, reportId, profile],
       )
     }
     await replaceDraftSources(client, reportId, params.sources)
@@ -557,12 +419,13 @@ async function saveDraft(params: {
   }
 }
 
-async function getWeeklyReport(organizationId: number, userId: number, weekStart: string) {
+async function getWeeklyReport(organizationId: number, userId: number, weekStart: string, activeProfile: WeeklyReportProfile) {
   const client = await pool.connect()
   try {
     await requireMember(client, organizationId, userId)
     const normalizedWeekStart = await normalizeExistingReportWeek(client, organizationId, userId, weekStart)
     const reportResult = await client.query<{
+      report_profile: WeeklyReportProfile | null
       draft_content: string
       draft_source_mode: WeeklyReportSourceMode
       draft_version: number
@@ -572,7 +435,7 @@ async function getWeeklyReport(organizationId: number, userId: number, weekStart
       published_revision_number: number | null
       published_submitted_at: Date | null
     }>(
-      `select report.id, report.draft_content, report.draft_version,
+      `select report.id, report.report_profile, report.draft_content, report.draft_version,
          report.draft_source_mode, revision.content as published_content,
          revision.draft_version as published_draft_version,
          revision.revision_number as published_revision_number,
@@ -584,25 +447,7 @@ async function getWeeklyReport(organizationId: number, userId: number, weekStart
       [organizationId, userId, normalizedWeekStart],
     )
     const report = reportResult.rows[0]
-    const sources = report
-      ? await client.query<{
-        id: string
-        kind: WeeklyReportSourceKind
-        project_id: string
-      }>(
-        `select project_id,
-           case
-             when todo_id is not null then 'todo'
-             when package_event_id is not null then 'delivery'
-             else 'milestone'
-           end as kind,
-           coalesce(todo_id, package_event_id, milestone_id) as id
-         from organization_weekly_report_sources
-         where report_id = $1 and revision_id is null
-         order by id`,
-        [report.id],
-      )
-      : { rows: [] }
+    const sources = report ? await readDraftSources(client, report.id) : []
     const draftVersion = report?.draft_version ?? 0
     const publishedRevision = report?.published_revision_number ?? null
     const state = !report
@@ -618,11 +463,13 @@ async function getWeeklyReport(organizationId: number, userId: number, weekStart
       publishedContent: report?.published_content ? decryptText(report.published_content) : '',
       publishedRevision,
       sourceMode: report?.draft_source_mode ?? 'manual',
-      sources: sources.rows.map((source) => ({
-        id: Number(source.id),
-        kind: source.kind,
-        projectId: Number(source.project_id),
-      })),
+      sources,
+      reportProfile: report?.report_profile ?? null,
+      activeProfile,
+      allowedSourceKinds: report && report.report_profile !== activeProfile ? [] : [...weeklyReportProfiles[activeProfile].sourceKinds],
+      readOnlyReason: report?.report_profile && report.report_profile !== activeProfile ? '本周已有其他身份的周报，请切换到对应身份继续填写' : null,
+      progressSummary: report ? weeklyReportContentProgress(decryptText(report.draft_content)) : null,
+      publishedProgressSummary: report?.published_content ? weeklyReportContentProgress(decryptText(report.published_content)) : null,
       state,
       submittedAt: report?.published_submitted_at?.toISOString() ?? null,
       weekStart: normalizedWeekStart,
@@ -652,11 +499,12 @@ async function listWeeklyReports(
       published_draft_version: number | null
       published_revision_number: number | null
       published_submitted_at: Date | null
+      report_profile: WeeklyReportProfile | null
       source_count: string
       updated_at: Date
       week_start: Date | string
     }>(
-      `select report.week_start, report.draft_version, report.updated_at,
+      `select report.week_start, report.report_profile, report.draft_version, report.updated_at,
          revision.draft_version as published_draft_version,
          revision.revision_number as published_revision_number,
          revision.submitted_at as published_submitted_at,
@@ -664,7 +512,7 @@ async function listWeeklyReports(
            select count(*)
            from organization_weekly_report_sources source
            where source.report_id = report.id and source.revision_id is null
-         ) as source_count
+         ) + (select count(*) from organization_weekly_report_test_sources source where source.report_id = report.id and source.revision_id is null) as source_count
        from organization_weekly_reports report
        left join organization_weekly_report_revisions revision
          on revision.id = report.published_revision_id
@@ -675,6 +523,7 @@ async function listWeeklyReports(
     )
     return {
       items: reportResult.rows.map((report) => ({
+        reportProfile: report.report_profile,
         publishedRevision: report.published_revision_number,
         sourceCount: Number(report.source_count),
         state: !report.published_revision_number
@@ -696,6 +545,7 @@ async function listWeeklyReports(
 }
 
 async function submitWeeklyReport(params: {
+  profile: WeeklyReportProfile
   expectedVersion: number
   organizationId: number
   userId: number
@@ -716,12 +566,13 @@ async function submitWeeklyReport(params: {
       params.weekStart,
     )
     const current = await client.query<{
+      report_profile: WeeklyReportProfile | null
       draft_content: string
       draft_source_mode: WeeklyReportSourceMode
       draft_version: number
       id: string
     }>(
-      `select id, draft_content, draft_version, draft_source_mode
+      `select id, report_profile, draft_content, draft_version, draft_source_mode
        from organization_weekly_reports
        where organization_id = $1 and user_id = $2 and week_start = $3
        for update`,
@@ -733,6 +584,14 @@ async function submitWeeklyReport(params: {
     }
     const content = decryptText(report.draft_content).trim()
     if (!content) throw new WeeklyReportError(400, '周报正文不能为空')
+    await requireWeeklyProfile(client, params.userId, params.profile)
+    if (report.report_profile && report.report_profile !== params.profile) throw new WeeklyReportError(409, '请切换到周报对应身份后提交')
+    assertReportContent(content, report.report_profile, true)
+    await checkSources(client, { organizationId: params.organizationId, userId: params.userId, weekStart, profile: params.profile,
+      refs: await readDraftSources(client, report.id), enforcePeriod: Boolean(report.report_profile), allowHistoricalKinds: !report.report_profile, lock: true })
+    const parsed = parseWeeklyReportDocument(content)
+    const publishedContent = encryptText(parsed ? serializeWeeklyReportDocument({ ...parsed,
+      items: parsed.items.filter(hasItemContent).map(item => ({ ...item, tasks: item.tasks.filter(hasTaskContent) })) }) : content)
     const nextRevision = await client.query<{ revision_number: number }>(
       `select coalesce(max(revision_number), 0) + 1 as revision_number
        from organization_weekly_report_revisions where report_id = $1`,
@@ -741,16 +600,17 @@ async function submitWeeklyReport(params: {
     const revision = await client.query<{ id: string }>(
       `insert into organization_weekly_report_revisions (
          report_id, revision_number, draft_version, content, source_mode,
-         submitted_by_user_id
-       ) values ($1, $2, $3, $4, $5, $6)
+         submitted_by_user_id, report_profile
+       ) values ($1, $2, $3, $4, $5, $6, $7)
        returning id`,
       [
         report.id,
         nextRevision.rows[0].revision_number,
         report.draft_version,
-        report.draft_content,
+        publishedContent,
         report.draft_source_mode,
         params.userId,
+        report.report_profile,
       ],
     )
     await client.query(
@@ -762,15 +622,18 @@ async function submitWeeklyReport(params: {
        where report_id = $1 and revision_id is null`,
       [report.id, revision.rows[0].id],
     )
+    await client.query(`insert into organization_weekly_report_test_sources(report_id, revision_id, bug_id, test_plan_id)
+      select report_id, $2::bigint, bug_id, test_plan_id from organization_weekly_report_test_sources
+      where report_id = $1::bigint and revision_id is null`, [report.id, revision.rows[0].id])
     await client.query(
       `update organization_weekly_reports
        set published_revision_id = $1,
-           content = draft_content,
+           content = $3::text,
            status = 'submitted',
            submitted_at = now(),
            updated_at = now()
        where id = $2`,
-      [revision.rows[0].id, report.id],
+      [revision.rows[0].id, report.id, publishedContent],
     )
     await client.query('commit')
   } catch (error) {
@@ -832,23 +695,15 @@ async function loadGenerationFacts(
          (count(pc.id) filter (where pc.result = 'skipped'))::int as skipped
        from test_plans p
        join test_spaces space on space.id = p.test_space_id
-       join test_subjects subject on subject.id = p.test_subject_id
        join test_plan_cases pc on pc.test_plan_id = p.id
+       join test_subjects subject on subject.id = pc.test_subject_id
        left join test_space_memberships mine
          on mine.test_space_id = p.test_space_id
         and mine.user_id = $2::bigint
         and mine.status = 'active'
        where space.organization_id = $1::bigint
-         and (mine.test_space_id is not null or exists (
-           select 1
-           from organization_memberships manager
-           join user_roles organization_admin_role
-             on organization_admin_role.user_id = manager.user_id
-            and organization_admin_role.role = 'organization_admin'
-           where manager.organization_id = $1::bigint
-             and manager.user_id = $2::bigint
-             and manager.status = 'active'
-         ))
+         and ${sourceSpaceAccessSql}
+         and pc.result <> 'untested'
          and pc.executed_by_user_id = $2::bigint
          and pc.executed_at >= $3::timestamptz
          and pc.executed_at < $4::timestamptz
@@ -908,8 +763,7 @@ async function loadGenerationFacts(
          project.user_id, todo.created_by_user_id, todo.assignee_user_id,
          todo.watcher_user_id, todo.reviewer_user_id, todo.completed_by_user_id
        ]::bigint[])
-       and todo.updated_at >= $3::timestamptz
-       and todo.updated_at < $4::timestamptz
+       and ${todoPeriodSql}
      group by project.id, project.name
      order by project.id`,
     [organizationId, userId, period.start, period.end],
@@ -930,8 +784,7 @@ async function loadGenerationFacts(
          project.user_id, event.created_by_user_id, event.assignee_user_id,
          event.assigned_by_user_id
        ]::bigint[])
-       and event.updated_at >= $3::timestamptz
-       and event.updated_at < $4::timestamptz
+       and ${deliveryPeriodSql}
      group by project.id, project.name
      order by project.id`,
     [organizationId, userId, period.start, period.end],
@@ -997,6 +850,7 @@ async function loadCollection(client: PoolClient, organizationId: number, weekSt
     email: string
     feishu_email: string | null
     feishu_user_id: string | null
+    report_profile: WeeklyReportProfile | null
     published_content: string | null
     published_draft_version: number | null
     revision_number: number | null
@@ -1005,7 +859,7 @@ async function loadCollection(client: PoolClient, organizationId: number, weekSt
   }>(
     `select membership.user_id, users.email, users.display_name,
        users.feishu_email, users.feishu_user_id,
-       report.draft_version, revision.content as published_content,
+       report.draft_version, revision.report_profile, revision.content as published_content,
        revision.draft_version as published_draft_version,
        revision.revision_number, revision.submitted_at
      from organization_memberships membership
@@ -1026,6 +880,8 @@ async function loadCollection(client: PoolClient, organizationId: number, weekSt
   )
   return result.rows.map((row) => ({
     content: row.published_content ? decryptText(row.published_content) : '',
+    reportProfile: row.report_profile,
+    progressSummary: row.published_content ? weeklyReportContentProgress(decryptText(row.published_content)) : null,
     feishuBound: Boolean(row.feishu_user_id || row.feishu_email),
     memberName: displayName(row),
     state: !row.draft_version
@@ -1083,6 +939,8 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
+    const profile = isWeeklyReportProfile(session.activeRole) ? session.activeRole : null
+    if (!profile) throw new WeeklyReportError(403, '请切换到开发或测试身份')
     const organizationId = positiveId(request.params.organizationId)
     if (!organizationId) throw new WeeklyReportError(400, '组织参数无效')
     const limit = paginationParam(request.query.limit, 10, 1, 50, '分页大小')
@@ -1096,10 +954,12 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
+    const profile = isWeeklyReportProfile(session.activeRole) ? session.activeRole : null
+    if (!profile) throw new WeeklyReportError(403, '请切换到开发或测试身份')
     const organizationId = positiveId(request.params.organizationId)
     if (!organizationId) throw new WeeklyReportError(400, '组织参数无效')
     const weekStart = routeParam(request.params.weekStart)
-    response.json(await getWeeklyReport(organizationId, session.userId, weekStart))
+    response.json(await getWeeklyReport(organizationId, session.userId, weekStart, profile))
   }))
 
   router.get('/weekly-reports/:organizationId/:weekStart/sources', asyncRoute(async (request, response) => {
@@ -1108,18 +968,26 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
+    const profile = isWeeklyReportProfile(session.activeRole) ? session.activeRole : null
+    if (!profile) throw new WeeklyReportError(403, '请切换到开发或测试身份')
     const organizationId = positiveId(request.params.organizationId)
     if (!organizationId) throw new WeeklyReportError(400, '组织参数无效')
     const client = await pool.connect()
     try {
       await requireMember(client, organizationId, session.userId)
-      await normalizeExistingReportWeek(
+      const weekStart = await normalizeExistingReportWeek(
         client,
         organizationId,
         session.userId,
         routeParam(request.params.weekStart),
       )
-      response.json({ sources: await loadSourceCandidates(client, organizationId, session.userId) })
+      await requireWeeklyProfile(client, session.userId, profile)
+      const current = await client.query<{ report_profile: WeeklyReportProfile | null }>('select report_profile from organization_weekly_reports where organization_id = $1 and user_id = $2 and week_start = $3', [organizationId, session.userId, weekStart])
+      if (current.rows[0] && current.rows[0].report_profile !== profile) {
+        response.json({ sources: [], truncated: {}, period: { start: weeklyReportPeriod(weekStart).start, endExclusive: weeklyReportPeriod(weekStart).end }, allowedSourceKinds: [], activeProfile: profile, reportProfile: current.rows[0].report_profile })
+        return
+      }
+      response.json({ ...await loadWeeklyReportSources(client, { organizationId, userId: session.userId, weekStart, profile }), activeProfile: profile, reportProfile: current.rows[0]?.report_profile ?? null })
     } finally {
       client.release()
     }
@@ -1131,14 +999,19 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
+    const profile = isWeeklyReportProfile(session.activeRole) ? session.activeRole : null
+    if (!profile) throw new WeeklyReportError(403, '请切换到开发或测试身份')
     const organizationId = positiveId(request.params.organizationId)
     const expectedVersion = Number(request.body?.expectedVersion)
     if (!organizationId || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
       throw new WeeklyReportError(400, '周报版本参数无效')
     }
-    const content = String(request.body?.content ?? '').trim().slice(0, 12_000)
+    const content: unknown = request.body?.content ?? ''
+    if (typeof content !== 'string' || content.length > WEEKLY_REPORT_CONTENT_LIMIT) throw new WeeklyReportError(400, '周报正文格式无效或超过 12,000 字符')
     const sources = normalizeSourceRefs(request.body?.sources ?? [])
     await saveDraft({
+      profile,
+      convertLegacy: request.body?.convertLegacy === true,
       content,
       expectedVersion,
       organizationId,
@@ -1147,7 +1020,7 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       userId: session.userId,
       weekStart: routeParam(request.params.weekStart),
     })
-    response.json(await getWeeklyReport(organizationId, session.userId, routeParam(request.params.weekStart)))
+    response.json(await getWeeklyReport(organizationId, session.userId, routeParam(request.params.weekStart), profile))
   }))
 
   router.post('/weekly-reports/:organizationId/:weekStart/generate', asyncRoute(async (request, response) => {
@@ -1156,6 +1029,8 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
+    const profile = isWeeklyReportProfile(session.activeRole) ? session.activeRole : null
+    if (!profile) throw new WeeklyReportError(403, '请切换到开发或测试身份')
     const organizationId = positiveId(request.params.organizationId)
     const expectedVersion = Number(request.body?.expectedVersion)
     if (!organizationId || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
@@ -1165,7 +1040,7 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
     const client = await pool.connect()
     let organizationName: string
     let userName: string
-    let generationSources: WeeklyReportSourceCandidate[]
+    let generationSources: WeeklyReportSourceRef[]
     let generationFacts: WeeklyReportGenerationFacts
     let normalizedWeekStart: string
     try {
@@ -1187,13 +1062,13 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       if (!organization.rows[0]) throw new WeeklyReportError(404, '组织不存在')
       organizationName = decryptText(organization.rows[0].name)
       userName = organization.rows[0].user_name
-      const candidates = await loadSourceCandidates(client, organizationId, session.userId)
-      assertAuthorizedSources(requestedSources, candidates)
-      generationSources = requestedSources.length > 0
-        ? requestedSources.map((ref) => candidates.find((candidate) => (
-          candidate.kind === ref.kind && candidate.id === ref.id
-        ))!).filter(Boolean)
-        : candidates.filter((candidate) => candidate.relatedToMe).slice(0, 80)
+      await requireWeeklyProfile(client, session.userId, profile)
+      const stored = await client.query<{ report_profile: WeeklyReportProfile | null; draft_version: number }>('select report_profile, draft_version from organization_weekly_reports where organization_id = $1 and user_id = $2 and week_start = $3', [organizationId, session.userId, normalizedWeekStart])
+      if (stored.rows[0] && stored.rows[0].report_profile !== profile) throw new WeeklyReportError(409, '此周报身份不支持当前 AI 起草，请保留原文')
+      if ((stored.rows[0]?.draft_version ?? 0) !== expectedVersion) throw new WeeklyReportError(409, '周报已更新，请刷新后重试')
+      const sourceParams = { organizationId, userId: session.userId, weekStart: normalizedWeekStart, profile }
+      generationSources = requestedSources.length ? await checkSources(client, { ...sourceParams, refs: requestedSources })
+        : (await loadWeeklyReportSources(client, sourceParams)).sources.filter(source => source.relatedToMe).slice(0, 80)
       generationFacts = await loadGenerationFacts(
         client,
         organizationId,
@@ -1220,21 +1095,24 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(generated.status).json({ error: generated.error ?? 'AI 周报生成失败' })
       return
     }
-    if (!hasCanonicalWeeklyReportStructure(generated.message)) {
+    const generatedContent = prepareGeneratedWeeklyReport(generated.message, profile)
+    if (!generatedContent) {
       response.status(502).json({ error: 'AI 返回的周报结构不完整，请重试' })
       return
     }
-    const refs = generationSources.map(({ id, kind, projectId }) => ({ id, kind, projectId }))
+    const refs = normalizeSourceRefs(generationSources)
     await saveDraft({
-      content: generated.message,
+      profile,
+      content: generatedContent,
       expectedVersion,
       organizationId,
+      strictSources: true,
       sourceMode: 'ai',
       sources: refs,
       userId: session.userId,
       weekStart: normalizedWeekStart,
     })
-    response.json(await getWeeklyReport(organizationId, session.userId, normalizedWeekStart))
+    response.json(await getWeeklyReport(organizationId, session.userId, normalizedWeekStart, profile))
   }))
 
   router.post('/weekly-reports/:organizationId/:weekStart/submit', asyncRoute(async (request, response) => {
@@ -1243,18 +1121,21 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
+    const profile = isWeeklyReportProfile(session.activeRole) ? session.activeRole : null
+    if (!profile) throw new WeeklyReportError(403, '请切换到开发或测试身份')
     const organizationId = positiveId(request.params.organizationId)
     const expectedVersion = Number(request.body?.expectedVersion)
     if (!organizationId || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
       throw new WeeklyReportError(400, '周报版本参数无效')
     }
     await submitWeeklyReport({
+      profile,
       expectedVersion,
       organizationId,
       userId: session.userId,
       weekStart: routeParam(request.params.weekStart),
     })
-    response.json(await getWeeklyReport(organizationId, session.userId, routeParam(request.params.weekStart)))
+    response.json(await getWeeklyReport(organizationId, session.userId, routeParam(request.params.weekStart), profile))
   }))
 
   router.get('/organizations/:organizationId/weekly-report-collection/:weekStart', asyncRoute(async (request, response) => {
@@ -1263,6 +1144,8 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
+    const profile = isWeeklyReportProfile(session.activeRole) ? session.activeRole : null
+    if (!profile) throw new WeeklyReportError(403, '请切换到开发或测试身份')
     const organizationId = positiveId(request.params.organizationId)
     if (!organizationId) throw new WeeklyReportError(400, '组织参数无效')
     const client = await pool.connect()
@@ -1281,6 +1164,8 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
+    const profile = isWeeklyReportProfile(session.activeRole) ? session.activeRole : null
+    if (!profile) throw new WeeklyReportError(403, '请切换到开发或测试身份')
     const organizationId = positiveId(request.params.organizationId)
     if (!organizationId) throw new WeeklyReportError(400, '组织参数无效')
     const targetUserIds = Array.isArray(request.body?.userIds)

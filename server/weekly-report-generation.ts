@@ -71,8 +71,8 @@ function formatDeveloperSource(params: GenerationSourceParams) {
   return [
     `周报对象：${clip(params.organizationName, 100)} / ${clip(params.userName, 80)}`,
     `周期：${formatChinesePeriod(params.weekStart)}`,
-    '请输出可直接编辑的中文 Markdown 周报。项目日记按日期和项目归纳每天的记录，将事实分别整理到固定的四个章节。',
-    WEEKLY_REPORT_AI_STRUCTURE_INSTRUCTION,
+    '请输出可直接编辑的中文 Markdown 周报。项目日记按日期和项目归纳每天的记录，将事实按事项和任务逐项整理。',
+    weeklyReportDocumentInstruction(params.role),
     '项目待办和交付事件只能作为数字统计，不得逐条列举其标题、描述或其他明细。',
     '输入事实：项目日记',
     journals,
@@ -86,15 +86,15 @@ function formatTesterSource(params: GenerationSourceParams) {
     ? params.testerPlans.map((plan) => [
       `### 计划：${clip(plan.planName, 160)}`,
       `- 测试对象：${clip(plan.testTarget, 160)}`,
-      `- 本周执行：${plan.executed} 条`,
+      `- 本周期本人保留的最新执行记录：${plan.executed} 条`,
       `- 通过：${plan.passed} 条，失败：${plan.failed} 条，阻塞：${plan.blocked} 条，跳过：${plan.skipped} 条`,
     ].join('\n')).join('\n')
     : '暂无本周用例执行记录。'
   return [
     `周报对象：${clip(params.organizationName, 100)} / ${clip(params.userName, 80)}`,
     `周期：${formatChinesePeriod(params.weekStart)}`,
-    '请输出可直接编辑的中文 Markdown 周报。测试工程师没有项目日记，只总结测试计划和用例执行情况，并将事实分别整理到固定的四个章节；必须写清每个测试计划的具体标题和测试对象，不要补写项目待办或交付事件明细。',
-    WEEKLY_REPORT_AI_STRUCTURE_INSTRUCTION,
+    '请输出可直接编辑的中文 Markdown 周报。测试工程师没有项目日记，只总结测试计划和用例执行情况，并将事实按事项和任务逐项整理；必须写清每个测试计划的具体标题和测试对象，不要补写项目待办或交付事件明细。',
+    weeklyReportDocumentInstruction(params.role),
     '输入事实：测试计划与用例执行',
     plans,
   ].join('\n').slice(0, 12_000)
@@ -103,4 +103,4 @@ function formatTesterSource(params: GenerationSourceParams) {
 export function buildWeeklyReportGenerationSource(params: GenerationSourceParams) {
   return params.role === 'tester' ? formatTesterSource(params) : formatDeveloperSource(params)
 }
-import { WEEKLY_REPORT_AI_STRUCTURE_INSTRUCTION } from '../shared/weekly-report-template.ts'
+import { weeklyReportDocumentInstruction } from '../shared/weekly-report-document.ts'
