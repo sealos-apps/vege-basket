@@ -339,6 +339,10 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   change it, and a direct active member who has created at least one Bug in that space may use
   the version-only route; neither permission grants broader settings access. Bug version edits
   use a dropdown of existing versions from the current organization.
+- User-visible test-space references, including member management, invitations, ownership
+  transfers, Bug sharing, workbench notifications, organization task views, and Feishu
+  notifications, display the space name together with its version label. Missing legacy labels
+  display `未指定版本`; the stored `test_space_id` and `version_label` remain separate fields.
 - Test environments are organization resources with an encrypted name and absolute HTTP(S)
   access URL. They are shared automatically by every current and future test space in the same organization. Only
   an account with `organization_admin` plus active organization `owner` or `admin` access

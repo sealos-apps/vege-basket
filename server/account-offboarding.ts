@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg'
 import { decryptText, encryptText } from './crypto.ts'
 import { pool, query } from './db.ts'
 import type { UserAccountStatus } from '../shared/user-lifecycle.ts'
+import { formatTestSpaceReference } from '../shared/test-space-reference.ts'
 
 export type OffboardingAdmin = {
   displayName: string
@@ -326,8 +327,8 @@ export async function offboardUser(
         transferredProjectCount += 1
       }
 
-      const spaces = await client.query<{ id: string; name: string }>(
-        `select id, name from test_spaces where organization_id = $1 and owner_user_id = $2 order by id for update`,
+      const spaces = await client.query<{ id: string; name: string; version_label: string | null }>(
+        `select id, name, version_label from test_spaces where organization_id = $1 and owner_user_id = $2 order by id for update`,
         [organizationId, userId],
       )
       for (const space of spaces.rows) {
@@ -521,7 +522,10 @@ export async function offboardUser(
         bugCount: bugs.rows.length,
         name: decryptText(activeMemberships.rows.find((membership) => Number(membership.id) === organizationId)!.name),
         projectNames: projects.rows.map((project) => decryptText(project.name)),
-        testSpaceNames: spaces.rows.map((space) => decryptText(space.name)),
+        testSpaceNames: spaces.rows.map((space) => formatTestSpaceReference(
+          decryptText(space.name),
+          space.version_label ? decryptText(space.version_label) : undefined,
+        )),
         transferredTodoCount,
       })
       notificationOrganizationsByRecipient.set(targetAdminUserId, notificationOrganizations)

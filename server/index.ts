@@ -3255,7 +3255,15 @@ async function pumpFeishuAiMessages(preferredMessageId?: string) {
   feishuAiPumpRunning = true
   try {
     for (let index = 0; index < 5; index += 1) {
-      const claim = await claimFeishuAiMessage(index === 0 ? preferredMessageId : undefined)
+      let claim: FeishuAiMessageClaim | null
+      try {
+        claim = await claimFeishuAiMessage(index === 0 ? preferredMessageId : undefined)
+      } catch (error) {
+        console.error('Feishu AI message claim failed', {
+          error: error instanceof Error ? error.message : error,
+        })
+        break
+      }
       if (!claim) break
       try {
         await processFeishuAiMessage(claim)
@@ -3280,7 +3288,11 @@ async function pumpFeishuAiMessages(preferredMessageId?: string) {
 
 function scheduleFeishuAiMessages(messageId?: string) {
   queueMicrotask(() => {
-    void pumpFeishuAiMessages(messageId)
+    void pumpFeishuAiMessages(messageId).catch((error: unknown) => {
+      console.error('Feishu AI message pump failed', {
+        error: error instanceof Error ? error.message : error,
+      })
+    })
   })
 }
 
@@ -6107,6 +6119,7 @@ type TestWorkbenchNotificationRow = {
   recipient_user_id: string
   test_plan_name: string | null
   test_space_name: string
+  test_space_version_label: string | null
   title: string | null
 }
 
@@ -6375,7 +6388,7 @@ function buildFeishuNotificationText(candidate: FeishuNotificationCandidate, tar
     const bugTitle = sanitizeFeishuMarkdownText(candidate.bugTitle || '未命名 Bug')
     const testSpaceName = sanitizeFeishuMarkdownText(candidate.testSpaceName || '未命名测试空间')
     const testSubjectName = sanitizeFeishuMarkdownText(candidate.testSubjectName || '未记录')
-    const testSpaceVersionLabel = sanitizeFeishuMarkdownText(candidate.testSpaceVersionLabel || '未指定')
+    const testSpaceVersionLabel = sanitizeFeishuMarkdownText(candidate.testSpaceVersionLabel || '未指定版本')
     const testPlanName = candidate.testPlanName
       ? sanitizeFeishuMarkdownText(candidate.testPlanName)
       : ''
@@ -6445,6 +6458,7 @@ function buildFeishuNotificationText(candidate: FeishuNotificationCandidate, tar
       `【Veges 通知】${candidate.operatorName || '项目成员'} ${activity}`,
       '',
       `测试空间：${candidate.testSpaceName ?? '未命名测试空间'}`,
+      `版本号：${candidate.testSpaceVersionLabel ?? '未指定版本'}`,
       candidate.testPlanName ? `测试计划：${candidate.testPlanName}` : '',
       candidate.bugTitle ? `Bug 标题：${candidate.bugTitle}` : '',
       candidate.testBugStatus ? `当前状态：${candidate.testBugStatus}` : '',
@@ -6990,8 +7004,8 @@ function buildFeishuInteractiveCard(
       : ''
     const contextLines = [
       `**测试空间**\n${sanitizeFeishuMarkdownText(candidate.testSpaceName || '未命名测试空间')}`,
+      `**版本号**\n${sanitizeFeishuMarkdownText(candidate.testSpaceVersionLabel || '未指定版本')}`,
       `**测试对象**\n${sanitizeFeishuMarkdownText(candidate.testSubjectName || '未记录')}`,
-      `**版本号**\n${sanitizeFeishuMarkdownText(candidate.testSpaceVersionLabel || '未指定')}`,
       candidate.testPlanName
         ? `**测试计划**\n${sanitizeFeishuMarkdownText(candidate.testPlanName)}`
         : '',
@@ -7316,6 +7330,7 @@ function buildFeishuInteractiveCard(
       : ''
     const lines = [
       `**测试空间**\n${sanitizeFeishuMarkdownText(candidate.testSpaceName || '未命名测试空间')}`,
+      `**版本号**\n${sanitizeFeishuMarkdownText(candidate.testSpaceVersionLabel || '未指定版本')}`,
       candidate.testPlanName ? `**测试计划**\n${sanitizeFeishuMarkdownText(candidate.testPlanName)}` : '',
       candidate.bugTitle ? `**Bug 标题**\n${sanitizeFeishuMarkdownText(candidate.bugTitle)}` : '',
       candidate.testBugStatus ? `**当前状态**\n${sanitizeFeishuMarkdownText(candidate.testBugStatus)}` : '',
@@ -8491,6 +8506,9 @@ function testWorkbenchNotificationCandidate<
     testCommentContent: row.comment_content ? decryptText(row.comment_content) : undefined,
     testPlanName: row.test_plan_name ? decryptText(row.test_plan_name) : undefined,
     testSpaceName: decryptText(row.test_space_name),
+    testSpaceVersionLabel: row.test_space_version_label
+      ? decryptText(row.test_space_version_label)
+      : undefined,
     title: row.title ? decryptText(row.title) : activity,
     userId: Number(row.recipient_user_id),
   }
@@ -8512,7 +8530,7 @@ async function buildTestPlanAssignedFeishuCandidate(event: TestPlanAssignedEvent
   const result = await query<TestWorkbenchNotificationRow>(
     `
     select p.id, p.name as test_plan_name, p.owner_user_id as recipient_user_id,
-           space.name as test_space_name, p.project_id,
+           space.name as test_space_name, space.version_label as test_space_version_label, p.project_id,
            project.name as project_name,
            owner.email as recipient_email, owner.display_name as recipient_display_name,
            owner.feishu_email as recipient_feishu_email, owner.feishu_user_id as recipient_feishu_user_id,
@@ -8541,7 +8559,7 @@ async function buildTestBugStatusChangedFeishuCandidate(event: TestBugStatusChan
     select b.id, b.title as bug_title, b.status as bug_status,
            bug_share.token_encrypted as bug_share_token_encrypted,
            b.reporter_user_id as recipient_user_id,
-           space.name as test_space_name, plan.name as test_plan_name,
+           space.name as test_space_name, space.version_label as test_space_version_label, plan.name as test_plan_name,
            plan.project_id, project.name as project_name,
            recipient.email as recipient_email, recipient.display_name as recipient_display_name,
            recipient.feishu_email as recipient_feishu_email, recipient.feishu_user_id as recipient_feishu_user_id,
@@ -8579,7 +8597,7 @@ async function buildTestBugRejectedFeishuCandidate(event: TestBugRejectedEvent) 
     select b.id, b.title as bug_title, b.status as bug_status,
            bug_share.token_encrypted as bug_share_token_encrypted,
            b.reporter_user_id as recipient_user_id,
-           space.name as test_space_name, plan.name as test_plan_name,
+           space.name as test_space_name, space.version_label as test_space_version_label, plan.name as test_plan_name,
            plan.project_id, project.name as project_name,
            recipient.email as recipient_email, recipient.display_name as recipient_display_name,
            recipient.feishu_email as recipient_feishu_email, recipient.feishu_user_id as recipient_feishu_user_id,
@@ -8620,7 +8638,7 @@ async function buildTestBugCommentFeishuCandidates(event: TestBugCommentAddedEve
     select c.id, b.title as bug_title, b.status as bug_status,
            bug_share.token_encrypted as bug_share_token_encrypted,
            c.content as comment_content, recipient.id as recipient_user_id,
-           space.name as test_space_name, plan.name as test_plan_name,
+           space.name as test_space_name, space.version_label as test_space_version_label, plan.name as test_plan_name,
            plan.project_id, project.name as project_name,
            recipient.email as recipient_email, recipient.display_name as recipient_display_name,
            recipient.feishu_email as recipient_feishu_email, recipient.feishu_user_id as recipient_feishu_user_id,
@@ -8653,7 +8671,7 @@ async function buildTestCaseChangedFeishuCandidate(event: TestCaseChangedEvent) 
   const result = await query<TestWorkbenchNotificationRow>(
     `
     select c.id, c.title, c.created_by_user_id as recipient_user_id,
-           space.name as test_space_name, null::text as test_plan_name,
+           space.name as test_space_name, space.version_label as test_space_version_label, null::text as test_plan_name,
            null::bigint as project_id, null::text as project_name,
            recipient.email as recipient_email, recipient.display_name as recipient_display_name,
            recipient.feishu_email as recipient_feishu_email, recipient.feishu_user_id as recipient_feishu_user_id,
@@ -8678,7 +8696,7 @@ async function buildTestExecutionResultFeishuCandidate(event: TestExecutionResul
     `
     select pc.id, p.name as test_plan_name,
            coalesce(p.owner_user_id, p.created_by_user_id) as recipient_user_id,
-           space.name as test_space_name, p.project_id, project.name as project_name,
+           space.name as test_space_name, space.version_label as test_space_version_label, p.project_id, project.name as project_name,
            recipient.email as recipient_email, recipient.display_name as recipient_display_name,
            recipient.feishu_email as recipient_feishu_email, recipient.feishu_user_id as recipient_feishu_user_id,
            actor.email as actor_email, actor.display_name as actor_display_name,

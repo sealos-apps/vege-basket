@@ -138,6 +138,7 @@ export type OrganizationTask = {
   kind: 'bug' | 'delivery' | 'todo'
   projectId?: number
   projectName: string
+  testSpaceVersionLabel?: string
   status: string
   title: string
   updatedAt: string

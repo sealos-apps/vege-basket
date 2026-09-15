@@ -94,6 +94,19 @@ test('case workbench loads the whole space and treats test subjects as virtual r
   assert.doesNotMatch(testWorkbenchClientSource, /veges\.case-directories\.hidden/u)
 })
 
+test('case directory panel supports accessible persisted resizing on desktop', () => {
+  assert.match(testWorkbenchClientSource, /veges\.case-directories\.width\.v1\.\$\{currentUserId\}\.\$\{spaceId\}/u)
+  assert.match(testWorkbenchClientSource, /role="separator"/u)
+  assert.match(testWorkbenchClientSource, /aria-controls="test-case-directory-panel"/u)
+  assert.match(testWorkbenchClientSource, /aria-orientation="vertical"/u)
+  assert.match(testWorkbenchClientSource, /event\.currentTarget\.setPointerCapture\(event\.pointerId\)/u)
+  assert.match(testWorkbenchClientSource, /event\.key === 'ArrowLeft'/u)
+  assert.match(testWorkbenchClientSource, /event\.key === 'ArrowRight'/u)
+  assert.match(testWorkbenchClientSource, /!panelHidden && !narrow/u)
+  assert.match(testWorkbenchClientSource, /if \(!narrow && !panelHidden\) return/u)
+  assert.match(testWorkbenchClientSource, /onLostPointerCapture=\{cancelDirectoryPanelResize\}/u)
+})
+
 test('test-space member settings do not show unrelated departed accounts', () => {
   assert.doesNotMatch(testWorkbenchSource, /getDepartedUsers/u)
   assert.doesNotMatch(testWorkbenchClientSource, /departedUsers.*TestSpaceSettingsDialog/u)

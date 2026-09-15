@@ -444,6 +444,9 @@ The schema is normalized around these groups:
   package download URLs are signed only when an authorized reader copies a verification script,
   while cluster-image scripts use the immutable image reference directly.
   Test spaces are an owner-managed authorization boundary independent from projects.
+  Any user-visible reference to a test space includes its current version label alongside
+  the decrypted space name; legacy rows without a label render an explicit missing-version
+  marker while identifiers remain separate.
   Test subjects describe the tested object itself and record their creator; only that
   creator may delete the subject and its cascading test data. Test plans may optionally
   link to an accessible project after project access is checked, and also record their
