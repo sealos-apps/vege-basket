@@ -231,6 +231,7 @@ const emptyWorkbench: TestWorkbenchData = {
   departedUserIds: [],
   folders: [],
   notifications: [],
+  modules: [],
   planCases: [],
   plans: [],
   spaces: [],
@@ -857,21 +858,22 @@ export function TestWorkbench({
       ? { label: bug.reporterName, value: String(bug.reporterUserId) }
       : undefined),
     spaces: [],
+    modules: [{ label: '无模块', value: 'none' }, ...Array.from(new Map([
+      ...data.modules.filter((module) => module.enabled).map((module) => [String(module.id), { label: module.name, value: String(module.id) }] as const),
+      ...bugs.flatMap((bug) => bug.moduleId && bug.moduleName ? [[String(bug.moduleId), { label: bug.moduleName, value: String(bug.moduleId) }] as const] : []),
+    ]).values())],
     ...(() => {
       const folders = data.folders.filter((folder) => folder.testSpaceId === spaceId)
       const index = createDirectoryIndex(folders)
       return {
-        cases: data.cases.filter((item) => item.testSpaceId === spaceId).map((item) => ({
-          label: `CASE-${item.id} ${item.title}`, value: String(item.id),
-          folderIds: index.path(item.folderId ?? null).map((folder) => String(folder.id)),
-        })),
+        cases: [],
         folders: folders.map((folder) => ({
           label: `${data.subjects.find((subject) => subject.id === folder.testSubjectId)?.name || ''} / ${index.path(folder.id).map((item) => item.name).join(' / ')}`,
           value: String(folder.id),
         })),
       }
     })(),
-  }), [bugs, data.cases, data.folders, data.subjects, spaceId])
+  }), [bugs, data.folders, data.modules, data.subjects, spaceId])
   const returnedBugs: BugReturnNotification[] = data.notifications.flatMap((notification) => {
     if (notification.kind !== 'test_bug_status_changed') return []
     const bug = data.bugs.find((candidate) => candidate.id === notification.sourceId)
@@ -1568,6 +1570,7 @@ export function TestWorkbench({
         busy={busy}
         editing={Boolean(editingBug)}
         environments={testEnvironments}
+        modules={data.modules}
         open={bugDialogOpen}
         seed={bugSeed}
         cases={spaceCases}
@@ -2295,11 +2298,15 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
   readOnly: boolean
   selectedId?: number
 }) {
-  const [subjectFilter, setSubjectFilter] = useState('all')
-  const planSubjects = data.subjects.filter((subject) => plans.some((plan) => plan.testSpaceId === subject.testSpaceId))
-  const visiblePlans = subjectFilter === 'all'
+  const [moduleFilter, setModuleFilter] = useState('all')
+  const planModuleIds = (plan: TestPlan) => new Set(data.planCases
+    .filter((item) => item.testPlanId === plan.id && item.testCaseId)
+    .map((item) => data.cases.find((candidate) => candidate.id === item.testCaseId)?.moduleId ?? null))
+  const visiblePlans = moduleFilter === 'all'
     ? plans
-    : plans.filter((plan) => plan.testSubjectIds.includes(Number(subjectFilter)))
+    : plans.filter((plan) => moduleFilter === 'none'
+      ? planModuleIds(plan).has(null)
+      : planModuleIds(plan).has(Number(moduleFilter)))
   const [executionPage, setExecutionPage] = useState(0)
   const [executionPageSize, setExecutionPageSize] = useState(6)
   const [detailExecutionId, setDetailExecutionId] = useState<number>()
@@ -2348,7 +2355,7 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
 
   return (
     <div className="test-module-view">
-      <div className="test-module-toolbar"><div><span>执行与回归</span><h1>测试计划</h1></div><div><Select value={subjectFilter} onValueChange={(value) => { setSubjectFilter(value); const first = value === 'all' ? plans[0] : plans.find((plan) => plan.testSubjectIds.includes(Number(value))); if (first) onSelect(first.id) }}><SelectTrigger aria-label="按测试用例目录筛选计划"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部测试用例目录</SelectItem>{planSubjects.map((subject) => <SelectItem key={subject.id} value={String(subject.id)}>{subject.name}</SelectItem>)}</SelectContent></Select>{!readOnly ? <Button onClick={onCreate}><Plus /> 新建计划</Button> : null}</div></div>
+      <div className="test-module-toolbar"><div><span>执行与回归</span><h1>测试计划</h1></div><div><Select value={moduleFilter} onValueChange={(value) => { setModuleFilter(value); const first = value === 'all' ? plans[0] : plans.find((plan) => (value === 'none' ? planModuleIds(plan).has(null) : planModuleIds(plan).has(Number(value)))); if (first) onSelect(first.id) }}><SelectTrigger aria-label="按模块筛选计划"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部模块</SelectItem><SelectItem value="none">无模块</SelectItem>{data.modules.filter((module) => module.enabled).map((module) => <SelectItem key={module.id} value={String(module.id)}>{module.name}</SelectItem>)}</SelectContent></Select>{!readOnly ? <Button onClick={onCreate}><Plus /> 新建计划</Button> : null}</div></div>
       <div className="test-split-view">
         <div className="test-record-list">
           {visiblePlans.length ? visiblePlans.map((plan) => {
@@ -2581,6 +2588,7 @@ function BugDetail({ bug, busy, cases, departedUserIds, draftOwnerUserId, onAssi
     <div className="test-detail-meta test-bug-detail-meta">
       <span>测试用例 <strong>{bug.testCaseId ? `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}` : '待补关联'}</strong></span>
       <span>用例目录 <strong>{bug.testCaseId ? bug.testCaseFolderName || '未分类' : '待补关联'}</strong></span>
+      <span>模块 <strong>{bug.moduleName || '无模块'}</strong></span>
       {bug.testPlanName ? <span>测试计划 <strong>{bug.testPlanName}</strong></span> : null}
       <span>测试空间 <strong>{bug.testSpaceName || '未记录'}</strong></span>
         <span>空间版本 <span className="test-detail-meta-label"><strong>{bug.testSpaceVersionLabel || '未指定'}</strong>{bug.canTransferSpace ? <Button aria-label="迁移到其他测试空间" className="test-detail-meta-copy" disabled={busy} onClick={() => setTransferSpaceOpen(true)} size="icon-xs" title="迁移到其他测试空间" variant="ghost"><PencilSimple /></Button> : null}</span></span>
@@ -4095,6 +4103,7 @@ type TestCaseFormPayload = {
   customTags?: string[]
   expectedResult: string
   folderId?: number | null
+  moduleId?: number | null
   preconditions: string
   priority: Priority
   remarks: string
@@ -4110,6 +4119,8 @@ export function CaseDialog({ defaultFolderId = null, busy, data, onOpenChange, o
 
 function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSubmit, open, spaceId, subjectId, testCase }: Parameters<typeof CaseDialog>[0]) {
   const folders = data.folders.filter((folder) => folder.testSpaceId === spaceId && folder.testSubjectId === subjectId)
+  const currentSpace = data.spaces.find((space) => space.id === spaceId)
+  const modules = data.modules.filter((module) => module.organizationId === currentSpace?.organizationId)
   const [title, setTitle] = useState(testCase?.title ?? '')
   const [folderId, setFolderId] = useState<number | null>(testCase ? testCase.folderId ?? null : defaultFolderId)
   const [preconditions, setPreconditions] = useState(testCase?.preconditions ?? '')
@@ -4119,6 +4130,7 @@ function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSu
   const [priority, setPriority] = useState<Priority>(testCase?.priority ?? 'medium')
   const [caseType, setCaseType] = useState<TestCaseType>(testCase?.caseType ?? 'functional')
   const [customTagsInput, setCustomTagsInput] = useState(testCase?.customTags.join('、') ?? '')
+  const [moduleId, setModuleId] = useState(testCase?.moduleId ? String(testCase.moduleId) : 'none')
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -4136,6 +4148,7 @@ function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSu
               customTags: Array.from(new Set(customTagsInput.split(/[,，;；、\s]+/).map((tag) => tag.trim()).filter(Boolean))).slice(0, 12),
               expectedResult,
               folderId,
+              moduleId: moduleId === 'none' ? null : Number(moduleId),
               preconditions,
               priority,
               remarks,
@@ -4149,6 +4162,7 @@ function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSu
             <legend>基础信息</legend>
             <Label>用例名称<Input autoFocus maxLength={160} value={title} onChange={(event) => setTitle(event.target.value)} /></Label>
             <Label>所属目录<DirectoryPicker folders={folders} value={folderId} onChange={setFolderId} /></Label>
+            <Label>模块<Select value={moduleId} onValueChange={setModuleId}><SelectTrigger aria-label="选择用例模块"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">无模块</SelectItem>{modules.filter((module) => module.enabled || module.id === testCase?.moduleId).map((module) => <SelectItem key={module.id} value={String(module.id)}>{module.name}{module.enabled ? '' : '（已停用）'}</SelectItem>)}</SelectContent></Select></Label>
             <div className="test-form-grid test-case-classification-grid">
               <Label>用例等级<Select value={priority} onValueChange={(value) => setPriority(value as Priority)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="high">P0</SelectItem><SelectItem value="medium">P1</SelectItem><SelectItem value="low">P2</SelectItem></SelectContent></Select></Label>
               <Label>类型<Select value={caseType} onValueChange={(value) => setCaseType(value as TestCaseType)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{Object.entries(caseTypeLabel).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></Label>
@@ -4686,17 +4700,19 @@ type BugDialogPayload = {
   reproductionSteps: string
   severity: BugSeverity
   testEnvironmentId?: number | null
+  moduleId?: number | null
   testPlanCaseId?: number
   testPlanId?: number
-  testCaseId: number
+  testCaseId?: number
+  testSubjectId?: number
   title: string
 }
 
-function BugDialog(props: { busy: boolean; editing: boolean; environments: TestEnvironment[]; onOpenChange: (open: boolean) => void; onSubmit: (payload: BugDialogPayload) => void; open: boolean; seed: Partial<TestBug>; subjects: TestSubject[]; cases: TestCase[]; folders: TestCaseFolder[]; users: TestWorkbenchData['users'] }) {
+function BugDialog(props: { busy: boolean; editing: boolean; environments: TestEnvironment[]; modules: TestWorkbenchData['modules']; onOpenChange: (open: boolean) => void; onSubmit: (payload: BugDialogPayload) => void; open: boolean; seed: Partial<TestBug>; subjects: TestSubject[]; cases: TestCase[]; folders: TestCaseFolder[]; users: TestWorkbenchData['users'] }) {
   return <BugDialogForm key={`${props.open}-${props.editing ? props.seed.id : props.seed.testPlanCaseId ?? 'new'}`} {...props} />
 }
 
-function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, open, seed, subjects, cases, folders, users }: Parameters<typeof BugDialog>[0]) {
+function BugDialogForm({ busy, editing, environments, modules, onOpenChange, onSubmit, open, seed, subjects, cases, folders, users }: Parameters<typeof BugDialog>[0]) {
   const [title, setTitle] = useState(seed.title ?? '')
   const [severity, setSeverity] = useState<BugSeverity>(seed.severity ?? 'major')
   const [priority, setPriority] = useState<Priority>(seed.priority ?? 'medium')
@@ -4711,9 +4727,10 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
   const [actualResult, setActualResult] = useState(seed.actualResult ?? '')
   const [assigneeUserId, setAssigneeUserId] = useState(seed.assigneeUserId ? String(seed.assigneeUserId) : 'none')
   const [testCaseId, setTestCaseId] = useState(seed.testCaseId ? String(seed.testCaseId) : '')
+  const [moduleId, setModuleId] = useState(seed.moduleId ? String(seed.moduleId) : 'none')
   const [caseSearch, setCaseSearch] = useState('')
   const [caseFolder, setCaseFolder] = useState('all')
-  const caseLocked = editing ? Boolean(seed.testCaseId) : Boolean(seed.testPlanCaseId)
+  const caseLocked = !editing && Boolean(seed.testPlanCaseId)
   const caseDirectoryIndex = createDirectoryIndex(folders)
   const selectedDirectoryIds = caseDirectoryIndex.byId.has(Number(caseFolder))
     ? caseDirectoryIndex.descendants(Number(caseFolder)) : new Set<number>()
@@ -4752,7 +4769,8 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
               ...(testEnvironmentId === 'manual' ? {} : { testEnvironmentId: Number(testEnvironmentId) }),
               testPlanCaseId: seed.testPlanCaseId,
               testPlanId: seed.testPlanId,
-              testCaseId: Number(testCaseId),
+              moduleId: moduleId === 'none' ? null : Number(moduleId),
+              testCaseId: testCaseId ? Number(testCaseId) : undefined,
               title,
             })
           }}
@@ -4793,21 +4811,30 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
                 </Label>
                 <Input aria-label="搜索测试用例" placeholder="搜索用例编号或标题" value={caseSearch} onChange={(event) => setCaseSearch(event.target.value)} />
               </> : null}
-              <Label>测试用例（必填）
-                <Select value={testCaseId} disabled={caseLocked} onValueChange={(value) => {
-                  setTestCaseId(value)
+              <Label>测试用例（选填）
+                <Select value={testCaseId || 'none'} disabled={caseLocked} onValueChange={(value) => {
+                  setTestCaseId(value === 'none' ? '' : value)
                   const item = cases.find((candidate) => String(candidate.id) === value)
-                  if (item && !editing) { setReproductionSteps(item.steps); setExpectedResult(item.expectedResult) }
+                  if (item) {
+                    setModuleId(item.moduleId ? String(item.moduleId) : 'none')
+                    if (!editing) { setReproductionSteps(item.steps); setExpectedResult(item.expectedResult) }
+                  }
                 }}>
                   <SelectTrigger aria-label="关联测试用例"><SelectValue placeholder="选择测试用例">{selectedCase ? `CASE-${selectedCase.id} ${selectedCase.title}` : undefined}</SelectValue></SelectTrigger>
-                  <SelectContent>{selectableCases.map((item) => <SelectItem key={item.id} value={String(item.id)}>CASE-{item.id} {item.title}</SelectItem>)}</SelectContent>
+                  <SelectContent><SelectItem value="none">不关联用例</SelectItem>{selectableCases.map((item) => <SelectItem key={item.id} value={String(item.id)}>CASE-{item.id} {item.title}</SelectItem>)}</SelectContent>
                 </Select>
               </Label>
-              {!cases.length ? <p className="test-list-empty">当前测试空间暂无用例，请先创建测试用例。</p> : null}
+              {!cases.length ? <p className="test-list-empty">当前测试空间暂无用例，可先不关联用例。</p> : null}
               {caseLocked && !selectedCase ? <p className="test-list-empty">来源用例已删除，无法从此执行记录创建 Bug。</p> : null}
               {!caseLocked && cases.length > 0 && !selectableCases.length ? <p className="test-list-empty">没有符合条件的用例。</p> : null}
             </div>
-            <Label>
+              <Label>模块
+                <Select value={moduleId} disabled={Boolean(selectedCase)} onValueChange={setModuleId}>
+                  <SelectTrigger aria-label="选择 Bug 模块"><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="none">无模块</SelectItem>{modules.filter((module) => module.enabled || module.id === seed.moduleId).map((module) => <SelectItem key={module.id} value={String(module.id)}>{module.name}{module.enabled ? '' : '（已停用）'}</SelectItem>)}</SelectContent>
+                </Select>
+              </Label>
+              <Label>
               测试环境
               <Select
                 value={testEnvironmentId}
@@ -4854,7 +4881,7 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
           />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-            <Button disabled={busy || evidenceUploading || !title.trim() || !selectedCase}>
+            <Button disabled={busy || evidenceUploading || !title.trim()}>
               {evidenceUploading ? '附件上传中...' : editing ? '保存修改' : '创建 Bug'}
             </Button>
           </DialogFooter>
@@ -5655,6 +5682,7 @@ export function AssignedTestBugs({
       ? { label: bug.reporterName, value: String(bug.reporterUserId) }
       : undefined),
     spaces: [],
+    modules: [{ label: '无模块', value: 'none' }, ...spaceBugs.flatMap((bug) => bug.moduleId && bug.moduleName ? [{ label: bug.moduleName, value: String(bug.moduleId) }] : []).filter((item, index, all) => all.findIndex((candidate) => candidate.value === item.value) === index)],
     cases: uniqueBugFilterOptions(spaceBugs, (bug) => bug.testCaseId
       ? { label: `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}`, value: String(bug.testCaseId) }
       : undefined).map((item) => ({ ...item, folderIds: spaceBugs.find((bug) => String(bug.testCaseId) === item.value)?.testCaseDirectoryPath?.map((folder) => String(folder.id)) ?? [] })),
@@ -5830,6 +5858,7 @@ export function AssignedTestBugs({
                   <span>负责人 <UserName departedUserIds={departedUserIds} name={selected.assigneeName || '未分配'} userId={selected.assigneeUserId} /></span>
                   <span>测试用例 <strong>{selected.testCaseId ? `CASE-${selected.testCaseId} ${selected.testCaseTitle || ''}` : '待补关联'}</strong></span>
                   <span>用例目录 <strong>{selected.testCaseId ? selected.testCaseFolderName || '未分类' : '待补关联'}</strong></span>
+                  <span>模块 <strong>{selected.moduleName || '无模块'}</strong></span>
                   <span>测试空间 <strong>{selected.testSpaceName || '未记录'}</strong></span>
                   <span>版本号 <strong>{selected.testSpaceVersionLabel || '未指定'}</strong></span>
                   <span>严重程度 <strong>{severityLabel[selected.severity]}</strong></span>

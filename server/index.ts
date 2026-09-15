@@ -6097,7 +6097,7 @@ type TestBugAssignedNotificationRow = {
   test_plan_name: string | null
   test_space_name: string
   test_space_version_label: string | null
-  test_subject_name: string
+  test_subject_name: string | null
   title: string
 }
 
@@ -8391,7 +8391,7 @@ async function buildTestBugAssignedFeishuCandidate(event: TestBugAssignedEvent) 
            operator_user.display_name as operator_display_name
     from test_bugs b
     join test_spaces space on space.id = b.test_space_id
-    join test_subjects subject
+    left join test_subjects subject
       on subject.id = b.test_subject_id
      and subject.test_space_id = b.test_space_id
     join users assignee on assignee.id = b.assignee_user_id
@@ -8458,7 +8458,7 @@ async function buildTestBugAssignedFeishuCandidate(event: TestBugAssignedEvent) 
     testSpaceVersionLabel: bug.test_space_version_label
       ? decryptText(bug.test_space_version_label)
       : undefined,
-    testSubjectName: decryptText(bug.test_subject_name),
+    testSubjectName: bug.test_subject_name ? decryptText(bug.test_subject_name) : '未关联测试对象',
     title: '新的 Bug 指派',
     bugTitle,
     userId: Number(bug.assignee_user_id),

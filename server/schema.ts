@@ -1822,6 +1822,12 @@ create table if not exists test_cases (
 );
 
 alter table test_cases
+  add column if not exists organization_module_id bigint
+    references organization_project_modules(id) on delete set null;
+create index if not exists idx_test_cases_organization_module
+  on test_cases(organization_module_id);
+
+alter table test_cases
   add column if not exists remarks text not null default '';
 
 alter table test_cases
@@ -1953,7 +1959,7 @@ where pc.test_subject_id is null;
 create table if not exists test_bugs (
   id bigserial primary key,
   test_space_id bigint not null references test_spaces(id) on delete cascade,
-  test_subject_id bigint not null,
+  test_subject_id bigint,
   test_plan_id bigint references test_plans(id),
   test_plan_case_id bigint references test_plan_cases(id),
   test_environment_id bigint references test_environments(id) on delete set null,
@@ -1981,9 +1987,17 @@ create table if not exists test_bugs (
 );
 
 alter table test_bugs
+  add column if not exists organization_module_id bigint
+    references organization_project_modules(id) on delete set null;
+create index if not exists idx_test_bugs_organization_module
+  on test_bugs(organization_module_id);
+
+alter table test_bugs
   drop constraint if exists test_bugs_test_plan_id_test_space_id_test_subject_id_fkey;
 
 alter table test_bugs add column if not exists test_case_id bigint;
+alter table test_bugs alter column test_case_id drop not null;
+alter table test_bugs alter column test_subject_id drop not null;
 create unique index if not exists test_cases_bug_scope_unique
   on test_cases (id, test_space_id, test_subject_id);
 do $$
@@ -2001,22 +2015,15 @@ from test_plan_cases pc join test_cases c on c.id = pc.test_case_id
 where b.test_case_id is null and b.test_plan_case_id = pc.id
   and b.test_space_id = c.test_space_id and b.test_subject_id = c.test_subject_id;
 
--- Legacy unlinked rows may still be triaged, but new rows and transfers require a case.
+-- Keep the trigger function name for compatibility with older installations, but
+-- no longer enforce a canonical case: case/subject scope is validated by the API
+-- whenever either optional reference is provided.
 create or replace function enforce_test_bug_case() returns trigger as $$
 begin
-  if new.test_case_id is null then
-    if tg_op = 'INSERT' then
-      raise exception 'Bug test case is required' using errcode = '23514';
-    elsif old.test_case_id is not null or new.test_space_id <> old.test_space_id then
-      raise exception 'Bug test case is required' using errcode = '23514';
-    end if;
-  end if;
   return new;
 end;
 $$ language plpgsql;
 drop trigger if exists test_bugs_require_case on test_bugs;
-create trigger test_bugs_require_case before insert or update on test_bugs
-for each row execute function enforce_test_bug_case();
 create or replace function protect_bug_subject_deletion() returns trigger as $$
 begin
   if exists (select 1 from test_spaces where id = old.test_space_id)
@@ -2029,13 +2036,6 @@ $$ language plpgsql;
 drop trigger if exists test_subjects_protect_bugs on test_subjects;
 create trigger test_subjects_protect_bugs before delete on test_subjects
 for each row execute function protect_bug_subject_deletion();
-do $$
-begin
-  if not exists (select 1 from test_bugs where test_case_id is null) then
-    alter table test_bugs alter column test_case_id set not null;
-  end if;
-end $$;
-
 do $$
 begin
   alter table test_bugs

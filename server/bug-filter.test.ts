@@ -24,6 +24,8 @@ const baseBug: TestBug = {
   expectedResult: '保存成功',
   id: 6,
   priority: 'high',
+  moduleId: 7,
+  moduleName: '账户模块',
   reporterName: '测试乙',
   reporterUserId: 12,
   reproductionSteps: '打开页面并保存',
@@ -79,6 +81,14 @@ test('bug filters match linked test fields and people by stable ids', () => {
   ], 'and'), false)
 })
 
+test('bug filters match organization modules and represent missing modules as none', () => {
+  assert.equal(matchesBugFilterConditions(baseBug, [condition('module', 'equals', '7')], 'and'), true)
+  assert.equal(matchesBugFilterConditions(baseBug, [condition('module', 'equals', 'none')], 'and'), false)
+  const withoutModule = { ...baseBug, moduleId: undefined, moduleName: undefined }
+  assert.equal(matchesBugFilterConditions(withoutModule, [condition('module', 'equals', 'none')], 'and'), true)
+  assert.equal(matchesBugFilterConditions(withoutModule, [condition('module', 'is_empty', '')], 'and'), true)
+})
+
 test('directory filters follow current case folders and distinguish legacy Bugs from uncategorized cases', () => {
   const filter = [condition('caseFolder', 'equals', '51')]
   assert.equal(matchesBugFilterConditions(baseBug, filter, 'and'), true)
@@ -117,6 +127,7 @@ test('Bug 工作台 starts with a non-closed status filter', () => {
   assert.equal(matchesBugFilterConditions(baseBug, [defaultCondition], 'and'), true)
   assert.equal(matchesBugFilterConditions({ ...baseBug, status: 'closed' }, [defaultCondition], 'and'), false)
   assert.match(testWorkbenchSource, /const \[filterConditions, setFilterConditions\] = useState<BugFilterCondition\[\]\s*>\(createDefaultBugFilterConditions\)/u)
+  assert.match(filterDialogSource, /if \(field === 'module'\) return options\.modules/u)
 })
 
 test('pending confirmation filter covers unassigned and assigned confirmation states', () => {

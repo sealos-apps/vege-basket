@@ -220,6 +220,7 @@ export function createTestCase(spaceId: number, payload: {
   expectedResult: string
   folderId?: number | null
   modulePath?: string
+  moduleId?: number | null
   preconditions: string
   priority: Priority
   remarks: string
@@ -239,6 +240,7 @@ export function updateTestCase(spaceId: number, caseId: number, payload: Partial
   expectedResult: string
   folderId?: number | null
   modulePath?: string
+  moduleId?: number | null
   preconditions: string
   priority: Priority
   remarks: string
@@ -357,7 +359,9 @@ export function createTestBug(spaceId: number, payload: {
   testEnvironmentId?: number | null
   testPlanCaseId?: number
   testPlanId?: number
-  testCaseId: number
+  moduleId?: number | null
+  testCaseId?: number
+  testSubjectId?: number
   title: string
 }) {
   return request<TestWorkbenchData>(`/api/test-spaces/${spaceId}/bugs`, {
@@ -376,7 +380,9 @@ export function updateTestBug(spaceId: number, bugId: number, payload: {
   severity?: BugSeverity
   status?: BugStatus
   testEnvironmentId?: number | null
+  moduleId?: number | null
   testCaseId?: number
+  testSubjectId?: number | null
   title?: string
 }) {
   return request<TestWorkbenchData>(`/api/test-spaces/${spaceId}/bugs/${bugId}`, {

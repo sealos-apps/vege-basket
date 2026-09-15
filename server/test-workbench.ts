@@ -684,6 +684,44 @@ async function getAssignedTestEnvironment(
   return result.rows[0] ?? null
 }
 
+async function resolveTestWorkbenchModule(
+  client: PoolClient,
+  spaceId: number,
+  moduleId: unknown,
+  options: { allowDisabled?: boolean } = {},
+) {
+  if (moduleId === null || moduleId === undefined || moduleId === '') return null
+  const parsed = positiveId(moduleId)
+  if (!parsed) throw new TestCaseDirectoryError('模块 ID 无效。')
+  const result = await client.query<{ id: string }>(
+    `select module.id
+       from organization_project_modules module
+       join test_spaces space on space.organization_id = module.organization_id
+      where module.id = $1 and space.id = $2
+        and (${options.allowDisabled ? 'true' : 'module.enabled'})
+      for share of module, space`,
+    [parsed, spaceId],
+  )
+  if (!result.rows[0]) throw new TestCaseDirectoryError('模块不存在、已停用或不属于当前测试空间。', 400)
+  return parsed
+}
+
+async function resolveTestWorkbenchModuleName(client: PoolClient, spaceId: number, name: string) {
+  const normalized = name.trim()
+  if (!normalized) return null
+  const result = await client.query<{ enabled: boolean; id: string; name: string }>(
+    `select module.id, module.name, module.enabled
+       from organization_project_modules module
+       join test_spaces space on space.organization_id = module.organization_id
+      where space.id = $1
+      order by module.id`,
+    [spaceId],
+  )
+  const row = result.rows.find((item) => decryptText(item.name) === normalized)
+  if (!row || !row.enabled) throw new TestCaseDirectoryError(`模块“${normalized}”不存在、已停用或不属于当前测试空间。`)
+  return Number(row.id)
+}
+
 function environmentSnapshot(name: string, accessUrl: string) {
   return `${name} (${accessUrl})`.slice(0, 500)
 }
@@ -924,6 +962,7 @@ type ImportCaseRow = {
   expected_result: string
   folder_id: string | null
   id: string
+  organization_module_id: string | null
   preconditions: string
   priority: string
   remarks: string
@@ -1298,16 +1337,16 @@ async function importTestSpaceData(
       const inserted = await client.query<{ id: string }>(
         `
         insert into test_cases
-          (test_space_id, test_subject_id, folder_id, title, preconditions, steps, expected_result, remarks,
+          (test_space_id, test_subject_id, folder_id, organization_module_id, title, preconditions, steps, expected_result, remarks,
            priority, case_type, custom_tags, status, owner_user_id, version, created_by_user_id,
            created_at, updated_at)
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $14, $16, $17)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         returning id
         `,
-        [targetSpaceId, targetSubjectId, targetFolderId, sourceCase.title, sourceCase.preconditions,
+        [targetSpaceId, targetSubjectId, targetFolderId, sourceCase.organization_module_id, sourceCase.title, sourceCase.preconditions,
           sourceCase.steps, sourceCase.expected_result, sourceCase.remarks, sourceCase.priority,
           sourceCase.case_type, sourceCase.custom_tags, sourceCase.status, userId,
-          sourceCase.version, sourceCase.created_at, sourceCase.updated_at],
+          sourceCase.version, userId, sourceCase.created_at, sourceCase.updated_at],
       )
       const targetId = Number(inserted.rows[0].id)
       caseMap.set(key, targetId)
@@ -1595,6 +1634,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
     subjects,
     folders,
     cases,
+    modules,
     plans,
     planSubjects,
     planCases,
@@ -1684,6 +1724,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       expected_result: string
       folder_id: string | null
       id: string
+      organization_module_id: string | null
       owner_user_id: string | null
       preconditions: string
       priority: string
@@ -1704,6 +1745,23 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
         on m.test_space_id = c.test_space_id and m.user_id = $1 and m.status = 'active'
       where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopeCases}
       order by c.updated_at desc, c.id desc
+      `,
+      [userId],
+    ),
+    query<{
+      enabled: boolean
+      id: string
+      name: string
+      organization_id: string
+    }>(
+      `
+      select distinct module.id, module.organization_id, module.name, module.enabled
+      from organization_project_modules module
+      join test_spaces space on space.organization_id = module.organization_id
+      left join test_space_memberships m
+        on m.test_space_id = space.id and m.user_id = $1 and m.status = 'active'
+      where ${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')}
+      order by module.organization_id, module.id
       `,
       [userId],
     ),
@@ -1785,6 +1843,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       environment: string
       expected_result: string
       id: string
+      organization_module_id: string | null
       organization_id: string | null
       priority: string
       reporter_display_name: string | null
@@ -1806,8 +1865,8 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       test_space_id: string
       test_space_name: string
       test_space_version_label: string | null
-      test_subject_id: string
-      test_subject_name: string
+      test_subject_id: string | null
+      test_subject_name: string | null
       test_plan_name: string | null
       title: string
       updated_at: Date
@@ -1832,7 +1891,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
         ${managedOrganizationReadScopeSql('space.organization_id')} as organization_admin_access
       from test_bugs b
       join test_spaces space on space.id = b.test_space_id
-      join test_subjects subject on subject.id = b.test_subject_id
+      left join test_subjects subject on subject.id = b.test_subject_id
       left join test_cases linked_case on linked_case.id = b.test_case_id and linked_case.test_space_id = b.test_space_id
       ${bugCaseDirectoryJoinSql}
       left join test_plans plan on plan.id = b.test_plan_id
@@ -2092,6 +2151,12 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
     ])
   }
   const verificationSubmissionsByBug = mapVerificationSubmissions(verificationSubmissions.rows)
+  const modulesById = new Map(modules.rows.map((row) => [Number(row.id), {
+    enabled: row.enabled,
+    id: Number(row.id),
+    name: decryptText(row.name),
+    organizationId: Number(row.organization_id),
+  }]))
   const subjectIdsByPlan = new Map<number, number[]>()
   for (const row of planSubjects.rows) {
     const planId = Number(row.test_plan_id)
@@ -2146,6 +2211,8 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       expectedResult: decryptText(row.expected_result),
       events: eventsByBug.get(Number(row.id)) ?? [],
       id: Number(row.id),
+      moduleId: row.organization_module_id ? Number(row.organization_module_id) : undefined,
+      moduleName: row.organization_module_id ? modulesById.get(Number(row.organization_module_id))?.name : undefined,
       priority: row.priority,
       reporterName: row.reporter_display_name || row.reporter_email || undefined,
       reporterUserId: row.reporter_user_id ? Number(row.reporter_user_id) : undefined,
@@ -2171,8 +2238,8 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       testSpaceVersionLabel: row.test_space_version_label
         ? decryptText(row.test_space_version_label)
         : undefined,
-      testSubjectId: Number(row.test_subject_id),
-      testSubjectName: decryptText(row.test_subject_name),
+      testSubjectId: row.test_subject_id ? Number(row.test_subject_id) : undefined,
+      testSubjectName: row.test_subject_name ? decryptText(row.test_subject_name) : undefined,
       title: decryptText(row.title),
       verificationSubmissions: verificationSubmissionsByBug.get(Number(row.id)) ?? [],
       transferSpaceCandidates: editableSpaces
@@ -2193,6 +2260,8 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       expectedResult: decryptText(row.expected_result),
       folderId: row.folder_id ? Number(row.folder_id) : undefined,
       id: Number(row.id),
+      moduleId: row.organization_module_id ? Number(row.organization_module_id) : undefined,
+      moduleName: row.organization_module_id ? modulesById.get(Number(row.organization_module_id))?.name : undefined,
       ownerUserId: row.owner_user_id ? Number(row.owner_user_id) : undefined,
       preconditions: decryptText(row.preconditions),
       priority: row.priority,
@@ -2230,6 +2299,12 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
         kind: row.kind,
         sourceId: Number(row.source_id),
       }),
+    modules: modules.rows.map((row) => ({
+      enabled: row.enabled,
+      id: Number(row.id),
+      name: decryptText(row.name),
+      organizationId: Number(row.organization_id),
+    })),
     planCases: planCases.rows.map((row) => ({
       executedAt: row.executed_at?.toISOString(),
       executedByUserId: row.executed_by_user_id ? Number(row.executed_by_user_id) : undefined,
@@ -3316,7 +3391,7 @@ async function saveTestCaseRequest(request: express.Request, response: express.R
   const creator = await transaction(async (client) => {
     await lockTestCaseSpace(client, spaceId!)
     const current = caseId ? (await client.query<{
-      test_subject_id: string; folder_id: string | null; created_by_user_id: string | null
+      test_subject_id: string; folder_id: string | null; organization_module_id: string | null; created_by_user_id: string | null
       title: string; preconditions: string; steps: string; expected_result: string; remarks: string
       priority: string; case_type: string; custom_tags: string; status: string
     }>('select * from test_cases where id = $1 and test_space_id = $2', [caseId, spaceId])).rows[0] : undefined
@@ -3338,23 +3413,26 @@ async function saveTestCaseRequest(request: express.Request, response: express.R
       ? request.body.caseType : current?.case_type ?? 'functional'
     const status = isTestCaseStatus(request.body.status) ? request.body.status : current?.status ?? 'active'
     const tags = request.body.customTags === undefined && current ? decryptJson<string[]>(current.custom_tags, []) : customTags(request.body.customTags)
+    const moduleId = request.body.moduleId === undefined && current
+      ? (current.organization_module_id ? Number(current.organization_module_id) : null)
+      : await resolveTestWorkbenchModule(client, spaceId!, request.body.moduleId)
     let folderId = requestedFolder === undefined ? (current?.folder_id ? Number(current.folder_id) : null) : requestedFolder
     createDirectoryIndex(await readCaseDirectories(client, spaceId!, subjectId)).path(folderId)
     // All input is normalized and every reference validated before creating a legacy module.
     if (modulePath !== undefined) folderId = modulePath ? await getOrCreateCaseFolder(client, spaceId!, subjectId, modulePath) : null
-    const values = [encryptText(title), ...content, priority, caseType, encryptJson(tags), status, folderId]
+    const values = [encryptText(title), ...content, priority, caseType, encryptJson(tags), status, folderId, moduleId]
     if (caseId) {
       await client.query(
         `update test_cases set title = $1, preconditions = $2, steps = $3, expected_result = $4, remarks = $5,
          priority = $6, case_type = $7, custom_tags = $8, status = $9,
-         folder_id = $10, updated_at = now() where id = $11 and test_space_id = $12 and test_subject_id = $13`,
+         folder_id = $10, organization_module_id = $11, updated_at = now() where id = $12 and test_space_id = $13 and test_subject_id = $14`,
         [...values, caseId, spaceId, subjectId],
       )
     } else {
       await client.query(
         `insert into test_cases (title, preconditions, steps, expected_result, remarks, priority, case_type,
-         custom_tags, status, folder_id, test_space_id, test_subject_id, created_by_user_id)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+         custom_tags, status, folder_id, organization_module_id, test_space_id, test_subject_id, created_by_user_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
         [...values, spaceId, subjectId, session.userId],
       )
     }
@@ -3402,12 +3480,13 @@ router.post(
       for (const [index, row] of parsed.rows.entries()) {
         const plannedId = plan.folderIds[index]
         const folderId = plannedId !== null && plannedId < 0 ? insertedIds.get(plannedId)! : plannedId
+        const moduleId = await resolveTestWorkbenchModuleName(client, spaceId!, row.moduleName)
         await client.query(
           `insert into test_cases
-            (test_space_id, test_subject_id, folder_id, title, preconditions, steps,
+            (test_space_id, test_subject_id, folder_id, organization_module_id, title, preconditions, steps,
              expected_result, remarks, priority, case_type, custom_tags, status, created_by_user_id)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'functional', $10, 'active', $11)`,
-          [spaceId, subjectId, folderId, encryptText(row.title), encryptText(row.preconditions), encryptText(row.steps),
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'functional', $10, 'active', $11, $12)`,
+          [spaceId, subjectId, folderId, moduleId, encryptText(row.title), encryptText(row.preconditions), encryptText(row.steps),
             encryptText(row.expectedResult), encryptText(row.remarks), row.priority, encryptJson(row.customTags), session.userId],
         )
       }
@@ -3935,6 +4014,8 @@ router.post('/test-spaces/:spaceId/bugs', asyncRoute(async (request, response) =
   const spaceId = positiveId(request.params.spaceId)
   if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
   const caseId = positiveId(request.body.testCaseId)
+  const requestedSubjectId = positiveId(request.body.testSubjectId)
+  const requestedModuleValue = request.body.moduleId
   const title = text(request.body.title, 160)
   const requestedPlanId = positiveId(request.body.testPlanId)
   const planCaseId = positiveId(request.body.testPlanCaseId)
@@ -3942,8 +4023,8 @@ router.post('/test-spaces/:spaceId/bugs', asyncRoute(async (request, response) =
   const requestedEnvironment = hasTestEnvironmentId
     ? parseOptionalTestEnvironmentId(request.body.testEnvironmentId)
     : { valid: true as const, value: null }
-  if (!caseId || !title) {
-    response.status(400).json({ error: 'Bug 标题和关联测试用例为必填项' })
+  if (!title) {
+    response.status(400).json({ error: 'Bug 标题不能为空' })
     return
   }
   if (!requestedEnvironment.valid) {
@@ -3962,15 +4043,28 @@ router.post('/test-spaces/:spaceId/bugs', asyncRoute(async (request, response) =
       await lockTestCaseSpace(client, spaceId!)
       const access = await getDirectSpaceAccess(spaceId!, session.userId, client)
       if (access !== 'owner' && access !== 'editor') throw importFailure('需要测试空间的编辑权限。', 403)
-      const testCase = await client.query<{ test_subject_id: string }>(
-        `select test_subject_id from test_cases where id = $1 and test_space_id = $2 for share`,
-        [caseId, spaceId],
+      const testCase = caseId
+        ? await client.query<{ organization_module_id: string | null; test_subject_id: string }>(
+          `select test_subject_id, organization_module_id from test_cases where id = $1 and test_space_id = $2 for share`,
+          [caseId, spaceId],
+        )
+        : null
+      if (caseId && !testCase?.rows[0]) throw importFailure('关联用例不存在或不属于当前测试空间', 400)
+      const subjectId = caseId ? Number(testCase!.rows[0].test_subject_id) : requestedSubjectId
+      const requestedModuleId = await resolveTestWorkbenchModule(
+        client,
+        spaceId!,
+        requestedModuleValue,
+        { allowDisabled: Boolean(caseId) },
       )
-      if (!testCase.rows[0]) throw importFailure('关联用例不存在或不属于当前测试空间', 400)
-      const subjectId = Number(testCase.rows[0].test_subject_id)
+      const moduleId = caseId
+        ? (testCase!.rows[0].organization_module_id ? Number(testCase!.rows[0].organization_module_id) : null)
+        : requestedModuleId
+      if (requestedModuleId && moduleId && requestedModuleId !== moduleId) throw importFailure('Bug 模块必须与关联用例模块一致', 400)
 
       let planId = requestedPlanId
       if (planCaseId) {
+        if (!caseId || !subjectId) throw importFailure('计划执行记录必须关联测试用例', 400)
         const execution = await client.query<{ test_plan_id: string; test_subject_id: string | null; test_case_id: string | null }>(
           `
           select pc.test_plan_id, pc.test_case_id, coalesce(pc.test_subject_id, c.test_subject_id) as test_subject_id
@@ -3993,6 +4087,7 @@ router.post('/test-spaces/:spaceId/bugs', asyncRoute(async (request, response) =
         planId = Number(execution.rows[0].test_plan_id)
       }
       if (planId && !planCaseId) {
+        if (!subjectId) throw importFailure('测试计划关联需要测试对象', 400)
         const plan = await client.query<{ id: string }>(
           `
           select p.id
@@ -4032,8 +4127,8 @@ router.post('/test-spaces/:spaceId/bugs', asyncRoute(async (request, response) =
         insert into test_bugs
           (test_space_id, test_subject_id, test_plan_id, test_plan_case_id, test_environment_id,
            title, severity, priority, status, environment, reproduction_steps, expected_result,
-           actual_result, reporter_user_id, assignee_user_id, test_case_id)
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+           actual_result, reporter_user_id, assignee_user_id, test_case_id, organization_module_id)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         returning id
         `,
         [
@@ -4053,6 +4148,7 @@ router.post('/test-spaces/:spaceId/bugs', asyncRoute(async (request, response) =
           session.userId,
           assigneeUserId,
           caseId,
+          moduleId,
         ],
       )
       const bugId = Number(inserted.rows[0].id)
@@ -4130,6 +4226,7 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
   const current = await query<{
     actual_result: string
     assignee_user_id: string | null
+    organization_module_id: string | null
     environment: string
     test_environment_id: string | null
     expected_result: string
@@ -4138,9 +4235,12 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
     reproduction_steps: string
     severity: string
     status: BugStatus
+    test_case_id: string | null
+    test_subject_id: string | null
     title: string
   }>(
     `select status, assignee_user_id, reporter_user_id, title, severity, priority,
+            test_case_id, test_subject_id, organization_module_id,
             environment, test_environment_id, reproduction_steps, expected_result, actual_result
        from test_bugs where id = $1 and test_space_id = $2`,
     [bugId, spaceId],
@@ -4152,6 +4252,7 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
   const currentBug = current.rows[0]
   const hasDetailEdit = [
     'testCaseId',
+    'moduleId',
     'title',
     'severity',
     'priority',
@@ -4206,6 +4307,8 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
       if (access !== 'owner' && access !== 'editor') throw importFailure('需要测试空间的编辑权限。', 403)
       const locked = await client.query<{
         test_case_id: string | null
+        test_subject_id: string | null
+        organization_module_id: string | null
         test_plan_id: string | null
         test_plan_case_id: string | null
         actual_result: string
@@ -4219,7 +4322,7 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
         test_environment_id: string | null
         title: string
       }>(
-        `select status, assignee_user_id, reporter_user_id, title, severity, priority, test_case_id, test_plan_id, test_plan_case_id,
+        `select status, assignee_user_id, reporter_user_id, title, severity, priority, test_case_id, test_subject_id, organization_module_id, test_plan_id, test_plan_case_id,
                 environment, test_environment_id, reproduction_steps, expected_result, actual_result
            from test_bugs where id = $1 and test_space_id = $2 for update`,
         [bugId, spaceId],
@@ -4230,23 +4333,46 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
       if (hasDetailEdit && !canEditTestBug(lockedReporter, session.userId)) {
         throw importFailure('Only the Bug creator can edit its details', 403)
       }
-      let caseBinding: { caseId: number; subjectId: number } | undefined
+      let caseBinding: { caseId: number | null; subjectId: number | null; moduleId: number | null } | undefined
       if (request.body.testCaseId !== undefined) {
         const caseId = positiveId(request.body.testCaseId)
-        if (!caseId) throw importFailure('必须选择关联测试用例', 400)
-        if (lockedBug.test_case_id && Number(lockedBug.test_case_id) !== caseId) {
-          throw importFailure('已有 Bug 的关联用例不可更换', 400)
-        }
-        const linkedCase = await client.query<{ test_subject_id: string }>(
-          'select test_subject_id from test_cases where id = $1 and test_space_id = $2 for share',
+        const linkedCase = caseId ? await client.query<{ organization_module_id: string | null; test_subject_id: string }>(
+          'select test_subject_id, organization_module_id from test_cases where id = $1 and test_space_id = $2 for share',
           [caseId, spaceId],
-        )
-        if (!linkedCase.rows[0]) throw importFailure('关联用例不存在或不属于当前测试空间', 400)
-        if (!lockedBug.test_case_id) {
-          caseBinding = { caseId, subjectId: Number(linkedCase.rows[0].test_subject_id) }
+        ) : null
+        if (caseId && !linkedCase?.rows[0]) throw importFailure('关联用例不存在或不属于当前测试空间', 400)
+        const nextModuleId = caseId
+          ? (linkedCase!.rows[0].organization_module_id ? Number(linkedCase!.rows[0].organization_module_id) : null)
+          : await resolveTestWorkbenchModule(client, spaceId!, request.body.moduleId)
+        caseBinding = {
+          caseId,
+          subjectId: caseId ? Number(linkedCase!.rows[0].test_subject_id) : null,
+          moduleId: nextModuleId,
         }
-      } else if (hasDetailEdit && !lockedBug.test_case_id) {
-        throw importFailure('请先为历史 Bug 补充关联用例', 400)
+      } else if (request.body.moduleId !== undefined) {
+        const linkedCaseModule = lockedBug.test_case_id
+          ? await client.query<{ organization_module_id: string | null }>(
+            'select organization_module_id from test_cases where id = $1 and test_space_id = $2 for share',
+            [Number(lockedBug.test_case_id), spaceId],
+          )
+          : null
+        const linkedModuleId = linkedCaseModule?.rows[0]?.organization_module_id
+          ? Number(linkedCaseModule.rows[0].organization_module_id)
+          : null
+        const requestedModuleId = await resolveTestWorkbenchModule(
+          client,
+          spaceId!,
+          request.body.moduleId,
+          { allowDisabled: Boolean(lockedBug.test_case_id) },
+        )
+        if (lockedBug.test_case_id && requestedModuleId !== linkedModuleId) {
+          throw importFailure('关联用例的模块不可手动修改', 400)
+        }
+        caseBinding = {
+          caseId: lockedBug.test_case_id ? Number(lockedBug.test_case_id) : null,
+          subjectId: lockedBug.test_subject_id ? Number(lockedBug.test_subject_id) : null,
+          moduleId: requestedModuleId,
+        }
       }
       const nextEnvironmentId = hasEnvironmentId
         ? environmentInput.value
@@ -4286,17 +4412,19 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
       }
       if (caseBinding) {
         await client.query(
-          `update test_bugs set test_case_id = $1, test_subject_id = $2,
-             test_plan_id = null, test_plan_case_id = null where id = $3`,
-          [caseBinding.caseId, caseBinding.subjectId, bugId],
+          `update test_bugs set test_case_id = $1, test_subject_id = $2, organization_module_id = $3,
+             test_plan_id = null, test_plan_case_id = null where id = $4`,
+          [caseBinding.caseId, caseBinding.subjectId, caseBinding.moduleId, bugId],
         )
-        await client.query(
-          `insert into test_bug_comments (test_bug_id, author_user_id, content, kind)
-           values ($1, $2, $3, 'transfer')`,
-          [bugId, session.userId, encryptText(
-            `历史 Bug 补关联：原计划 ${lockedBug.test_plan_id || '无'}，原执行 ${lockedBug.test_plan_case_id || '无'}；关联用例 CASE-${caseBinding.caseId}。`,
-          )],
-        )
+        if (caseBinding.caseId) {
+          await client.query(
+            `insert into test_bug_comments (test_bug_id, author_user_id, content, kind)
+             values ($1, $2, $3, 'transfer')`,
+            [bugId, session.userId, encryptText(
+              `历史 Bug 补关联：原计划 ${lockedBug.test_plan_id || '无'}，原执行 ${lockedBug.test_plan_case_id || '无'}；关联用例 CASE-${caseBinding.caseId}。`,
+            )],
+          )
+        }
       }
       await client.query(
         `update test_bugs set title = $1, severity = $2, priority = $3, environment = $4,
@@ -4507,6 +4635,8 @@ router.delete('/test-spaces/:spaceId/bugs/:bugId/comments/:commentId', asyncRout
 
 async function getAssignedBugs(userId: number, organizationId: OrganizationContext) {
   const bugs = await query<{
+    organization_module_id: string | null
+    organization_module_name: string | null
     test_case_id: string | null
     test_case_title: string | null
     test_case_folder_id: string | null
@@ -4531,16 +4661,17 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
     test_space_id: string
     test_space_name: string
     test_space_version_label: string | null
-    test_subject_id: string
-    test_subject_name: string
+    test_subject_id: string | null
+    test_subject_name: string | null
     title: string
     updated_at: Date
     organization_id: string | null
     organization_admin_access: boolean
   }>(
     `
-    select b.id, b.test_space_id, b.test_subject_id, b.test_plan_id, b.test_case_id,
+    select b.id, b.test_space_id, b.test_subject_id, b.test_plan_id, b.test_case_id, b.organization_module_id,
       linked_case.title as test_case_title,
+      organization_module.name as organization_module_name,
       linked_case.folder_id as test_case_folder_id,
       case_directory.path as test_case_directory_path,
       b.reporter_user_id, b.assignee_user_id, b.title, b.severity, b.priority,
@@ -4556,8 +4687,11 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
       ${managedOrganizationReadScopeSql('space.organization_id')} as organization_admin_access
     from test_bugs b
     join test_spaces space on space.id = b.test_space_id
-    join test_subjects subject on subject.id = b.test_subject_id
+    left join test_subjects subject on subject.id = b.test_subject_id
     left join test_cases linked_case on linked_case.id = b.test_case_id and linked_case.test_space_id = b.test_space_id
+    left join organization_project_modules organization_module
+      on organization_module.id = b.organization_module_id
+      and organization_module.organization_id = space.organization_id
     ${bugCaseDirectoryJoinSql}
     left join test_plans plan on plan.id = b.test_plan_id
     left join users reporter on reporter.id = b.reporter_user_id
@@ -4810,6 +4944,8 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
       expectedResult: decryptText(row.expected_result),
       events: eventsByBug.get(Number(row.id)) ?? [],
       id: Number(row.id),
+      moduleId: row.organization_module_id ? Number(row.organization_module_id) : undefined,
+      moduleName: row.organization_module_name ? decryptText(row.organization_module_name) : undefined,
       organizationMembers: row.organization_id
         ? membersByOrganization.get(Number(row.organization_id)) ?? []
         : [],
@@ -4830,8 +4966,8 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
       testSpaceVersionLabel: row.test_space_version_label
         ? decryptText(row.test_space_version_label)
         : undefined,
-      testSubjectId: Number(row.test_subject_id),
-      testSubjectName: decryptText(row.test_subject_name),
+      testSubjectId: row.test_subject_id ? Number(row.test_subject_id) : undefined,
+      testSubjectName: row.test_subject_name ? decryptText(row.test_subject_name) : undefined,
       title: decryptText(row.title),
       transferCandidates: row.organization_id
         ? (transferCandidatesByOrganization.get(Number(row.organization_id)) ?? [])

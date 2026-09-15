@@ -84,10 +84,10 @@ test('case workbench loads the whole space and treats test subjects as virtual r
   assert.match(testCaseDirectoryTreeSource, /onCreateRoot\(\)/u)
   assert.match(testCaseDirectoryTreeSource, /onEditRoot\(subject\)/u)
   assert.match(testCaseDirectoryTreeSource, /onDeleteRoot\(subject\)/u)
-  assert.match(testWorkbenchClientSource, /plan\.testSubjectIds\.includes\(Number\(subjectFilter\)\)/u)
-  assert.match(testWorkbenchClientSource, /aria-label="按测试用例目录筛选计划"/u)
-  assert.match(testWorkbenchClientSource, /<SelectItem value="all">全部测试用例目录<\/SelectItem>\{planSubjects\.map\(\(subject\)/u)
-  assert.doesNotMatch(testWorkbenchClientSource, />全部测试对象<\/SelectItem>/u)
+  assert.match(testWorkbenchClientSource, /const planModuleIds = \(plan/u)
+  assert.match(testWorkbenchClientSource, /aria-label="按模块筛选计划"/u)
+  assert.match(testWorkbenchClientSource, /<SelectItem value="all">全部模块<\/SelectItem>/u)
+  assert.doesNotMatch(testWorkbenchClientSource, /全部测试用例目录/u)
   assert.match(testWorkbenchClientSource, /setSubjectId\(undefined\)[\s\S]*setSelectedPlanId\(plan\.id\)/u)
   assert.match(testWorkbenchClientSource, /key=\{`plans:\$\{spaceId\}`\}/u)
   assert.match(testWorkbenchClientSource, /onEdit=\{\(testCase\) => \{ setSubjectId\(testCase\.testSubjectId\); setEditingCase\(testCase\)/u)
@@ -114,20 +114,21 @@ test('test-space member settings do not show unrelated departed accounts', () =>
   assert.match(testWorkbenchClientSource, /selectedSpace\.members\.length/u)
 })
 
-test('Bug scope stays within the current space and exposes its case instead of a subject picker', () => {
+test('Bug scope stays within the current space and exposes optional case and module fields', () => {
   // Scoped polling replaces the full client cache, so Bugs must span all accessible spaces.
   assert.doesNotMatch(testWorkbenchSource, /scopeBugs/u)
-  assert.match(testWorkbenchSource, /join test_subjects subject on subject\.id = b\.test_subject_id/u)
-  assert.match(testWorkbenchSource, /subject\.name as test_subject_name/u)
-  assert.match(testWorkbenchSource, /testSubjectName: decryptText\(row\.test_subject_name\)/u)
+  assert.match(testWorkbenchSource, /left join test_subjects subject on subject\.id = b\.test_subject_id/u)
+  assert.match(testWorkbenchSource, /organization_module\.name as organization_module_name/u)
+  assert.match(testWorkbenchSource, /moduleName: row\.organization_module_name \? decryptText\(row\.organization_module_name\) : undefined/u)
   assert.match(testWorkbenchClientSource, /const bugs = data\.bugs\.filter\(\s*\(bug\) => bug\.testSpaceId === spaceId,/u)
   assert.doesNotMatch(testWorkbenchClientSource, /const bugs = data\.bugs\.filter\(\s*\(bug\) => bug\.testSpaceId === spaceId && \(!subjectId/u)
   assert.doesNotMatch(testWorkbenchClientSource, /<section className="test-subject-browser"/u)
   assert.doesNotMatch(testWorkbenchClientSource, /tab === 'cases' && !activeSubject \?/u)
   assert.match(testWorkbenchClientSource, /test-bug-detail-meta/u)
   assert.match(testWorkbenchClientSource, /测试用例\s*<strong>\{bug\.testCaseId/u)
+  assert.match(testWorkbenchClientSource, /模块\s*<strong>\{bug\.moduleName \|\| '无模块'\}/u)
   assert.match(testWorkbenchClientSource, /测试空间\s*<strong>\{bug\.testSpaceName \|\| '未记录'\}/u)
-  assert.match(testWorkbenchClientSource, /当前测试空间暂无用例，请先创建测试用例/u)
+  assert.match(testWorkbenchClientSource, /当前测试空间暂无用例，可先不关联用例/u)
   assert.match(testWorkbenchClientSource, /aria-label="关联测试用例"/u)
 })
 
@@ -499,7 +500,7 @@ test('test case deletion is exposed only when allowed and requires confirmation'
   assert.match(testWorkbenchClientSource, /if \(planDeleteDialogOpen \|\| !planPendingDelete\) return[\s\S]*setTimeout[\s\S]*setPlanPendingDelete\(undefined\)/u)
   assert.doesNotMatch(testWorkbenchClientSource, /open=\{Boolean\(planPendingDelete\)\}/u)
   assert.doesNotMatch(testWorkbenchClientSource, /归档为基线|onArchive|caseKind|case_kind/u)
-  assert.match(testWorkbenchSource, /insert into test_cases[\s\S]*values \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13\)/u)
+  assert.match(testWorkbenchSource, /insert into test_cases[\s\S]*organization_module_id[\s\S]*values \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12\)/u)
 })
 
 test('test subject editing uses a dedicated patch route without version or environment fields', () => {

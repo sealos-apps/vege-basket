@@ -455,12 +455,10 @@ The schema is normalized around these groups:
   snapshot, or delete the plan. Test cases use hierarchical directories; the former
   baseline/archiving concept has been removed. Deleting a plan
   preserves existing bugs while clearing their plan association.
-  Every new Bug directly references a canonical test case. A composite foreign key
-  enforces case/space/subject consistency; subject is derived from the case and is not
-  a Bug selection boundary. Existing execution-backed Bugs are backfilled only when
-  the source case survives. Other legacy Bugs remain readable and support creator-owned
-  one-time case binding. New inserts, unlinking, and space transfers without a case are
-  rejected by a database trigger; NOT NULL is enabled when no unlinked rows remain.
+  Bugs may reference a canonical test case, but case and subject are optional for standalone
+  triage. When a case is present, a composite foreign key enforces case/space/subject consistency
+  and the subject/module are derived from that case. Without a case, an enabled organization
+  module may be selected manually; empty modules are stored as `NULL` and displayed as `无模块`.
   Referenced cases cannot be deleted. Subject deletion is also rejected while Bugs remain;
   deleting the entire test space retains its existing explicit cascade behavior.
   Case folder metadata is read from the current case, including its ancestor path for

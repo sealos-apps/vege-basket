@@ -6,6 +6,7 @@ import type { TestCase, TestCaseFolder } from './test-workbench-types.ts'
 
 export const testCaseCsvHeaders = [
   '用例名称',
+  '模块',
   '所属模块',
   '前置条件',
   '步骤描述',
@@ -29,6 +30,7 @@ export function buildTestCaseCsv(
       throw new Error('导出用例不属于当前目录。')
     return [
       item.title,
+      item.moduleName || '',
       path.map((folder) => folder.name).join(' / ') || '未分类',
       item.preconditions,
       item.steps,

@@ -401,7 +401,7 @@ test('keeps assigned Bug Feishu text and card fields aligned with the Bug detail
   assert.match(serverSource, /space\.version_label as test_space_version_label/u)
   assert.match(serverSource, /subject\.name as test_subject_name/u)
   assert.match(serverSource, /bugId: Number\(bug\.id\)/u)
-  assert.match(serverSource, /testSubjectName: decryptText\(bug\.test_subject_name\)/u)
+  assert.match(serverSource, /testSubjectName: bug\.test_subject_name \? decryptText\(bug\.test_subject_name\) : '未关联测试对象'/u)
   assert.match(serverSource, /testSpaceVersionLabel: bug\.test_space_version_label/u)
 
   const textBuilderStart = serverSource.indexOf('function buildFeishuNotificationText(')

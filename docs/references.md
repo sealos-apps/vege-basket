@@ -367,7 +367,7 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   execution snapshots remain and their nullable `test_case_id` is cleared.
 - Test-case CSV import accepts UTF-8 `text/csv` at
   `POST /api/test-spaces/:spaceId/cases/import?testSubjectId=:id`; add `preview=true` for
-  validation-only preview. Required headers are `用例名称`, `所属模块`, `前置条件`,
+  validation-only preview. Required headers are `用例名称`, `模块`, `前置条件`,
   `步骤描述`, `预期结果`, `备注`, and `用例等级`. Levels map as P0/high,
   P1/medium, and P2/low. Files are limited to 2 MB and 1000 non-empty rows.
 - Test-plan status: `draft`, `in_progress`, `completed`, `aborted`.
@@ -381,15 +381,16 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   Plan deletion keeps bugs and clears their plan and plan-case references.
 - Test result: `untested`, `passed`, `failed`, `blocked`, `skipped`.
 - Bug status: `new`, `pending_confirmation`, `assigned`, `in_progress`, `pending_verification`, `closed`, `rejected`.
-  `POST /api/test-spaces/:spaceId/bugs` requires `testCaseId`; the server derives the subject
-  from that case and checks any `testPlanCaseId` against the same canonical case.
+  `POST /api/test-spaces/:spaceId/bugs` accepts an optional `testCaseId`; when present, the
+  server derives the subject and module from that case and checks any `testPlanCaseId` against it.
+  Without a case, `testSubjectId` and `moduleId` may be supplied independently.
   Bug DTOs include optional `testCaseId`, `testCaseTitle`, `testCaseFolderId`, and
   `testCaseFolderName` (full path; optional for legacy unlinked Bugs or uncategorized cases).
   `testCaseDirectoryPath` contains only that case's ancestor IDs/names, in root-to-leaf order;
   choosing a parent directory matches all descendant cases, while equal names keep distinct IDs.
-  Creator-owned detail PATCH accepts `testCaseId` to fill a missing legacy association;
-  an existing association cannot change. Ordinary status/assignment updates remain possible
-  for legacy Bugs. Detail edits require case binding first.
+  Creator-owned detail PATCH accepts optional `testCaseId` and `moduleId`; selecting a case
+  refreshes its derived module, while clearing the case permits standalone triage.
+  Ordinary status/assignment updates remain possible for legacy Bugs.
   `POST /api/test-spaces/:spaceId/bugs/:bugId/transfer-space` requires `targetSpaceId` and
   `targetTestCaseId`. Target-space ownership and same-organization checks remain in force;
   old plan/execution links are cleared and recorded in encrypted collaboration text. Legacy
@@ -677,8 +678,8 @@ Folder DTOs include `parentId: number | null`. Under `/api/test-spaces/:spaceId`
   Moving a subtree to itself/descendants, sibling duplicates, or exceeding 32 levels
   is rejected. Names are trimmed, 1–240 characters, with no control characters.
 - `DELETE /folders/:folderId`: only an empty directory; nonempty returns 409.
-- Case create/update accepts `folderId` (null means uncategorized). The legacy
-  `modulePath` string is accepted separately as one root name; sending both is invalid.
+- Case create/update accepts `folderId` (null means uncategorized) and optional organization
+  `moduleId`; an omitted module is shown as `无模块`.
 - `POST /cases/move`: `{ testSubjectId, caseIds, targetFolderId }`, with 1–1000 distinct
   positive numeric IDs and a folder ID or null. The entire batch succeeds or fails.
   Response is `{ movedCount, workbench }`; unchanged assignments produce no notification.
@@ -690,7 +691,7 @@ Folder DTOs include `parentId: number | null`. Under `/api/test-spaces/:spaceId`
 `current` ignores directory columns and places all cases directly in the target.
 `tree` uses relative `目录路径`: `/` separates segments, `~1` escapes a literal slash,
 `~0` escapes a tilde, and an empty value means the selected target. If the path column
-is absent, `所属模块` is treated as one literal child name. Omitting `directoryMode`
+is absent, legacy `所属模块` is treated as one literal child name. Omitting `directoryMode`
 retains legacy root-module import behavior. Other required Chinese CSV fields and
-priority mappings remain unchanged. Exports include both a readable `所属模块` and the
-reversible relative `目录路径`; uncategorized exports use an empty path.
+priority mappings remain unchanged. Exports include `模块`, a readable legacy `所属模块`,
+and the reversible relative `目录路径`; uncategorized exports use an empty path.

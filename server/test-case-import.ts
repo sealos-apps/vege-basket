@@ -3,7 +3,7 @@ import { decodeDirectoryPath, directoryName, type TestCaseDirectoryMode } from '
 
 const requiredHeaders = [
   '用例名称',
-  '所属模块',
+  '模块',
   '前置条件',
   '步骤描述',
   '预期结果',
@@ -22,6 +22,7 @@ export type TestCaseImportRow = {
   expectedResult: string
   level: keyof typeof priorityByLevel
   modulePath: string
+  moduleName: string
   directorySegments: string[]
   preconditions: string
   priority: (typeof priorityByLevel)[keyof typeof priorityByLevel]
@@ -88,7 +89,8 @@ export function parseTestCaseCsv(csvText: string, directoryMode: TestCaseDirecto
   if (new Set(headers).size !== headers.length) {
     importError('CSV 表头存在重复字段。')
   }
-  const missingHeaders = requiredHeaders.filter((header) => (header !== '所属模块' || directoryMode === 'legacy') && !headers.includes(header))
+  const hasLegacyModuleHeader = headers.includes('所属模块') && !headers.includes('模块')
+  const missingHeaders = requiredHeaders.filter((header) => header !== '模块' ? !headers.includes(header) : !headers.includes(header) && !hasLegacyModuleHeader)
   if (directoryMode === 'tree' && !headers.includes('目录路径') && !headers.includes('所属模块')) importError('CSV 缺少字段：目录路径或所属模块。')
   if (missingHeaders.length > 0) {
     importError(`CSV 缺少字段：${missingHeaders.join('、')}。`)
@@ -102,14 +104,15 @@ export function parseTestCaseCsv(csvText: string, directoryMode: TestCaseDirecto
   const rows = records.map((record, index): TestCaseImportRow => {
     const rowNumber = index + 2
     const title = limited(record['用例名称'], 160, rowNumber, '用例名称')
-    const modulePath = limited(record['所属模块'], directoryMode === 'legacy' ? 240 : 16000, rowNumber, '所属模块')
+    const moduleName = limited(record['模块'] ?? '', 160, rowNumber, '模块')
+    const legacyPath = limited(record['所属模块'], directoryMode === 'legacy' ? 240 : 16000, rowNumber, '所属模块')
     const level = limited(record['用例等级'], 2, rowNumber, '用例等级').toUpperCase()
     if (!title) importError(`第 ${rowNumber} 行“用例名称”不能为空。`)
-    if (directoryMode === 'legacy' && !modulePath) importError(`第 ${rowNumber} 行“所属模块”不能为空。`)
+    if (directoryMode === 'legacy' && !legacyPath) importError(`第 ${rowNumber} 行“所属模块”不能为空。`)
     const directorySegments = directoryMode === 'current' ? []
       : directoryMode === 'tree' && headers.includes('目录路径')
         ? decodeDirectoryPath(limited(record['目录路径'], 16000, rowNumber, '目录路径'))
-        : modulePath ? [directoryName(modulePath)] : []
+        : legacyPath ? [directoryName(legacyPath)] : []
     if (!(level in priorityByLevel)) {
       importError(`第 ${rowNumber} 行“用例等级”必须是 P0、P1 或 P2。`)
     }
@@ -118,7 +121,8 @@ export function parseTestCaseCsv(csvText: string, directoryMode: TestCaseDirecto
       customTags: parseTags(record['自定义标签'] ?? record['标签'], rowNumber),
       expectedResult: limited(record['预期结果'], 10000, rowNumber, '预期结果'),
       level: normalizedLevel,
-      modulePath,
+      modulePath: legacyPath,
+      moduleName,
       directorySegments,
       preconditions: limited(record['前置条件'], 5000, rowNumber, '前置条件'),
       priority: priorityByLevel[normalizedLevel],
@@ -139,7 +143,7 @@ export function buildTestCaseImportPreview(rows: TestCaseImportRow[]): TestCaseI
   for (const row of rows) levelCounts[row.level] += 1
   return {
     levelCounts,
-    moduleCount: new Set(rows.map((row) => row.modulePath)).size,
+    moduleCount: new Set(rows.map((row) => row.moduleName || row.modulePath).filter(Boolean)).size,
     rowCount: rows.length,
     sampleTitles: rows.slice(0, 5).map((row) => row.title),
   }
