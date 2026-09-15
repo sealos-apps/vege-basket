@@ -10,6 +10,7 @@ import {
   ArrowsLeftRight,
   Bug,
   CalendarBlank,
+  CaretUp,
   CaretDown,
   CheckCircle,
   ClipboardText,
@@ -781,6 +782,9 @@ export function OrganizationWorkbench({
     || member.displayName.toLocaleLowerCase('zh-CN').includes(normalizedWeeklyReportAssigneeQuery)
     || member.username.toLocaleLowerCase('zh-CN').includes(normalizedWeeklyReportAssigneeQuery)
   ))
+  const visibleUnselectedWeeklyReportAssignees = visibleWeeklyReportAssigneeCandidates.filter(
+    (member) => !weeklyReportAssigneeUserIds.includes(member.id),
+  )
 
   function toggleWeeklyReportAssignee(userId: number, checked: boolean) {
     setWeeklyReportAssigneeUserIds((current) => checked
@@ -1440,21 +1444,7 @@ export function OrganizationWorkbench({
                             <span>填写成员</span>
                             <small>已选 {weeklyReportAssigneeUserIds.length} / {weeklyReportAssigneeCandidates.length}</small>
                           </legend>
-                          <p id="weekly-assignee-order-hint">已选成员按以下顺序展示在组织周报中，新增选择追加到末尾。</p>
-                          <ol className="organization-weekly-assignee-order" aria-label="已选填写成员显示顺序" aria-describedby="weekly-assignee-order-hint">
-                            {selectedWeeklyReportAssignees.map((member, index) => (
-                              <li key={member.id}>
-                                <span className="organization-weekly-assignee-number">{index + 1}</span>
-                                <span className="organization-weekly-assignee-name"><strong>{member.displayName}</strong><small>{member.username}</small></span>
-                                <div>
-                                  <Button type="button" size="sm" variant="ghost" aria-label={`上移 ${member.displayName}`} disabled={busy || index === 0} onClick={() => moveWeeklyReportAssignee(member.id, -1)}>上移</Button>
-                                  <Button type="button" size="sm" variant="ghost" aria-label={`下移 ${member.displayName}`} disabled={busy || index === selectedWeeklyReportAssignees.length - 1} onClick={() => moveWeeklyReportAssignee(member.id, 1)}>下移</Button>
-                                  <Button type="button" size="sm" variant="ghost" aria-label={`移除 ${member.displayName}`} disabled={busy} onClick={() => toggleWeeklyReportAssignee(member.id, false)}>移除</Button>
-                                </div>
-                              </li>
-                            ))}
-                          </ol>
-                          {selectedWeeklyReportAssignees.length === 0 ? <p>尚未选择填写成员，请在下方勾选。</p> : null}
+                          <p id="weekly-assignee-order-hint">已选成员按列表顺序展示在组织周报中，新勾选的成员追加到末尾；保存后生效。</p>
                           <div className="organization-weekly-assignee-tools">
                             <span className="organization-weekly-assignee-search">
                               <MagnifyingGlass aria-hidden="true" size={15} />
@@ -1488,23 +1478,47 @@ export function OrganizationWorkbench({
                               >清空</Button>
                             </div>
                           </div>
-                          <div className="organization-weekly-assignee-list">
-                            {visibleWeeklyReportAssigneeCandidates.map((member) => (
-                              <label key={member.id}>
+                          <ol className="organization-weekly-assignee-list" aria-label="周报填写成员与显示顺序" aria-describedby="weekly-assignee-order-hint">
+                            {selectedWeeklyReportAssignees.map((member, index) => (
+                              <li key={member.id}>
                                 <Checkbox
-                                  checked={weeklyReportAssigneeUserIds.includes(member.id)}
+                                  aria-label={`需填写周报：${member.displayName}`}
+                                  checked
+                                  disabled={busy}
+                                  id={`weekly-report-assignee-${member.id}`}
                                   onCheckedChange={(checked) => toggleWeeklyReportAssignee(member.id, checked === true)}
                                 />
-                                <span>
+                                <span className="organization-weekly-assignee-number">{index + 1}</span>
+                                <label className="organization-weekly-assignee-name" htmlFor={`weekly-report-assignee-${member.id}`}>
                                   <strong>{member.displayName}</strong>
                                   <small>{member.username}</small>
-                                </span>
-                              </label>
+                                </label>
+                                <div className="organization-weekly-assignee-actions">
+                                  <Button type="button" size="icon-sm" variant="ghost" title="上移" aria-label={`上移 ${member.displayName}`} disabled={busy || index === 0} onClick={() => moveWeeklyReportAssignee(member.id, -1)}><CaretUp aria-hidden="true" /></Button>
+                                  <Button type="button" size="icon-sm" variant="ghost" title="下移" aria-label={`下移 ${member.displayName}`} disabled={busy || index === selectedWeeklyReportAssignees.length - 1} onClick={() => moveWeeklyReportAssignee(member.id, 1)}><CaretDown aria-hidden="true" /></Button>
+                                </div>
+                              </li>
                             ))}
-                            {visibleWeeklyReportAssigneeCandidates.length === 0 ? (
-                              <p>没有匹配的组织成员</p>
+                            {visibleUnselectedWeeklyReportAssignees.map((member) => (
+                              <li key={member.id}>
+                                <Checkbox
+                                  aria-label={`需填写周报：${member.displayName}`}
+                                  checked={false}
+                                  disabled={busy}
+                                  id={`weekly-report-assignee-${member.id}`}
+                                  onCheckedChange={(checked) => toggleWeeklyReportAssignee(member.id, checked === true)}
+                                />
+                                <span className="organization-weekly-assignee-number" aria-hidden="true" />
+                                <label className="organization-weekly-assignee-name" htmlFor={`weekly-report-assignee-${member.id}`}>
+                                  <strong>{member.displayName}</strong>
+                                  <small>{member.username}</small>
+                                </label>
+                              </li>
+                            ))}
+                            {selectedWeeklyReportAssignees.length === 0 && visibleUnselectedWeeklyReportAssignees.length === 0 ? (
+                              <li className="organization-weekly-assignee-empty">{weeklyReportAssigneeCandidates.length === 0 ? '暂无可配置的组织成员' : '没有匹配的组织成员'}</li>
                             ) : null}
-                          </div>
+                          </ol>
                           <p>未选成员仍可查看自己的历史周报，但不再计入提交统计和填写提醒。</p>
                         </fieldset>
                         <DialogFooter>

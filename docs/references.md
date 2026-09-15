@@ -236,8 +236,12 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   ordered IDs, deduplicating by first occurrence. Saving atomically replaces the assignee set
   and zero-based positions; deselected members lose their position. Existing unranked members
   follow ranked members in name/username order with user ID as a stable tie breaker. New and
-  restored memberships remain unranked until the next rule save. Search only filters the
-  candidate list; selected member order remains fully visible for up/down movement.
+  restored memberships remain unranked until the next rule save. The rule editor uses one
+  list: selected members remain first with their draft assignment checkbox, draft-order
+  position, and up/down controls; unselected members follow with assignment checkboxes.
+  Search filters only unselected members so the entire selected order remains available.
+  New selections append to the selected order; checkbox, bulk selection, and reorder changes
+  take effect together only on rule save.
 - Weekly-rule configuration shows a live example for the calendar period containing today's
   Shanghai date: report range, opening, deadline (inclusive through its minute), and next
   opening. `T`/`T+1` refer to report periods; day 1 is the configured organization week start.

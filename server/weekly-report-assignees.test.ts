@@ -159,3 +159,18 @@ test('configuration and collection share saved order, name fallback, and a stabl
     /order by membership\.weekly_report_sort_order asc nulls last,\s+lower\(coalesce\(nullif\(users\.display_name, ''\), users\.email\)\), membership\.user_id/u)
   assert.match(organizationWorkbenchSource, /setWeeklyReportAssigneeUserIds\(detail\.weeklyReportAssigneeUserIds\)/u)
 })
+
+test('the rule editor combines assignment and ordering in one list while search preserves selected order', () => {
+  assert.match(organizationWorkbenchSource, /const selectedWeeklyReportAssignees = weeklyReportAssigneeUserIds\.flatMap/u)
+  assert.match(organizationWorkbenchSource,
+    /const visibleUnselectedWeeklyReportAssignees = visibleWeeklyReportAssigneeCandidates\.filter\(\s*\(member\) => !weeklyReportAssigneeUserIds\.includes\(member\.id\)/u)
+  assert.equal(organizationWorkbenchSource.match(/className="organization-weekly-assignee-list"/gu)?.length, 1)
+  assert.doesNotMatch(organizationWorkbenchSource, /organization-weekly-assignee-order/u)
+  assert.match(organizationWorkbenchSource,
+    /selectedWeeklyReportAssignees\.map[\s\S]+visibleUnselectedWeeklyReportAssignees\.map/u)
+  assert.match(organizationWorkbenchSource, /checked\s+disabled=\{busy\}/u)
+  assert.match(organizationWorkbenchSource, /checked=\{false\}\s+disabled=\{busy\}/u)
+  assert.equal(organizationWorkbenchSource.match(/htmlFor=\{`weekly-report-assignee-\$\{member\.id\}`\}/gu)?.length, 2)
+  assert.match(organizationWorkbenchSource, /setWeeklyReportAssigneeUserIds\(\(current\) => checked\s+\? \[\.\.\.new Set\(\[\.\.\.current, userId\]\)\]/u)
+  assert.match(organizationWorkbenchSource, /index === 0[\s\S]+index === selectedWeeklyReportAssignees\.length - 1/u)
+})
