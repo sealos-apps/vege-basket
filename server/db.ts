@@ -1,7 +1,12 @@
 import 'dotenv/config'
 import pg from 'pg'
 import type { QueryResultRow } from 'pg'
-import { registerDatabasePoolErrorHandler } from './database-pool-policy.ts'
+import {
+  createConcurrencyLimiter,
+  databasePoolSettings,
+  registerDatabasePoolErrorHandler,
+  reportSlowDatabaseQuery,
+} from './database-pool-policy.ts'
 
 const { Pool } = pg
 
@@ -13,9 +18,7 @@ if (!databaseUrl) {
 
 export const pool = new Pool({
   connectionString: databaseUrl,
-  // getTestWorkbench fans out independent reads; avoid queuing its 13 queries
-  // behind the default ten-connection pool during refreshes.
-  max: 20,
+  ...databasePoolSettings(),
   keepAlive: true,
   keepAliveInitialDelayMillis: 10_000,
 })
@@ -26,5 +29,21 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   text: string,
   params: unknown[] = [],
 ) {
-  return pool.query<T>(text, params)
+  const startedAt = performance.now()
+  try {
+    return await pool.query<T>(text, params)
+  } finally {
+    reportSlowDatabaseQuery(pool, performance.now() - startedAt)
+  }
+}
+
+export function createLimitedQuery(maxConcurrent = 4) {
+  const limit = createConcurrencyLimiter(maxConcurrent)
+
+  return async function limitedQuery<T extends QueryResultRow = QueryResultRow>(
+    text: string,
+    params: unknown[] = [],
+  ) {
+    return limit(() => query<T>(text, params))
+  }
 }

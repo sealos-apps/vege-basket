@@ -68,6 +68,14 @@ curl --fail --silent http://127.0.0.1:8787/api/health
 Expected response: `{"ok":true}`. This health endpoint proves the process is serving;
 it does not prove database, OSS, Feishu, or AI workflows.
 
+The application pool defaults to 10 clients and the digest worker deployment is capped at 2.
+Before changing `DB_POOL_MAX`, compare the sum across the maximum number of application replicas
+and concurrent workers with PostgreSQL `max_connections`, leaving at least 20 percent for database
+administration, deployment overlap, and maintenance. Slow-query diagnostics report only elapsed
+milliseconds and `total`, `idle`, and `waiting` pool counts. They intentionally omit SQL and
+parameters. A sustained nonzero `waiting` count should first be addressed by reducing duplicate or
+over-broad reads before increasing the connection budget.
+
 ## Organization Resource Management Verification
 
 After explicitly authorizing an external development PostgreSQL instance, run:

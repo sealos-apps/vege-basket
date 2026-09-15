@@ -12,6 +12,7 @@ import type {
   TestSpaceImportSource,
   TestSpaceSettings,
   TestWorkbenchData,
+  TestWorkbenchSection,
 } from './test-workbench-types'
 import type { Priority } from './types'
 import {
@@ -24,12 +25,17 @@ function withOrganizationContext(path: string, organizationId: OrganizationConte
   return `${path}?${params}`
 }
 
-export function fetchTestWorkbench(scope?: { spaceId?: number; subjectId?: number }) {
+export function fetchTestWorkbench(
+  scope?: { bugId?: number; sections?: TestWorkbenchSection[]; spaceId?: number; subjectId?: number },
+  options: Pick<RequestInit, 'signal'> = {},
+) {
   const params = new URLSearchParams()
+  if (scope?.bugId) params.set('bugId', String(scope.bugId))
   if (scope?.spaceId) params.set('spaceId', String(scope.spaceId))
   if (scope?.subjectId) params.set('subjectId', String(scope.subjectId))
+  if (scope?.sections?.length) params.set('sections', scope.sections.join(','))
   const query = params.toString()
-  return request<TestWorkbenchData>(`/api/test-workbench${query ? `?${query}` : ''}`)
+  return request<TestWorkbenchData>(`/api/test-workbench${query ? `?${query}` : ''}`, options)
 }
 
 export function createTestSpace(name: string, versionLabel: string, organizationId: number) {
@@ -39,8 +45,8 @@ export function createTestSpace(name: string, versionLabel: string, organization
   })
 }
 
-export function fetchTestSpaceSettings() {
-  return request<TestSpaceSettings>('/api/test-spaces/settings')
+export function fetchTestSpaceSettings(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<TestSpaceSettings>('/api/test-spaces/settings', options)
 }
 
 export function updateTestSpace(spaceId: number, payload: { name: string; organizationId?: number; versionLabel?: string }) {

@@ -5,7 +5,7 @@ import type express from 'express'
 import { Router } from 'express'
 import type { PoolClient } from 'pg'
 import { blindIndex, decryptJson, decryptText, encryptJson, encryptText } from './crypto.ts'
-import { pool, query } from './db.ts'
+import { createLimitedQuery, pool, query } from './db.ts'
 import {
   canManageOrganization,
   canManageOrganizationProjects,
@@ -93,6 +93,35 @@ type OrganizationMembership = {
   access_role: OrganizationAccessRole
   organization_id: string
   weekly_report_required: boolean
+}
+
+type OrganizationDetailSection =
+  | 'members'
+  | 'overview'
+  | 'packageMarket'
+  | 'projects'
+  | 'reports'
+  | 'settings'
+  | 'testSpaces'
+
+const organizationDetailSections = new Set<OrganizationDetailSection>([
+  'members',
+  'overview',
+  'packageMarket',
+  'projects',
+  'reports',
+  'settings',
+  'testSpaces',
+])
+
+function parseOrganizationDetailSections(value: unknown) {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !value.trim()) return null
+  const sections = new Set(value.split(',').map((section) => section.trim()))
+  if ([...sections].some((section) => !organizationDetailSections.has(section as OrganizationDetailSection))) {
+    return null
+  }
+  return sections as Set<OrganizationDetailSection>
 }
 
 function asyncRoute(
@@ -490,7 +519,15 @@ async function getOrganizationWeekStartsOn(organizationId: number) {
   return normalizeOrganizationWeekStartsOn(result.rows[0]?.week_starts_on) ?? 1
 }
 
-async function getOrganizationDetail(organizationId: number, userId: number) {
+async function getOrganizationDetail(
+  organizationId: number,
+  userId: number,
+  sections?: Set<OrganizationDetailSection>,
+) {
+  const detailQuery = createLimitedQuery()
+  const includes = (...candidates: OrganizationDetailSection[]) => (
+    !sections || candidates.some((section) => sections.has(section))
+  )
   const membership = await getOrganizationMembership(organizationId, userId)
   if (!membership) return null
   const assignedRoles = await getAssignedRoles(userId)
@@ -498,7 +535,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
   const canManageProjects = canManageOrganizationProjects(membership.access_role, assignedRoles)
   const canManageWeeklyReports = canManageOrganizationWeeklyReports(membership.access_role, assignedRoles)
   const [organization, members, projects, projectMemberships, milestones, testSpaces, testEnvironments, todos, packageEvents, bugs, reports, summaries, invitations, attachableProjects, attachableTestSpaces, packageMarketPolicy, projectModules] = await Promise.all([
-    query<{
+    detailQuery<{
       created_at: Date
       id: string
       name: string
@@ -516,7 +553,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
        from organizations where id = $1`,
       [organizationId],
     ),
-    query<{
+    includes('overview', 'projects', 'testSpaces', 'members', 'reports', 'settings') ? detailQuery<{
       access_role: OrganizationAccessRole
       display_name: string
       email: string
@@ -546,8 +583,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
         lower(coalesce(nullif(u.display_name, ''), u.email))
       `,
       [organizationId],
-    ),
-    query<{
+    ) : Promise.resolve({ rows: [] }),
+    includes('overview', 'projects') ? detailQuery<{
       description_encrypted: string | null
       tags: string[]
       tags_encrypted: string | null
@@ -580,8 +617,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       order by p.updated_at desc, p.id desc
       `,
       [organizationId, canManageProjects, userId],
-    ),
-    canManageProjects ? query<{
+    ) : Promise.resolve({ rows: [] }),
+    canManageProjects && includes('projects') ? detailQuery<{
       created_at: Date
       id: string
       invited_email: string
@@ -605,7 +642,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       `,
       [organizationId],
     ) : Promise.resolve({ rows: [] }),
-    query<{
+    includes('projects') ? detailQuery<{
       acceptance_criteria: string
       baseline_date: Date | string
       completed_at: Date | null
@@ -648,8 +685,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       order by milestone.target_date, milestone.sort_order, milestone.id
       `,
       [organizationId, canManageProjects, userId],
-    ),
-    query<{
+    ) : Promise.resolve({ rows: [] }),
+    includes('overview', 'testSpaces') ? detailQuery<{
       bug_count: string
       id: string
       name: string
@@ -662,21 +699,18 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       `
       select s.id, s.name, s.version_label, s.updated_at, owner.email as owner_email,
         owner.display_name as owner_display_name,
-        count(distinct p.id) as plan_count,
-        count(distinct b.id) as bug_count
+        (select count(*) from test_plans p where p.test_space_id = s.id) as plan_count,
+        (select count(*) from test_bugs b where b.test_space_id = s.id) as bug_count
       from test_spaces s
       join users owner on owner.id = s.owner_user_id
       left join test_space_memberships mine
         on mine.test_space_id = s.id and mine.user_id = $3 and mine.status = 'active'
-      left join test_plans p on p.test_space_id = s.id
-      left join test_bugs b on b.test_space_id = s.id
       where s.organization_id = $1 and ($2::boolean or mine.user_id is not null)
-      group by s.id, owner.id
       order by s.updated_at desc, s.id desc
       `,
       [organizationId, canManageProjects, userId],
-    ),
-    canManageTestEnvironments(membership.access_role, assignedRoles) ? query<{
+    ) : Promise.resolve({ rows: [] }),
+    canManageTestEnvironments(membership.access_role, assignedRoles) && includes('testSpaces') ? detailQuery<{
       access_url: string
       created_at: Date
       id: string
@@ -698,7 +732,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       `,
       [organizationId],
     ) : Promise.resolve({ rows: [] }),
-    query<{
+    includes('overview') ? detailQuery<{
       assignee_display_name: string | null
       assignee_email: string | null
       assignee_user_id: string | null
@@ -725,8 +759,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       limit 200
       `,
       [organizationId, canManageProjects, userId],
-    ),
-    query<{
+    ) : Promise.resolve({ rows: [] }),
+    includes('overview') ? detailQuery<{
       assignee_display_name: string | null
       assignee_email: string | null
       assignee_user_id: string | null
@@ -752,8 +786,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       limit 200
       `,
       [organizationId, canManageProjects, userId],
-    ),
-    query<{
+    ) : Promise.resolve({ rows: [] }),
+    includes('overview') ? detailQuery<{
       assignee_display_name: string | null
       assignee_email: string | null
       assignee_user_id: string | null
@@ -781,8 +815,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       limit 200
       `,
       [organizationId, canManageProjects, userId],
-    ),
-    query<{
+    ) : Promise.resolve({ rows: [] }),
+    includes('reports') ? detailQuery<{
       content: string
       display_name: string
       email: string
@@ -815,8 +849,8 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
       limit 200
       `,
       [organizationId, canManageWeeklyReports, userId],
-    ),
-    canManageWeeklyReports ? query<{
+    ) : Promise.resolve({ rows: [] }),
+    canManageWeeklyReports && includes('reports') ? detailQuery<{
       content: string
       created_at: Date
       source_report_count: number
@@ -827,7 +861,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
        order by week_start desc limit 12`,
       [organizationId],
     ) : Promise.resolve({ rows: [] }),
-    canManage ? query<{
+    canManage && includes('members', 'settings') ? detailQuery<{
       created_at: Date
       id: string
       last_error: string
@@ -840,22 +874,22 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
        order by created_at desc limit 50`,
       [organizationId],
     ) : Promise.resolve({ rows: [] }),
-    query<{ id: string; name: string; status: string }>(
+    includes('projects') ? detailQuery<{ id: string; name: string; status: string }>(
       `select id, name, status from projects
        where user_id = $1 and organization_id is null order by updated_at desc`,
       [userId],
-    ),
-    query<{ id: string; name: string }>(
+    ) : Promise.resolve({ rows: [] }),
+    includes('testSpaces') ? detailQuery<{ id: string; name: string }>(
       `select id, name from test_spaces
        where owner_user_id = $1 and organization_id is null order by updated_at desc`,
       [userId],
-    ),
+    ) : Promise.resolve({ rows: [] }),
     getOrganizationPackageMarketPolicy(organizationId),
-    listOrganizationProjectModules(pool, organizationId),
+    includes('settings') ? listOrganizationProjectModules(pool, organizationId) : Promise.resolve([]),
   ])
   const row = organization.rows[0]
   if (!row) return null
-  const departedUserIds = await getDepartedUserIds()
+  const departedUserIds = includes('overview') ? await getDepartedUserIds() : []
   const taskRows = [
     ...todos.rows.map((task) => ({
       assigneeName: task.assignee_email
@@ -972,6 +1006,7 @@ async function getOrganizationDetail(organizationId: number, userId: number) {
     membershipsByProject.set(projectId, memberships)
   }
   return {
+    loadedSections: sections ? [...sections] : undefined,
     accessRole: membership.access_role,
     departedUserIds,
     attachableProjects: attachableProjects.rows.map((project) => ({
@@ -1243,7 +1278,12 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       response.status(400).json({ error: 'Valid organization is required' })
       return
     }
-    const detail = await getOrganizationDetail(organizationId, session.userId)
+    const sections = parseOrganizationDetailSections(request.query.sections)
+    if (sections === null) {
+      response.status(400).json({ error: 'Invalid organization sections' })
+      return
+    }
+    const detail = await getOrganizationDetail(organizationId, session.userId, sections)
     if (!detail) {
       response.status(404).json({ error: 'Organization not found' })
       return

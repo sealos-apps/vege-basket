@@ -257,6 +257,7 @@ export type TestBug = {
   canTransfer?: boolean
   comments: TestBugComment[]
   createdAt: string
+  detailsLoaded?: boolean
   environment: string
   expectedResult: string
   events: TestBugEvent[]
@@ -299,11 +300,22 @@ export type TestWorkspaceUser = {
 }
 
 export type TestWorkbenchNotification = {
+  actionable?: boolean
+  commentAuthorName?: string
   createdAt: string
   kind: 'test_plan_assigned' | 'test_bug_status_changed' | 'test_bug_rejected' | 'test_bug_comment_added'
   sourceId: number
-  testSpaceName?: string
+  targetId: number
+  targetStatus?: BugStatus | TestPlanStatus
+  targetTitle: string
+  testCaseId?: number
+  testCaseTitle?: string
+  testSpaceId: number
+  testSpaceName: string
   testSpaceVersionLabel?: string
+  testSubjectId?: number
+  testSubjectName?: string
+  testSubjects?: Array<{ id: number; name: string }>
 } | {
   authorName: string
   commentPreview: string
@@ -330,7 +342,10 @@ export type TestWorkbenchData = {
   subjects: TestSubject[]
   testEnvironments: TestEnvironment[]
   users: TestWorkspaceUser[]
+  loadedSections?: TestWorkbenchSection[]
 }
+
+export type TestWorkbenchSection = 'bugs' | 'cases' | 'core' | 'notifications' | 'plans'
 
 export type TestWorkbenchProjectOption = Pick<Project, 'id' | 'name'>
 

@@ -134,6 +134,27 @@ The production image builds `src/` into `dist/`, copies `server/`, and starts
 - `server/db.ts`: the shared PostgreSQL pool. Domain modules must use one checked-out
   `PoolClient` for every atomic multi-statement operation.
 
+## Workbench Loading
+
+Changing the active browser view does not invalidate the workspace snapshot. Workspace and
+organization catalog refreshes are driven by authentication, periodic reconciliation, or an
+explicit successful mutation. The test and organization workbenches may request named read-only
+sections for their active tab; omitting the section parameter preserves the complete legacy
+response used by mutations and compatibility callers. Every section performs the same server-side
+authentication and resource authorization as the complete response.
+
+Test-workbench content sections are additionally scoped to the active test space. Case reads may
+narrow further to one subject, while Bug list reads omit comments, events, verification submissions,
+and large detail text until a single authorized Bug is selected. Notification rows carry bounded
+resource display metadata and recheck current test-space access, so the notification center does not
+need to hydrate every referenced Bug, plan, and case. The browser caches each tab/space scope,
+cancels superseded reads, and keeps periodic reconciliation inside the same scope.
+
+The API and digest worker share the pool implementation but receive separate connection budgets.
+The main query batches in wide read models admit at most four SQL statements concurrently, so one
+workbench load cannot consume the entire application pool through its direct query fan-out. Pool
+diagnostics contain only duration and aggregate connection counts, never SQL text or values.
+
 ## Request And Authorization Path
 
 Password or Feishu sign-in creates a random session token stored in `sessions` for 30

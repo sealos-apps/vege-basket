@@ -1803,6 +1803,7 @@ function App() {
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false)
   const [workspaceRefreshVersion, setWorkspaceRefreshVersion] = useState(0)
   const [organizationRefreshVersion, setOrganizationRefreshVersion] = useState(0)
+  const [canCreateOrganization, setCanCreateOrganization] = useState(false)
   const [workspaceError, setWorkspaceError] = useState('')
   const confirmationScope = `${authUser?.id}:${selectedOrganizationId}:${selectedProjectId}:${view}`
   const { confirmAction, confirmationDialog } = useConfirmAction(confirmationScope)
@@ -1853,7 +1854,6 @@ function App() {
   const notificationRefreshPromiseRef = useRef<Promise<NotificationCenterData | false> | null>(null)
   const workspaceRefreshRequestIdRef = useRef(0)
   const workspaceRefreshPromiseRef = useRef<Promise<boolean> | null>(null)
-  const workspaceHydratedRef = useRef(false)
   const organizationContextReadyRef = useRef(false)
   const workspaceMutationEpochRef = useRef(0)
   const aiRequestIdRef = useRef(0)
@@ -2218,7 +2218,6 @@ function App() {
         authSessionGenerationRef.current += 1
         notificationRefreshPromiseRef.current = null
         workspaceRefreshPromiseRef.current = null
-        workspaceHydratedRef.current = false
         clearAuthToken()
         setLoggedIn(false)
         setWorkspaceError('')
@@ -2233,6 +2232,7 @@ function App() {
     if (!loggedIn || !authUserId) {
       organizationContextReadyRef.current = false
       setOrganizations([])
+      setCanCreateOrganization(false)
       setSelectedOrganizationId(null)
       setOrganizationContextReady(false)
       setOrganizationContextError('')
@@ -2242,8 +2242,9 @@ function App() {
     let active = true
     setOrganizationContextError('')
     fetchOrganizations()
-      .then(({ organizations: nextOrganizations }) => {
+      .then(({ canCreate, organizations: nextOrganizations }) => {
         if (!active) return
+        setCanCreateOrganization(canCreate)
         const storedOrganizationId = loadStoredSelectedOrganizationId(authUserId)
         setOrganizations(nextOrganizations)
         setSelectedOrganizationId((current) => {
@@ -2273,10 +2274,10 @@ function App() {
     return () => {
       active = false
     }
-  }, [authUserId, loggedIn, organizationRefreshVersion, workspaceRefreshVersion])
+  }, [authUserId, loggedIn, organizationRefreshVersion])
 
   useEffect(() => {
-    if (!loggedIn || !authUser) return
+    if (!loggedIn || !authUserId) return
 
     const historyRequestId = aiHistoryRequestIdRef.current + 1
     aiHistoryRequestIdRef.current = historyRequestId
@@ -2351,7 +2352,7 @@ function App() {
         aiTurnsRequestIdRef.current += 1
       }
     }
-  }, [applyCanonicalAiTurnOutcome, authUser, loggedIn, replaceAiConversationTurns])
+  }, [applyCanonicalAiTurnOutcome, authUserId, loggedIn, replaceAiConversationTurns])
 
   useEffect(() => {
     const processing = canonicalProcessingAiTurn(aiTurns)
@@ -2471,7 +2472,11 @@ function App() {
         document.addEventListener('visibilitychange', listener)
         return () => document.removeEventListener('visibilitychange', listener)
       },
-      refresh: () => refreshWorkspace(),
+      refresh: async () => {
+        const refreshed = await refreshWorkspace()
+        if (refreshed) setOrganizationRefreshVersion((current) => current + 1)
+        return refreshed
+      },
       setInterval: (listener, delay) => window.setInterval(listener, delay),
     })
   }, [loggedIn, refreshWorkspace])
@@ -2494,15 +2499,6 @@ function App() {
       setView('search')
     }
   }, [selectedOrganizationId, view])
-
-  useEffect(() => {
-    if (!loggedIn || !workspaceLoaded) return
-    if (!workspaceHydratedRef.current) {
-      workspaceHydratedRef.current = true
-      return
-    }
-    void refreshWorkspace()
-  }, [loggedIn, view, workspaceLoaded, refreshWorkspace])
 
   useEffect(() => {
     setInvitePasswordDraft('')
@@ -3023,7 +3019,6 @@ function App() {
     workspaceRefreshRequestIdRef.current += 1
     notificationRefreshPromiseRef.current = null
     workspaceRefreshPromiseRef.current = null
-    workspaceHydratedRef.current = false
     workspaceMutationEpochRef.current += 1
     aiRequestIdRef.current += 1
     aiHistoryRequestIdRef.current += 1
@@ -5475,7 +5470,10 @@ ${packageTimelineText}`
 
         {view === 'organization' && authUser ? (
           <OrganizationWorkbench
+            canCreate={canCreateOrganization}
             currentUser={authUser}
+            initialOrganizations={organizations}
+            initialSelectedOrganizationId={selectedOrganizationId}
             onSubprojectsChanged={() => {
               workspaceMutationEpochRef.current += 1
               void Promise.resolve(workspaceRefreshPromiseRef.current).then(() => refreshWorkspace())

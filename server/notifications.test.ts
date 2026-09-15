@@ -592,7 +592,10 @@ test('notifies the Bug reporter privately when a developer rejects it', () => {
   assert.match(serverSource, /function enqueueTestBugRejectedDelivery/u)
   assert.match(testWorkbenchSource, /onTestBugRejected\(\{/u)
   assert.match(testWorkbenchSource, /'test_bug_rejected'/u)
-  assert.match(testWorkbenchClientSource, /rejectedBugNotifications/u)
+  assert.match(
+    testWorkbenchClientSource,
+    /notification\.kind === 'test_bug_rejected' && notification\.actionable/u,
+  )
   assert.equal(shouldDeliverNotificationToProjectChat('test_bug_rejected'), false)
 })
 
@@ -760,12 +763,16 @@ test('supports a slower interval for heavier workspace refreshes', () => {
   assert.equal(intervalDelay, workspaceRefreshIntervalMs)
 })
 
-test('refreshes the workspace snapshot independently from notification polling', () => {
+test('does not refresh the workspace snapshot just because the view changes', () => {
   assert.match(appSource, /const refreshWorkspace = useCallback\(async \(\) =>/u)
   assert.match(appSource, /fetchWorkspace\(\)/u)
   assert.match(appSource, /intervalMs: workspaceRefreshIntervalMs/u)
-  assert.match(appSource, /if \(!workspaceHydratedRef\.current\) \{\s*workspaceHydratedRef\.current = true\s*return/u)
-  assert.match(appSource, /\[loggedIn, view, workspaceLoaded, refreshWorkspace\]/u)
+  assert.doesNotMatch(appSource, /workspaceHydratedRef/u)
+  assert.doesNotMatch(appSource, /\[loggedIn, view, workspaceLoaded, refreshWorkspace\]/u)
+  assert.match(
+    appSource,
+    /const refreshed = await refreshWorkspace\(\)\s*if \(refreshed\) setOrganizationRefreshVersion/u,
+  )
   assert.match(appSource, /refreshToken=\{workspaceRefreshVersion\}/u)
 })
 

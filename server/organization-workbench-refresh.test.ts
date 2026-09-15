@@ -38,7 +38,7 @@ test('global package market uses the selected sidebar organization as its only c
   assert.match(appSource, /view === 'package_market' && !packageMarketVisible/u)
   assert.match(
     appSource,
-    /\}, \[authUserId, loggedIn, organizationRefreshVersion, workspaceRefreshVersion\]\)/u,
+    /\}, \[authUserId, loggedIn, organizationRefreshVersion\]\)/u,
   )
   assert.match(
     appSource,

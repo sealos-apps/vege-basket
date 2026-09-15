@@ -75,7 +75,9 @@ test('case workbench loads the whole space and treats test subjects as virtual r
   assert.match(testWorkbenchClientSource, /importTestCases\(spaceId!, subjectId, csvText/u)
   assert.match(testWorkbenchClientSource, /folder\.testSpaceId === spaceId/u)
   assert.doesNotMatch(testWorkbenchClientSource, /fetchTestWorkbench\(scope\)/u)
-  assert.doesNotMatch(testWorkbenchSource, /scopePlans|scopePlanCases/u)
+  assert.match(testWorkbenchSource, /const scopePlans = scope\?\.spaceId \? ` and p\.test_space_id = \$\{scope\.spaceId\}` : ''/u)
+  assert.match(testWorkbenchSource, /const scopePlanCases = scope\?\.spaceId \? ` and p\.test_space_id = \$\{scope\.spaceId\}` : ''/u)
+  assert.doesNotMatch(testWorkbenchSource, /scope\?\.subjectId \? ` and p\.test_subject_id/u)
   assert.match(testWorkbenchClientSource, /veges\.case-directories\.v3\.\$\{currentUserId\}\.\$\{spaceId\}/u)
   assert.match(testCaseDirectoryTreeSource, /`subject:\$\{subject\.id\}`/u)
   assert.doesNotMatch(testCaseDirectoryTreeSource, /`uncategorized:\$\{subject\.id\}`/u)
@@ -88,7 +90,7 @@ test('case workbench loads the whole space and treats test subjects as virtual r
   assert.match(testWorkbenchClientSource, /aria-label="按测试用例目录筛选计划"/u)
   assert.match(testWorkbenchClientSource, /<SelectItem value="all">全部测试用例目录<\/SelectItem>\{planSubjects\.map\(\(subject\)/u)
   assert.doesNotMatch(testWorkbenchClientSource, />全部测试对象<\/SelectItem>/u)
-  assert.match(testWorkbenchClientSource, /setSubjectId\(undefined\)[\s\S]*setSelectedPlanId\(plan\.id\)/u)
+  assert.match(testWorkbenchClientSource, /setSubjectId\(undefined\)[\s\S]*setSelectedPlanId\(notification\.targetId\)/u)
   assert.match(testWorkbenchClientSource, /key=\{`plans:\$\{spaceId\}`\}/u)
   assert.match(testWorkbenchClientSource, /onEdit=\{\(testCase\) => \{ setSubjectId\(testCase\.testSubjectId\); setEditingCase\(testCase\)/u)
   assert.doesNotMatch(testWorkbenchClientSource, /veges\.case-directories\.hidden/u)
@@ -115,8 +117,8 @@ test('test-space member settings do not show unrelated departed accounts', () =>
 })
 
 test('Bug scope stays within the current space and exposes its case instead of a subject picker', () => {
-  // Scoped polling replaces the full client cache, so Bugs must span all accessible spaces.
-  assert.doesNotMatch(testWorkbenchSource, /scopeBugs/u)
+  assert.match(testWorkbenchSource, /const scopeBugs = .*b\.test_space_id/u)
+  assert.match(testWorkbenchSource, /where \(\$\{testSpaceMembershipPresentSql\('m'\)\} or \$\{managedOrganizationReadScopeSql\('space.organization_id'\)\}\)\$\{scopeBugs\}/u)
   assert.match(testWorkbenchSource, /join test_subjects subject on subject\.id = b\.test_subject_id/u)
   assert.match(testWorkbenchSource, /subject\.name as test_subject_name/u)
   assert.match(testWorkbenchSource, /testSubjectName: decryptText\(row\.test_subject_name\)/u)
