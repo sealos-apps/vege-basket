@@ -190,6 +190,7 @@ import type {
   TestWorkbenchProjectOption,
   TestWorkbenchSection,
 } from '@/test-workbench-types'
+import { replaceItemByIdInPlace } from '@/test-workbench-cache'
 import type { OrganizationContext } from '../../shared/organization-context'
 import { containerImageReferenceKey, normalizeContainerImageReference } from '../../shared/container-image-reference'
 import { formatTestSpaceReference } from '../../shared/test-space-reference'
@@ -315,7 +316,7 @@ function mergeTestWorkbenchData(
   const mergedBugs = (() => {
     if (!sections.has('bugs')) return current.bugs
     if (scope.bugId) {
-      return replaceScopedItems(current.bugs, next.bugs, (bug) => bug.id === scope.bugId)
+      return replaceItemByIdInPlace(current.bugs, next.bugs, scope.bugId)
     }
     const currentBugsById = new Map(current.bugs.map((bug) => [bug.id, bug]))
     const summaries = next.bugs.map((bug) => {

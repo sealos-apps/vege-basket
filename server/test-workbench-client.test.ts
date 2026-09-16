@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { replaceItemByIdInPlace } from '../src/test-workbench-cache.ts'
 import { fetchTestWorkbench } from '../src/test-workbench-api.ts'
 
 const emptyWorkbench = {
@@ -56,4 +57,17 @@ test('test workbench client forwards cancellation to superseded reads', async (c
   await fetchTestWorkbench({ sections: ['plans'], spaceId: 3 }, { signal: controller.signal })
 
   assert.equal(receivedSignal, controller.signal)
+})
+
+test('loading Bug details replaces the cached item without changing list order', () => {
+  const current = [
+    { detailsLoaded: false, id: 3 },
+    { detailsLoaded: false, id: 2 },
+    { detailsLoaded: false, id: 1 },
+  ]
+
+  const merged = replaceItemByIdInPlace(current, [{ detailsLoaded: true, id: 2 }], 2)
+
+  assert.deepEqual(merged.map((bug) => bug.id), [3, 2, 1])
+  assert.equal(merged[1]?.detailsLoaded, true)
 })
