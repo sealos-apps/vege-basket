@@ -25,19 +25,11 @@ test('organization weekly collection does not reload from whole detail object re
 test('organization detail loading cannot render the empty organization state early', () => {
   assert.match(workbenchSource, /const \[detailLoading, setDetailLoading\] = useState\(false\)/u)
   assert.match(workbenchSource, /setDetailLoading\(nextId !== 0\)/u)
-  assert.match(workbenchSource, /if \(\(!detail \|\| detail\.id !== selectedOrganizationId\) && \(loading \|\| detailLoading\)\)/u)
-})
-
-test('organization governance uses a dedicated shell and capability-gated configuration entries', () => {
-  assert.match(appSource, /const hideSidebar = view === 'organization'/u)
-  assert.match(appSource, /view === 'organization'[\s\S]+workspace organization-management-shell/u)
-  assert.match(workbenchSource, /function renderManagementState\(content: ReactNode\)/u)
-  assert.match(workbenchSource, /aria-label="返回工作区"[\s\S]+onClick=\{onBack\}/u)
-  assert.match(workbenchSource, /<aside className="organization-governance-sidebar" aria-label="组织治理导航">/u)
-  assert.match(workbenchSource, /detail\.canManage[\s\S]+id: 'settings'/u)
-  assert.match(workbenchSource, /tab === 'settings' && detail\.canManage/u)
-  assert.match(workbenchSource, /tab === 'settings'[\s\S]+detail\.canManageProjectModules[\s\S]+<OrganizationProjectModulesPanel/u)
-  assert.doesNotMatch(workbenchSource, /id: 'modules'/u)
+  assert.match(
+    workbenchSource,
+    /if \(\(!detail \|\| detail\.id !== selectedOrganizationId\) && \(loading \|\| detailLoading\)\)/u,
+  )
+  assert.match(workbenchSource, /if \(!detail \|\| detail\.id !== selectedOrganizationId\)/u)
 })
 
 test('global package market uses the selected sidebar organization as its only context', () => {
