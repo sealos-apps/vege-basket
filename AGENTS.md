@@ -24,6 +24,11 @@ historical product context; current code and these operational docs take precede
   not resolve parse-time ambiguity between types such as `text` and `bigint`.
 - Keep client contracts in `src/api.ts` and `src/types.ts` synchronized with server
   response shapes.
+- Keep background refreshes scoped to the active data surface and preserve already loaded
+  content while revalidating. Do not use the workspace snapshot as a global workbench
+  invalidation token, and coalesce focus plus visibility events from one foreground transition.
+- Editor error recovery must stay inside the failing editor. Never automatically reload the
+  whole page from an error boundary because that discards navigation and draft context.
 - Keep occupational roles separate from resource permissions. Test and Bug workbenches
   require the active `tester` or `developer` persona. An assigned `organization_admin`
   role may assume any business persona. Test-space administration routes also accept

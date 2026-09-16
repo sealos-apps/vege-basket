@@ -4,6 +4,7 @@ import { fetchMyWork } from '../api'
 import type { Project } from '../types'
 import type { MyWorkData, MyWorkItem, MyWorkKind } from '../my-work-types'
 import type { OrganizationContext } from '../../shared/organization-context'
+import { startNotificationRefreshSchedule, workspaceRefreshIntervalMs } from '../notifications'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -98,7 +99,6 @@ export function MyWorkWorkbench({
   onDeliveryClick,
   onBugClick,
   onMilestoneClick,
-  refreshToken,
 }: {
   organizationId: OrganizationContext
   projects: Project[]
@@ -106,7 +106,6 @@ export function MyWorkWorkbench({
   onDeliveryClick: (projectId: number, eventId: number) => void
   onBugClick: (bugId: number) => void
   onMilestoneClick: (projectId: number) => void
-  refreshToken?: number
 }) {
   const [data, setData] = useState<MyWorkData>({
     organizationId,
@@ -123,7 +122,25 @@ export function MyWorkWorkbench({
   const [cursor, setCursor] = useState('')
   const [loading, setLoading] = useState(true)
   const hasLoadedRef = useRef(false)
+  const [backgroundRefreshVersion, setBackgroundRefreshVersion] = useState(0)
   const [error, setError] = useState('')
+
+  useEffect(() => startNotificationRefreshSchedule({
+    clearInterval: (handle) => window.clearInterval(handle),
+    intervalMs: workspaceRefreshIntervalMs,
+    isVisible: () => document.visibilityState === 'visible',
+    onFocus: (listener) => {
+      window.addEventListener('focus', listener)
+      return () => window.removeEventListener('focus', listener)
+    },
+    onVisibilityChange: (listener) => {
+      document.addEventListener('visibilitychange', listener)
+      return () => document.removeEventListener('visibilitychange', listener)
+    },
+    refresh: () => setBackgroundRefreshVersion((current) => current + 1),
+    minRefreshGapMs: 1_000,
+    setInterval: (listener, delay) => window.setInterval(listener, delay),
+  }), [])
 
   useEffect(() => {
     let active = true
@@ -155,7 +172,7 @@ export function MyWorkWorkbench({
       if (active && !hasLoadedRef.current) setLoading(false)
     })
     return () => { active = false }
-  }, [creator, cursor, kind, organizationId, projectId, query, refreshToken, sort, status])
+  }, [backgroundRefreshVersion, creator, cursor, kind, organizationId, projectId, query, sort, status])
 
   useEffect(() => {
     setCursor('')

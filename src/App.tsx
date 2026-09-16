@@ -375,6 +375,8 @@ type View =
   | 'ai'
   | 'testing'
   | 'assigned_bugs'
+
+const workspacePollingViews = new Set<View>(['project', 'inbox', 'search', 'ai'])
 type DetailEntrySource = 'project' | 'notifications' | 'my_work'
 type DisplayAiAttachment = {
   id: number | string
@@ -1801,7 +1803,6 @@ function App() {
   const [detailEntrySource, setDetailEntrySource] = useState<DetailEntrySource>('project')
   const [isProjectTodoDetailActive, setIsProjectTodoDetailActive] = useState(false)
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false)
-  const [workspaceRefreshVersion, setWorkspaceRefreshVersion] = useState(0)
   const [organizationRefreshVersion, setOrganizationRefreshVersion] = useState(0)
   const [canCreateOrganization, setCanCreateOrganization] = useState(false)
   const [workspaceError, setWorkspaceError] = useState('')
@@ -2171,7 +2172,6 @@ function App() {
           workspaceMutationEpochRef.current !== mutationEpoch
         ) return false
         applyWorkspace(data)
-        setWorkspaceRefreshVersion((current) => current + 1)
         return true
       } catch {
         // Background refresh is best-effort; the existing view remains usable.
@@ -2454,6 +2454,7 @@ function App() {
         return () => document.removeEventListener('visibilitychange', listener)
       },
       refresh: () => refreshNotifications().then((result) => result !== false),
+      minRefreshGapMs: 1_000,
       setInterval: (listener, delay) => window.setInterval(listener, delay),
     })
   }, [loggedIn, refreshNotifications])
@@ -2472,14 +2473,33 @@ function App() {
         document.addEventListener('visibilitychange', listener)
         return () => document.removeEventListener('visibilitychange', listener)
       },
-      refresh: async () => {
-        const refreshed = await refreshWorkspace()
-        if (refreshed) setOrganizationRefreshVersion((current) => current + 1)
-        return refreshed
-      },
+      refresh: () => setOrganizationRefreshVersion((current) => current + 1),
+      minRefreshGapMs: 1_000,
       setInterval: (listener, delay) => window.setInterval(listener, delay),
     })
-  }, [loggedIn, refreshWorkspace])
+  }, [loggedIn])
+
+  const workspacePollingActive = workspacePollingViews.has(view)
+  useEffect(() => {
+    if (!loggedIn || !workspacePollingActive) return
+    return startNotificationRefreshSchedule({
+      clearInterval: (handle) => window.clearInterval(handle),
+      intervalMs: workspaceRefreshIntervalMs,
+      isVisible: () => document.visibilityState === 'visible',
+      onFocus: (listener) => {
+        window.addEventListener('focus', listener)
+        return () => window.removeEventListener('focus', listener)
+      },
+      onVisibilityChange: (listener) => {
+        document.addEventListener('visibilitychange', listener)
+        return () => document.removeEventListener('visibilitychange', listener)
+      },
+      refresh: () => refreshWorkspace(),
+      refreshImmediately: true,
+      minRefreshGapMs: 1_000,
+      setInterval: (listener, delay) => window.setInterval(listener, delay),
+    })
+  }, [loggedIn, refreshWorkspace, workspacePollingActive])
 
   const activePackageMarketOrganization = selectedOrganizationId == null
     ? null
@@ -2715,20 +2735,46 @@ function App() {
     todoSubprojectId,
   ])
 
+  const packageTimelineProjectId = selectedProject?.id
   useEffect(() => {
-    if (!loggedIn || !selectedProject || projectDetailTab !== 'packages') return
+    if (
+      !loggedIn ||
+      view !== 'project' ||
+      !packageTimelineProjectId ||
+      projectDetailTab !== 'packages'
+    ) return
 
-    fetchProjectPackageTimeline(selectedProject.id)
-      .then((timeline) => {
+    const refreshTimeline = async () => {
+      try {
+        const timeline = await fetchProjectPackageTimeline(packageTimelineProjectId)
         setProjectPackageTimelines((current) => ({
           ...current,
-          [selectedProject.id]: timeline,
+          [packageTimelineProjectId]: timeline,
         }))
-      })
-      .catch(() => {
+        return true
+      } catch {
         setWorkspaceError('安装升级时间线读取失败，请确认后端服务和 OSS 配置正常。')
-      })
-  }, [loggedIn, projectDetailTab, selectedProject?.id, workspaceRefreshVersion])
+        return false
+      }
+    }
+    return startNotificationRefreshSchedule({
+      clearInterval: (handle) => window.clearInterval(handle),
+      intervalMs: workspaceRefreshIntervalMs,
+      isVisible: () => document.visibilityState === 'visible',
+      onFocus: (listener) => {
+        window.addEventListener('focus', listener)
+        return () => window.removeEventListener('focus', listener)
+      },
+      onVisibilityChange: (listener) => {
+        document.addEventListener('visibilitychange', listener)
+        return () => document.removeEventListener('visibilitychange', listener)
+      },
+      refresh: refreshTimeline,
+      refreshImmediately: true,
+      minRefreshGapMs: 1_000,
+      setInterval: (listener, delay) => window.setInterval(listener, delay),
+    })
+  }, [loggedIn, packageTimelineProjectId, projectDetailTab, view])
 
   useEffect(() => {
     if (!loggedIn || !workspaceLoaded || !authUser || !inviteToken) return
@@ -2771,8 +2817,8 @@ function App() {
         setWorkspaceError('')
         setOrganizationInviteToken('')
         clearOrganizationInviteTokenFromUrl()
-        setWorkspaceRefreshVersion((current) => current + 1)
         setOrganizationRefreshVersion((current) => current + 1)
+        void refreshWorkspace()
       })
       .catch(() => {
         setWorkspaceError('组织邀请链接无效或已失效。')
@@ -2780,7 +2826,7 @@ function App() {
       .finally(() => {
         acceptingOrganizationInviteTokenRef.current = ''
       })
-  }, [authUser, loggedIn, organizationInviteToken, workspaceLoaded])
+  }, [authUser, loggedIn, organizationInviteToken, refreshWorkspace, workspaceLoaded])
 
   useEffect(() => {
     if (
@@ -3151,7 +3197,6 @@ function App() {
     try {
       const data = await operation()
       applyWorkspace(data)
-      setWorkspaceRefreshVersion((current) => current + 1)
       void refreshNotifications()
       setWorkspaceError('')
       return data
@@ -3173,7 +3218,6 @@ function App() {
     const data = await reconcileAction(operation, fetchWorkspace, matches)
     if (confirmationScopeRef.current !== scope) return false
     applyWorkspace(data)
-    setWorkspaceRefreshVersion((current) => current + 1)
     void refreshNotifications()
     return true
   }
@@ -3621,7 +3665,6 @@ function App() {
       const result = await acceptProjectInvitation(membershipId)
       applyWorkspace(result.workspace)
       setNotifications(result.notifications)
-      setWorkspaceRefreshVersion((current) => current + 1)
       setWorkspaceError('')
     } catch {
       setWorkspaceError('邀请处理失败，请稍后再试。')
@@ -3642,7 +3685,6 @@ function App() {
       if (confirmationScopeRef.current !== confirmationScope) return false
       applyWorkspace(result.workspace)
       setNotifications(result.notifications)
-      setWorkspaceRefreshVersion((current) => current + 1)
       return true
     })
   }
@@ -3652,7 +3694,6 @@ function App() {
       const result = await respondToProjectTransfer(transferId, action)
       applyWorkspace(result.workspace)
       setNotifications(result.notifications)
-      setWorkspaceRefreshVersion((current) => current + 1)
       setWorkspaceError('')
     } catch {
       setWorkspaceError('项目转移处理失败，请刷新后重试。')
@@ -4843,7 +4884,6 @@ ${packageTimelineText}`
           )}
           currentUserId={authUser.id}
           projects={projects.map((project) => ({ id: project.id, name: project.name }))}
-          refreshToken={workspaceRefreshVersion}
           workspaceContent={view === 'changelog' ? (
             <ChangelogWorkbench
               createRequest={changelogCreateRequest}
@@ -5428,7 +5468,6 @@ ${packageTimelineText}`
             key={selectedOrganizationId ?? 'personal'}
             organizationId={selectedOrganizationId}
             projects={scopedProjects}
-            refreshToken={workspaceRefreshVersion}
             onTodoClick={selectMyWorkTodo}
             onDeliveryClick={selectMyWorkPackageEvent}
             onBugClick={(bugId) => {
@@ -5491,7 +5530,6 @@ ${packageTimelineText}`
                   : organization
               )))
             }}
-            refreshToken={workspaceRefreshVersion}
           />
         ) : null}
 
@@ -5504,7 +5542,6 @@ ${packageTimelineText}`
             initialWeekStart={requestedWeeklyReport.status === 'valid'
               ? requestedWeeklyReport.weekStart
               : null}
-            refreshToken={workspaceRefreshVersion}
             organizationId={selectedOrganizationId}
             onInitialContextConsumed={() => setRequestedWeeklyReport({
               organizationId: null,

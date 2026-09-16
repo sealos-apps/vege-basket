@@ -9,15 +9,20 @@ const refreshFailureBackoffMaxMs = 60_000
 export function startNotificationRefreshSchedule(options: {
   clearInterval: (handle: number) => void
   isVisible: () => boolean
+  minRefreshGapMs?: number
+  now?: () => number
   onFocus: (listener: () => void) => () => void
   onVisibilityChange: (listener: () => void) => () => void
   refresh: () => void | Promise<boolean | void>
+  refreshImmediately?: boolean
   setInterval: (listener: () => void, delay: number) => number
   intervalMs?: number
 }) {
   let refreshInFlight = false
   let failureCount = 0
   let blockedUntil = 0
+  let lastRefreshStartedAt = Number.NEGATIVE_INFINITY
+  const now = options.now ?? Date.now
 
   const registerFailure = () => {
     failureCount += 1
@@ -25,11 +30,18 @@ export function startNotificationRefreshSchedule(options: {
       refreshFailureBackoffMaxMs,
       refreshFailureBackoffBaseMs * 2 ** (failureCount - 1),
     )
-    blockedUntil = Date.now() + delay
+    blockedUntil = now() + delay
   }
 
   const refreshIfVisible = () => {
-    if (!options.isVisible() || refreshInFlight || Date.now() < blockedUntil) return
+    const currentTime = now()
+    if (
+      !options.isVisible() ||
+      refreshInFlight ||
+      currentTime < blockedUntil ||
+      currentTime - lastRefreshStartedAt < (options.minRefreshGapMs ?? 0)
+    ) return
+    lastRefreshStartedAt = currentTime
 
     let result: void | Promise<boolean | void>
     try {
@@ -61,6 +73,7 @@ export function startNotificationRefreshSchedule(options: {
   const interval = options.setInterval(refreshIfVisible, options.intervalMs ?? notificationRefreshIntervalMs)
   const removeFocusListener = options.onFocus(refreshIfVisible)
   const removeVisibilityListener = options.onVisibilityChange(refreshIfVisible)
+  if (options.refreshImmediately) refreshIfVisible()
 
   return () => {
     options.clearInterval(interval)

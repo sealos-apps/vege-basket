@@ -85,6 +85,7 @@ import type {
   OrganizationPackageMarketPolicy,
 } from '../../shared/organization-package-market'
 import { organizationPackageMarketPolicyHasVisibleChannel } from '../../shared/organization-package-market'
+import { startNotificationRefreshSchedule, workspaceRefreshIntervalMs } from '../notifications'
 import {
   defaultWeeklyReportRules,
   getShanghaiDateTime,
@@ -378,7 +379,6 @@ export function OrganizationWorkbench({
   onProjectModulesChanged,
   onSubprojectsChanged,
   onPackageMarketVisibilityChange,
-  refreshToken = 0,
 }: {
   canCreate: boolean
   currentUser: AuthUser
@@ -388,7 +388,6 @@ export function OrganizationWorkbench({
   onProjectModulesChanged?: () => void
   onSubprojectsChanged?: () => void
   onPackageMarketVisibilityChange?: (organizationId: number, enabled: boolean) => void
-  refreshToken?: number
 }) {
   const [organizations, setOrganizations] = useState<OrganizationListItem[]>(initialOrganizations)
   const [selectedOrganizationId, setSelectedOrganizationId] = useState(initialSelectedOrganizationId ?? initialOrganizations[0]?.id ?? 0)
@@ -431,6 +430,7 @@ export function OrganizationWorkbench({
   const [weeklyCollection, setWeeklyCollection] = useState<WeeklyReportCollection | null>(null)
   const [weeklyCollectionLoading, setWeeklyCollectionLoading] = useState(false)
   const [weeklyCollectionRefresh, setWeeklyCollectionRefresh] = useState(0)
+  const [backgroundRefreshVersion, setBackgroundRefreshVersion] = useState(0)
   const [weeklyReminderNotice, setWeeklyReminderNotice] = useState('')
   const [weeklyRulesOpen, setWeeklyRulesOpen] = useState(false)
   const [weeklyRulesError, setWeeklyRulesError] = useState('')
@@ -439,6 +439,9 @@ export function OrganizationWorkbench({
   const [weeklyReportAssigneeUserIds, setWeeklyReportAssigneeUserIds] = useState<number[]>([])
   const [weeklyReportAssigneeQuery, setWeeklyReportAssigneeQuery] = useState('')
   const packageMarketDraftOrganizationId = useRef(0)
+  const loadedDetailId = useRef(0)
+  const loadedPackageMarketCatalogOrganizationId = useRef(0)
+  const detailSectionRefreshVersions = useRef<Record<string, number>>({})
   const canAccessOrganizationManagement = currentUser.isSystemAdmin
     || currentUser.roles.includes('organization_admin')
 
@@ -459,6 +462,23 @@ export function OrganizationWorkbench({
     return nextId
   }, [])
 
+  useEffect(() => startNotificationRefreshSchedule({
+    clearInterval: (handle) => window.clearInterval(handle),
+    intervalMs: workspaceRefreshIntervalMs,
+    isVisible: () => document.visibilityState === 'visible',
+    onFocus: (listener) => {
+      window.addEventListener('focus', listener)
+      return () => window.removeEventListener('focus', listener)
+    },
+    onVisibilityChange: (listener) => {
+      document.addEventListener('visibilitychange', listener)
+      return () => document.removeEventListener('visibilitychange', listener)
+    },
+    refresh: () => setBackgroundRefreshVersion((current) => current + 1),
+    minRefreshGapMs: 1_000,
+    setInterval: (listener, delay) => window.setInterval(listener, delay),
+  }), [])
+
   useEffect(() => {
     setOrganizations(initialOrganizations)
     setCanCreate(initialCanCreate)
@@ -472,21 +492,28 @@ export function OrganizationWorkbench({
 
   useEffect(() => {
     if (!selectedOrganizationId) {
+      loadedDetailId.current = 0
       setDetail(null)
       setDetailLoading(false)
       return
     }
     let active = true
     const controller = new AbortController()
-    setDetailLoading(true)
-    setLoading(true)
+    const showLoading = loadedDetailId.current !== selectedOrganizationId
+    if (showLoading) {
+      setDetailLoading(true)
+      setLoading(true)
+    }
     fetchOrganization(selectedOrganizationId, {
       sections: ['overview', 'settings'],
       signal: controller.signal,
     })
       .then((nextDetail) => {
         if (active) {
-          setDetail(nextDetail)
+          loadedDetailId.current = nextDetail.id
+          setDetail((current) => (
+            current?.id === nextDetail.id ? mergeOrganizationDetail(current, nextDetail) : nextDetail
+          ))
           setError('')
         }
       })
@@ -494,7 +521,7 @@ export function OrganizationWorkbench({
         if (active) setError(errorMessage(loadError))
       })
       .finally(() => {
-        if (active) {
+        if (active && showLoading) {
           setDetailLoading(false)
           setLoading(false)
         }
@@ -503,35 +530,44 @@ export function OrganizationWorkbench({
       active = false
       controller.abort()
     }
-  }, [refreshToken, selectedOrganizationId])
+  }, [backgroundRefreshVersion, selectedOrganizationId])
 
   const activeDetailSection = organizationSectionForTab(tab)
   const activeDetailSectionLoaded = detail?.loadedSections?.includes(activeDetailSection) ?? true
   useEffect(() => {
-    if (!detail || activeDetailSectionLoaded) return
+    if (!detail) return
+    const sectionKey = `${detail.id}:${activeDetailSection}`
+    const needsBackgroundRefresh = backgroundRefreshVersion
+      > (detailSectionRefreshVersions.current[sectionKey] ?? 0)
+    const primarySectionRefreshesWithDetail = activeDetailSection === 'overview'
+      || activeDetailSection === 'settings'
+    if (activeDetailSectionLoaded && (!needsBackgroundRefresh || primarySectionRefreshesWithDetail)) return
     let active = true
     const controller = new AbortController()
-    setDetailLoading(true)
+    if (!activeDetailSectionLoaded) setDetailLoading(true)
     fetchOrganization(detail.id, {
       sections: [activeDetailSection],
       signal: controller.signal,
     })
       .then((nextDetail) => {
-        if (active) setDetail((current) => (
-          current?.id === nextDetail.id ? mergeOrganizationDetail(current, nextDetail) : current
-        ))
+        if (active) {
+          detailSectionRefreshVersions.current[sectionKey] = backgroundRefreshVersion
+          setDetail((current) => (
+            current?.id === nextDetail.id ? mergeOrganizationDetail(current, nextDetail) : current
+          ))
+        }
       })
       .catch((loadError) => {
         if (active) setError(errorMessage(loadError))
       })
       .finally(() => {
-        if (active) setDetailLoading(false)
+        if (active && !activeDetailSectionLoaded) setDetailLoading(false)
       })
     return () => {
       active = false
       controller.abort()
     }
-  }, [activeDetailSection, activeDetailSectionLoaded, detail])
+  }, [activeDetailSection, activeDetailSectionLoaded, backgroundRefreshVersion, detail])
 
   useEffect(() => {
     setOrganizationRenameDraft(detail?.name ?? '')
@@ -547,6 +583,7 @@ export function OrganizationWorkbench({
     const organizationChanged = packageMarketDraftOrganizationId.current !== detail.id
     const nextRevision = detail.packageMarketPolicy.revision
     packageMarketDraftOrganizationId.current = detail.id
+    if (organizationChanged) loadedPackageMarketCatalogOrganizationId.current = 0
     setPackageMarketPolicyDraft((current) => (
       !organizationChanged && current?.revision === nextRevision
         ? current
@@ -558,11 +595,13 @@ export function OrganizationWorkbench({
   useEffect(() => {
     if (tab !== 'packageMarket' || !packageMarketOrganizationId) return
     let active = true
-    setPackageMarketCatalogLoading(true)
+    const showLoading = loadedPackageMarketCatalogOrganizationId.current !== packageMarketOrganizationId
+    if (showLoading) setPackageMarketCatalogLoading(true)
     setOrganizationSettingsError('')
     fetchOrganizationPackageMarketCatalog(packageMarketOrganizationId)
       .then((result) => {
         if (!active) return
+        loadedPackageMarketCatalogOrganizationId.current = packageMarketOrganizationId
         setPackageMarketCatalog(result.rules)
         // Catalog refreshes can happen when returning to this tab. Preserve an
         // unsaved draft for the same server revision; a newer revision means
@@ -577,12 +616,12 @@ export function OrganizationWorkbench({
         if (active) setOrganizationSettingsError(errorMessage(catalogError))
       })
       .finally(() => {
-        if (active) setPackageMarketCatalogLoading(false)
+        if (active && showLoading) setPackageMarketCatalogLoading(false)
       })
     return () => {
       active = false
     }
-  }, [packageMarketOrganizationId, refreshToken, tab])
+  }, [backgroundRefreshVersion, packageMarketOrganizationId, tab])
 
   useEffect(() => {
     if (detail) {
@@ -905,7 +944,7 @@ export function OrganizationWorkbench({
   useEffect(() => {
     if (tab !== 'reports') return
     void loadWeeklyCollection()
-  }, [loadWeeklyCollection, tab, weeklyCollectionRefresh])
+  }, [backgroundRefreshVersion, loadWeeklyCollection, tab, weeklyCollectionRefresh])
 
   async function remindWeeklyReportUsers(userIds: number[]) {
     if (!detail || userIds.length === 0) return

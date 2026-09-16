@@ -73,7 +73,6 @@ import {
   type TodoFilterJoin,
 } from '@/components/todo-filter-builder-dialog'
 import { PackageEventFilterBuilderDialog } from '@/components/package-event-filter-builder-dialog'
-import { claimMarkdownEditorRecovery } from './markdown-editor-recovery'
 import {
   matchesPackageEventFilterConditions,
   type PackageEventFilterCondition,
@@ -194,30 +193,22 @@ const MarkdownWysiwygEditor = lazy(() =>
 
 class MarkdownEditorLoadBoundary extends Component<
   { children: ReactNode },
-  { failed: boolean; retrying: boolean }
+  { failed: boolean }
 > {
-  state = { failed: false, retrying: false }
+  state = { failed: false }
 
   static getDerivedStateFromError() {
     return { failed: true }
-  }
-
-  componentDidCatch() {
-    if (!claimMarkdownEditorRecovery()) return
-    this.setState({ failed: true, retrying: true })
-    window.setTimeout(() => window.location.reload(), 0)
   }
 
   render() {
     if (this.state.failed) {
       return (
         <div className="markdown-wysiwyg-loading is-error" role="alert">
-          <strong>{this.state.retrying ? '正在恢复编辑器…' : '编辑器加载失败'}</strong>
-          {!this.state.retrying ? (
-            <Button type="button" variant="outline" onClick={() => window.location.reload()}>
-              刷新页面
-            </Button>
-          ) : null}
+          <strong>编辑器加载失败</strong>
+          <Button type="button" variant="outline" onClick={() => this.setState({ failed: false })}>
+            重试编辑器
+          </Button>
         </div>
       )
     }

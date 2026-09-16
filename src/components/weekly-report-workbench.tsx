@@ -52,6 +52,7 @@ import {
   submitPersonalWeeklyReport,
 } from '../api'
 import { ApiError } from '../api-error'
+import { startNotificationRefreshSchedule, workspaceRefreshIntervalMs } from '../notifications'
 import type {
   PersonalWeeklyReport,
   PersonalWeeklyReportList,
@@ -61,7 +62,6 @@ import type {
   WeeklyReportSourceRef,
 } from '../organization-types'
 import type { MarkdownWysiwygEditorHandle } from './markdown-wysiwyg-editor'
-import { claimMarkdownEditorRecovery } from './markdown-editor-recovery'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import {
@@ -81,30 +81,22 @@ const MarkdownWysiwygEditor = lazy(() => (
 
 class WeeklyReportEditorBoundary extends Component<
   { children: ReactNode },
-  { failed: boolean; retrying: boolean }
+  { failed: boolean }
 > {
-  state = { failed: false, retrying: false }
+  state = { failed: false }
 
   static getDerivedStateFromError() {
     return { failed: true }
-  }
-
-  componentDidCatch() {
-    if (!claimMarkdownEditorRecovery()) return
-    this.setState({ failed: true, retrying: true })
-    window.setTimeout(() => window.location.reload(), 0)
   }
 
   render() {
     if (this.state.failed) {
       return (
         <div className="weekly-report-editor-loading is-error" role="alert">
-          <strong>{this.state.retrying ? '正在恢复编辑器…' : '编辑器加载失败'}</strong>
-          {!this.state.retrying ? (
-            <Button type="button" variant="outline" onClick={() => window.location.reload()}>
-              刷新页面
-            </Button>
-          ) : null}
+          <strong>编辑器加载失败</strong>
+          <Button type="button" variant="outline" onClick={() => this.setState({ failed: false })}>
+            重试编辑器
+          </Button>
         </div>
       )
     }
@@ -118,7 +110,6 @@ type WeeklyReportWorkbenchProps = {
   initialWeekStart?: string | null
   onInitialContextConsumed?: () => void
   organizationId: number | null
-  refreshToken?: number
 }
 
 export type WeeklyReportWorkbenchHandle = {
@@ -266,7 +257,6 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   initialWeekStart = null,
   onInitialContextConsumed,
   organizationId: providedOrganizationId,
-  refreshToken = 0,
 }, ref) {
   const organizationId = providedOrganizationId ?? 0
   const resolvedInitialOrganizationId = initialOrganizationId ?? (organizationId || null)
@@ -294,6 +284,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   const [reportList, setReportList] = useState<PersonalWeeklyReportList | null>(null)
   const [reportListPage, setReportListPage] = useState(0)
   const [reportListRefresh, setReportListRefresh] = useState(0)
+  const [backgroundRefreshVersion, setBackgroundRefreshVersion] = useState(0)
   const [reportListLoading, setReportListLoading] = useState(false)
   const [currentWeekSubmitted, setCurrentWeekSubmitted] = useState<boolean | null>(null)
   const [now, setNow] = useState(() => getShanghaiDateTime())
@@ -310,6 +301,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   const loadedOrganizationId = useRef<number | null>(null)
   const activeContext = useRef(`${organizationId}:${weekStart}`)
   const selectedWeekStart = useRef('')
+  const loadedReportListContext = useRef('')
   const selectAllSourcesCheckbox = useRef<HTMLInputElement>(null)
   const today = now.slice(0, 10)
 
@@ -326,6 +318,23 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     const timer = window.setInterval(() => setNow(getShanghaiDateTime()), 30_000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => startNotificationRefreshSchedule({
+    clearInterval: (handle) => window.clearInterval(handle),
+    intervalMs: workspaceRefreshIntervalMs,
+    isVisible: () => document.visibilityState === 'visible',
+    onFocus: (listener) => {
+      window.addEventListener('focus', listener)
+      return () => window.removeEventListener('focus', listener)
+    },
+    onVisibilityChange: (listener) => {
+      document.addEventListener('visibilitychange', listener)
+      return () => document.removeEventListener('visibilitychange', listener)
+    },
+    refresh: () => setBackgroundRefreshVersion((current) => current + 1),
+    minRefreshGapMs: 1_000,
+    setInterval: (listener, delay) => window.setInterval(listener, delay),
+  }), [])
 
   useEffect(() => {
     if (workspaceView !== 'list') return
@@ -477,7 +486,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     return () => {
       active = false
     }
-  }, [organizationId, refreshToken, today])
+  }, [organizationId, today])
 
   useEffect(() => {
     if (workspaceView !== 'editor' || !organizationId || !weekStart) return
@@ -511,35 +520,40 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   useEffect(() => {
     if (workspaceView !== 'list' || !organizationId) return
     let active = true
-    setReportListLoading(true)
+    const listContext = `${organizationId}:${reportListPage}`
+    const showLoading = loadedReportListContext.current !== listContext
+    if (showLoading) setReportListLoading(true)
     fetchPersonalWeeklyReports(organizationId, {
       limit: REPORT_LIST_PAGE_SIZE,
       offset: reportListPage * REPORT_LIST_PAGE_SIZE,
     })
       .then((result) => {
         if (!active) return
+        loadedReportListContext.current = listContext
         setReportList(result)
-        if (reportListPage === 0) {
-          const activeWeek = getWeeklyReportTargetWeekStart({
-            now,
-            rules: weeklyReportRules,
-            weekStartsOn,
-          })
-          const currentReport = result.items.find((item) => item.weekStart === activeWeek)
-          setCurrentWeekSubmitted(Boolean(currentReport?.publishedRevision))
-        }
         setError('')
       })
       .catch((loadError) => {
         if (active) setError(errorMessage(loadError))
       })
       .finally(() => {
-        if (active) setReportListLoading(false)
+        if (active && showLoading) setReportListLoading(false)
       })
     return () => {
       active = false
     }
-  }, [now, organizationId, refreshToken, reportListPage, reportListRefresh, today, weekStartsOn, weeklyReportRules, workspaceView])
+  }, [backgroundRefreshVersion, organizationId, reportListPage, reportListRefresh, workspaceView])
+
+  useEffect(() => {
+    if (workspaceView !== 'list' || !reportList || reportListPage !== 0) return
+    const activeWeek = getWeeklyReportTargetWeekStart({
+      now,
+      rules: weeklyReportRules,
+      weekStartsOn,
+    })
+    const currentReport = reportList.items.find((item) => item.weekStart === activeWeek)
+    setCurrentWeekSubmitted(Boolean(currentReport?.publishedRevision))
+  }, [now, reportList, reportListPage, weekStartsOn, weeklyReportRules, workspaceView])
 
   const persistDraft = useCallback(async () => {
     if (!canWriteWeeklyReport || !report || !organizationId || !weekStart || saveInFlight.current) return report

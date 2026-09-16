@@ -763,17 +763,79 @@ test('supports a slower interval for heavier workspace refreshes', () => {
   assert.equal(intervalDelay, workspaceRefreshIntervalMs)
 })
 
-test('does not refresh the workspace snapshot just because the view changes', () => {
+test('can refresh an active data surface immediately when its schedule starts', () => {
+  let refreshCount = 0
+  startNotificationRefreshSchedule({
+    clearInterval: () => undefined,
+    isVisible: () => true,
+    onFocus: () => () => undefined,
+    onVisibilityChange: () => () => undefined,
+    refresh: () => {
+      refreshCount += 1
+    },
+    refreshImmediately: true,
+    setInterval: () => 1,
+  })()
+  assert.equal(refreshCount, 1)
+})
+
+test('coalesces focus and visibility refreshes fired by the same foreground transition', () => {
+  let currentTime = 10_000
+  let focusListener = () => {}
+  let visibilityListener = () => {}
+  let refreshCount = 0
+
+  const stop = startNotificationRefreshSchedule({
+    clearInterval: () => undefined,
+    isVisible: () => true,
+    minRefreshGapMs: 1_000,
+    now: () => currentTime,
+    onFocus: (listener) => {
+      focusListener = listener
+      return () => undefined
+    },
+    onVisibilityChange: (listener) => {
+      visibilityListener = listener
+      return () => undefined
+    },
+    refresh: () => {
+      refreshCount += 1
+    },
+    setInterval: () => 1,
+  })
+
+  visibilityListener()
+  focusListener()
+  assert.equal(refreshCount, 1)
+
+  currentTime += 1_000
+  focusListener()
+  assert.equal(refreshCount, 2)
+  stop()
+})
+
+test('keeps workspace polling scoped and separate from workbench invalidation', () => {
   assert.match(appSource, /const refreshWorkspace = useCallback\(async \(\) =>/u)
   assert.match(appSource, /fetchWorkspace\(\)/u)
   assert.match(appSource, /intervalMs: workspaceRefreshIntervalMs/u)
+  assert.match(appSource, /workspacePollingViews = new Set<View>\(\['project', 'inbox', 'search', 'ai'\]\)/u)
+  assert.match(appSource, /const workspacePollingActive = workspacePollingViews\.has\(view\)/u)
+  assert.match(appSource, /if \(!loggedIn \|\| !workspacePollingActive\) return/u)
+  assert.match(appSource, /\[loggedIn, refreshWorkspace, workspacePollingActive\]/u)
+  assert.match(appSource, /refresh: \(\) => refreshWorkspace\(\),\s*refreshImmediately: true/u)
+  assert.match(appSource, /minRefreshGapMs: 1_000/u)
   assert.doesNotMatch(appSource, /workspaceHydratedRef/u)
   assert.doesNotMatch(appSource, /\[loggedIn, view, workspaceLoaded, refreshWorkspace\]/u)
+  assert.doesNotMatch(appSource, /workspaceRefreshVersion/u)
+  assert.doesNotMatch(appSource, /refreshToken=/u)
+})
+
+test('keeps the application organization directory independently revalidated', () => {
   assert.match(
     appSource,
-    /const refreshed = await refreshWorkspace\(\)\s*if \(refreshed\) setOrganizationRefreshVersion/u,
+    /refresh: \(\) => setOrganizationRefreshVersion\(\(current\) => current \+ 1\)/u,
   )
-  assert.match(appSource, /refreshToken=\{workspaceRefreshVersion\}/u)
+  assert.match(appSource, /\[authUserId, loggedIn, organizationRefreshVersion\]/u)
 })
 
 test('notifies only mentioned users privately when a delivery event comment is added', () => {

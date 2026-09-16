@@ -7,6 +7,10 @@ const organizationClientSource = readFileSync(
   new URL('../src/components/organization-workbench.tsx', import.meta.url),
   'utf8',
 )
+const myWorkClientSource = readFileSync(
+  new URL('../src/components/my-work-workbench.tsx', import.meta.url),
+  'utf8',
+)
 const organizationServerSource = readFileSync(new URL('./organizations.ts', import.meta.url), 'utf8')
 const testClientSource = readFileSync(
   new URL('../src/components/test-workbench.tsx', import.meta.url),
@@ -14,6 +18,14 @@ const testClientSource = readFileSync(
 )
 const testClientApiSource = readFileSync(new URL('../src/test-workbench-api.ts', import.meta.url), 'utf8')
 const testServerSource = readFileSync(new URL('./test-workbench.ts', import.meta.url), 'utf8')
+const packageWorkbenchSource = readFileSync(
+  new URL('../src/components/project-package-workbench.tsx', import.meta.url),
+  'utf8',
+)
+const weeklyReportSource = readFileSync(
+  new URL('../src/components/weekly-report-workbench.tsx', import.meta.url),
+  'utf8',
+)
 
 test('role and view changes do not invalidate unrelated application data', () => {
   assert.doesNotMatch(appSource, /workspaceHydratedRef/u)
@@ -23,6 +35,32 @@ test('role and view changes do not invalidate unrelated application data', () =>
   )
   assert.match(appSource, /\[authUserId, loggedIn, organizationRefreshVersion\]/u)
   assert.match(appSource, /initialOrganizations=\{organizations\}/u)
+  assert.doesNotMatch(appSource, /workspaceRefreshVersion/u)
+  assert.doesNotMatch(appSource, /refreshToken=/u)
+})
+
+test('background refreshes preserve workbench content and editor state', () => {
+  assert.doesNotMatch(organizationClientSource, /refreshToken/u)
+  assert.doesNotMatch(myWorkClientSource, /refreshToken/u)
+  assert.doesNotMatch(testClientSource, /refreshToken/u)
+  assert.doesNotMatch(weeklyReportSource, /refreshToken/u)
+  assert.doesNotMatch(weeklyReportSource, /window\.location\.reload/u)
+  assert.doesNotMatch(packageWorkbenchSource, /window\.location\.reload/u)
+  assert.match(weeklyReportSource, />\s*重试编辑器\s*<\/Button>/u)
+  assert.match(packageWorkbenchSource, />\s*重试编辑器\s*<\/Button>/u)
+  assert.match(organizationClientSource, /backgroundRefreshVersion/u)
+  assert.match(myWorkClientSource, /backgroundRefreshVersion/u)
+  assert.match(weeklyReportSource, /backgroundRefreshVersion/u)
+  assert.match(weeklyReportSource, /loadedReportListContext/u)
+  assert.match(appSource, /view !== 'project'/u)
+  assert.match(
+    weeklyReportSource,
+    /\}, \[backgroundRefreshVersion, organizationId, reportListPage, reportListRefresh, workspaceView\]\)/u,
+  )
+  assert.match(
+    weeklyReportSource,
+    /\}, \[now, reportList, reportListPage, weekStartsOn, weeklyReportRules, workspaceView\]\)/u,
+  )
 })
 
 test('test workbench reads stay sectioned and scoped to the active space', () => {

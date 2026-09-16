@@ -651,13 +651,11 @@ export function TestWorkbench({
   accountMenu,
   currentUserId,
   projects,
-  refreshToken = 0,
   workspaceContent,
 }: {
   accountMenu: ReactNode
   currentUserId?: number
   projects: TestWorkbenchProjectOption[]
-  refreshToken?: number
   workspaceContent?: ReactNode
 }) {
   const [data, setData] = useState<TestWorkbenchData>(emptyWorkbench)
@@ -1409,7 +1407,6 @@ export function TestWorkbench({
                 ref={weeklyReportWorkbenchRef}
                 embedded
                 organizationId={activeWeeklyReportOrganizationId}
-                refreshToken={refreshToken}
               />
             </div>
           ) : tab === 'notifications' ? (
