@@ -1757,6 +1757,7 @@ function App() {
   const [invitePasswordRequired, setInvitePasswordRequired] = useState(false)
   const [invitePasswordVerified, setInvitePasswordVerified] = useState(false)
   const [view, setView] = useState<View>(getInitialView)
+  const organizationReturnViewRef = useRef<View>('search')
   const [changelogCanManage, setChangelogCanManage] = useState(false)
   const [changelogEditorOpen, setChangelogEditorOpen] = useState(false)
   const [changelogCreateRequest, setChangelogCreateRequest] = useState(0)
@@ -3092,6 +3093,18 @@ function App() {
     } finally {
       setRoleSelectionBusy(false)
     }
+  }
+
+  function openOrganizationManagement() {
+    if (view !== 'organization') organizationReturnViewRef.current = view
+    setView('organization')
+  }
+
+  function closeOrganizationManagement() {
+    const returnView = organizationReturnViewRef.current
+    setView(authUser && canUseViewForUser(returnView, authUser)
+      ? returnView
+      : authUser ? getRoleLandingView(authUser.activeRole) : 'search')
   }
 
   function openAssignedBugFromShare(bugId: number, organizationId: number | null) {
@@ -4840,7 +4853,7 @@ ${packageTimelineText}`
               onDisconnectFeishu={disconnectFeishuBinding}
               onSaveAccountSettings={updateAccountSettings}
               onRoleChange={(role) => void changeActiveUserRole(role)}
-              onOpenOrganization={() => setView('organization')}
+              onOpenOrganization={openOrganizationManagement}
               onOpenChangelog={() => setView('changelog')}
               onSignOut={signOut}
               onToggleTheme={toggleThemeMode}
@@ -4862,7 +4875,8 @@ ${packageTimelineText}`
     )
   }
 
-  const hideSidebar = view === 'project' && projectDetailTab === 'packages'
+  const hideSidebar = view === 'organization'
+    || (view === 'project' && projectDetailTab === 'packages')
 
   return (
     <main className={hideSidebar ? 'app-shell sidebar-hidden' : 'app-shell'}>
@@ -4959,7 +4973,7 @@ ${packageTimelineText}`
             onDisconnectFeishu={disconnectFeishuBinding}
             onSaveAccountSettings={updateAccountSettings}
             onRoleChange={(role) => void changeActiveUserRole(role)}
-            onOpenOrganization={() => setView('organization')}
+            onOpenOrganization={openOrganizationManagement}
             onOpenChangelog={() => setView('changelog')}
             onSignOut={signOut}
             onToggleTheme={toggleThemeMode}
@@ -5084,6 +5098,8 @@ ${packageTimelineText}`
 
       <section className={view === 'project'
         ? 'workspace cockpit-workspace'
+        : view === 'organization'
+          ? 'workspace organization-management-shell'
         : view === 'weekly_report'
           ? 'workspace embedded-module-workspace weekly-report-shell'
           : view === 'assigned_bugs' || view === 'package_market' || view === 'image_sync' || view === 'changelog'
@@ -5091,7 +5107,7 @@ ${packageTimelineText}`
             ? 'workspace embedded-module-workspace changelog-shell'
             : 'workspace embedded-module-workspace'
           : 'workspace'}>
-        {!(view === 'project' && isProjectTodoDetailActive) ? (
+        {view !== 'organization' && !(view === 'project' && isProjectTodoDetailActive) ? (
           <header className="topbar">
             <div>
               <div className="topbar-title-row">
@@ -5139,9 +5155,7 @@ ${packageTimelineText}`
             </div>
             <div
               className={view === 'project' ? 'topbar-actions project-topbar-actions' : 'topbar-actions'}
-              id={view === 'organization'
-                ? 'organization-topbar-actions'
-                : view === 'weekly_report' ? 'weekly-report-topbar-actions' : undefined}
+              id={view === 'weekly_report' ? 'weekly-report-topbar-actions' : undefined}
             >
               {view === 'project' && projectDetailTab === 'packages' ? (
                 <>
@@ -5269,7 +5283,7 @@ ${packageTimelineText}`
                       </DialogContent>
                     </Dialog>
                   )}
-                  {view !== 'ai' && view !== 'organization' && view !== 'weekly_report' && view !== 'assigned_bugs' && view !== 'package_market' && view !== 'image_sync' && view !== 'changelog' ? (
+                  {view !== 'ai' && view !== 'weekly_report' && view !== 'assigned_bugs' && view !== 'package_market' && view !== 'image_sync' && view !== 'changelog' ? (
                     <Button
                       className="ghost-button"
                       variant="outline"
@@ -5476,6 +5490,7 @@ ${packageTimelineText}`
         {view === 'organization' && authUser ? (
           <OrganizationWorkbench
             currentUser={authUser}
+            onBack={closeOrganizationManagement}
             onSubprojectsChanged={() => {
               workspaceMutationEpochRef.current += 1
               void Promise.resolve(workspaceRefreshPromiseRef.current).then(() => refreshWorkspace())

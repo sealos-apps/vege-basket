@@ -827,6 +827,11 @@ textarea:focus {
   padding: 20px clamp(14px, 1.6vw, 28px) 36px;
 }
 
+.organization-management-shell {
+  min-height: 100dvh;
+  padding: 0;
+}
+
 .embedded-module-workspace {
   height: 100dvh;
   overflow: hidden;
