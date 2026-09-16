@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { formatTestSpaceReference } from '../../shared/test-space-reference'
 import { createPortal } from 'react-dom'
 import {
+  ArrowLeft,
   Buildings,
   ArrowsLeftRight,
   Bug,
@@ -112,6 +113,7 @@ import { Label } from './ui/label'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -374,6 +376,8 @@ export function OrganizationWorkbench({
   currentUser,
   initialOrganizations,
   initialSelectedOrganizationId,
+  onBack,
+  sidebarNavigationHost,
   onOrganizationsChanged,
   onProjectModulesChanged,
   onSubprojectsChanged,
@@ -384,6 +388,8 @@ export function OrganizationWorkbench({
   currentUser: AuthUser
   initialOrganizations: OrganizationListItem[]
   initialSelectedOrganizationId: number | null
+  onBack: () => void
+  sidebarNavigationHost: HTMLElement | null
   onOrganizationsChanged?: () => void
   onProjectModulesChanged?: () => void
   onSubprojectsChanged?: () => void
@@ -444,7 +450,9 @@ export function OrganizationWorkbench({
 
   useEffect(() => {
     setTopbarActionHost(document.getElementById('organization-topbar-actions'))
-    return () => setTopbarActionHost(null)
+    return () => {
+      setTopbarActionHost(null)
+    }
   }, [])
 
   const loadOrganizations = useCallback(async (preferredId?: number, signal?: AbortSignal) => {
@@ -954,24 +962,199 @@ export function OrganizationWorkbench({
     )
     : null
 
+  const selectedDetail = detail?.id === selectedOrganizationId ? detail : null
+  const organizationSidebarNavigation = sidebarNavigationHost
+    ? createPortal(
+      <div className="organization-sidebar-panel">
+        <Button
+          className="organization-sidebar-back"
+          type="button"
+          variant="ghost"
+          onClick={onBack}
+        >
+          <ArrowLeft data-icon="inline-start" /> 返回工作区
+        </Button>
+
+        {canAccessOrganizationManagement ? (
+          <>
+            <div className="organization-sidebar-context">
+              <div className="nav-group-label">组织范围</div>
+              {organizations.length > 0 ? (
+                <div className="organization-switcher-group organization-sidebar-switcher-group">
+                  <Select
+                    value={String(selectedOrganizationId)}
+                    onValueChange={(value) => setSelectedOrganizationId(Number(value))}
+                  >
+                    <SelectTrigger className="organization-sidebar-switcher" aria-label="选择组织">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {organizations.map((organization) => (
+                          <SelectItem key={organization.id} value={String(organization.id)}>
+                            {organization.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  {selectedDetail?.canManage ? (
+                    <Dialog open={settingsOpen} onOpenChange={(open) => {
+                      setSettingsOpen(open)
+                      setOrganizationSettingsError('')
+                      if (open) setOrganizationRenameDraft(selectedDetail.name)
+                    }}>
+                      <DialogTrigger asChild>
+                        <Button
+                          aria-label="组织设置"
+                          title="组织设置"
+                          size="icon"
+                          type="button"
+                          variant="outline"
+                        >
+                          <GearSix />
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="organization-settings-dialog" fixedHeader>
+                        <DialogHeader>
+                          <DialogTitle>组织设置</DialogTitle>
+                          <DialogDescription>管理组织名称、项目模块与组织删除。</DialogDescription>
+                        </DialogHeader>
+                        {organizationSettingsError ? (
+                          <div className="organization-error" role="alert">{organizationSettingsError}</div>
+                        ) : null}
+                        <form className="organization-settings-form" onSubmit={submitOrganizationRename}>
+                          <Label htmlFor="organization-name-edit">组织名称</Label>
+                          <div className="organization-settings-name-row">
+                            <Input
+                              id="organization-name-edit"
+                              maxLength={80}
+                              value={organizationRenameDraft}
+                              onChange={(event) => setOrganizationRenameDraft(event.target.value)}
+                            />
+                            <Button
+                              className="organization-settings-action"
+                              disabled={busy || !organizationRenameDraft.trim() || organizationRenameDraft.trim() === selectedDetail.name}
+                              size="lg"
+                              type="submit"
+                            >
+                              保存名称
+                            </Button>
+                          </div>
+                        </form>
+                        {selectedDetail.canManageProjectModules ? (
+                          <OrganizationProjectModulesPanel
+                            key={selectedDetail.id}
+                            organizationId={selectedDetail.id}
+                            modules={selectedDetail.projectModules}
+                            disabled={busy}
+                            onSaved={(nextDetail) => {
+                              setDetail(current => current?.id === nextDetail.id ? nextDetail : current)
+                              onProjectModulesChanged?.()
+                            }}
+                          />
+                        ) : null}
+                        <section className="organization-danger-zone" aria-labelledby="organization-danger-title">
+                          <div>
+                            <strong id="organization-danger-title">删除组织</strong>
+                            <span>删除成员关系、邀请、组织周报与汇总，项目和测试空间将解除组织归属并保留。</span>
+                          </div>
+                          <Button
+                            className="organization-settings-action"
+                            disabled={busy}
+                            size="lg"
+                            type="button"
+                            variant="destructive"
+                            onClick={() => {
+                              setSettingsOpen(false)
+                              setOrganizationSettingsError('')
+                              setDeleteOpen(true)
+                            }}
+                          >
+                            <Trash data-icon="inline-start" /> 删除组织
+                          </Button>
+                        </section>
+                      </DialogContent>
+                    </Dialog>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="organization-sidebar-empty">尚未加入组织</p>
+              )}
+              {selectedDetail ? (
+                <span className="organization-sidebar-access">
+                  当前权限：{organizationRoleLabel[selectedDetail.accessRole]}
+                </span>
+              ) : null}
+            </div>
+
+            <nav className="nav-list organization-sidebar-nav" aria-label="组织管理导航">
+              <div className="nav-group" role="group" aria-labelledby="organization-nav-governance">
+                <div className="nav-group-label" id="organization-nav-governance">组织治理</div>
+                {organizationTabs.slice(0, 4).map((item) => {
+                  const Icon = item.icon
+                  return (
+                    <Button
+                      className={tab === item.id ? 'nav-button active' : 'nav-button'}
+                      key={item.id}
+                      type="button"
+                      variant="ghost"
+                      aria-current={tab === item.id ? 'page' : undefined}
+                      onClick={() => setTab(item.id)}
+                    >
+                      <Icon data-icon="inline-start" /> {item.label}
+                    </Button>
+                  )
+                })}
+              </div>
+              <div className="nav-group" role="group" aria-labelledby="organization-nav-operations">
+                <div className="nav-group-label" id="organization-nav-operations">组织运营</div>
+                {organizationTabs.slice(4).map((item) => {
+                  const Icon = item.icon
+                  return (
+                    <Button
+                      className={tab === item.id ? 'nav-button active' : 'nav-button'}
+                      key={item.id}
+                      type="button"
+                      variant="ghost"
+                      aria-current={tab === item.id ? 'page' : undefined}
+                      onClick={() => setTab(item.id)}
+                    >
+                      <Icon data-icon="inline-start" /> {item.label}
+                    </Button>
+                  )
+                })}
+              </div>
+            </nav>
+          </>
+        ) : null}
+      </div>,
+      sidebarNavigationHost,
+    )
+    : null
+
   if (!canAccessOrganizationManagement) {
     return (
-      <div className="organization-state organization-empty-state">
-        <Buildings size={30} weight="duotone" />
-        <strong>当前账号没有组织管理权限</strong>
-        <span>组织管理看板仅对组织管理员或系统管理员开放。</span>
-      </div>
+      <>
+        {organizationSidebarNavigation}
+        <div className="organization-state organization-empty-state">
+          <Buildings size={30} weight="duotone" />
+          <strong>当前账号没有组织管理权限</strong>
+          <span>组织管理看板仅对组织管理员或系统管理员开放。</span>
+        </div>
+      </>
     )
   }
 
   if ((!detail || detail.id !== selectedOrganizationId) && (loading || detailLoading)) {
-    return <>{organizationCreateAction}<div className="organization-state">正在加载组织...</div></>
+    return <>{organizationCreateAction}{organizationSidebarNavigation}<div className="organization-state">正在加载组织...</div></>
   }
 
   if (!detail || detail.id !== selectedOrganizationId) {
     return (
       <>
         {organizationCreateAction}
+        {organizationSidebarNavigation}
         <div className="organization-state organization-empty-state">
           <Buildings size={30} weight="duotone" />
           <strong>当前账号还没有加入组织</strong>
@@ -984,104 +1167,7 @@ export function OrganizationWorkbench({
     <div className="organization-workbench">
       {confirmationDialog}
       {organizationCreateAction}
-      <div className="organization-toolbar">
-        <div className="organization-switcher-group">
-          <Select
-            value={String(selectedOrganizationId)}
-            onValueChange={(value) => setSelectedOrganizationId(Number(value))}
-          >
-            <SelectTrigger className="organization-switcher" aria-label="选择组织">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {organizations.map((organization) => (
-                <SelectItem key={organization.id} value={String(organization.id)}>
-                  {organization.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {detail.canManage ? (
-            <Dialog open={settingsOpen} onOpenChange={(open) => {
-              setSettingsOpen(open)
-              setOrganizationSettingsError('')
-              if (open) setOrganizationRenameDraft(detail.name)
-            }}>
-              <DialogTrigger asChild>
-                <Button
-                  aria-label="组织设置"
-                  title="组织设置"
-                  size="icon"
-                  type="button"
-                  variant="outline"
-                >
-                  <GearSix size={17} />
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="organization-settings-dialog" fixedHeader>
-                <DialogHeader>
-                  <DialogTitle>组织设置</DialogTitle>
-                  <DialogDescription>管理组织名称、项目模块与组织删除。</DialogDescription>
-                </DialogHeader>
-                {organizationSettingsError ? (
-                  <div className="organization-error" role="alert">{organizationSettingsError}</div>
-                ) : null}
-                <form className="organization-settings-form" onSubmit={submitOrganizationRename}>
-                  <Label htmlFor="organization-name-edit">组织名称</Label>
-                  <div className="organization-settings-name-row">
-                    <Input
-                      id="organization-name-edit"
-                      maxLength={80}
-                      value={organizationRenameDraft}
-                      onChange={(event) => setOrganizationRenameDraft(event.target.value)}
-                    />
-                    <Button
-                      className="organization-settings-action"
-                      disabled={busy || !organizationRenameDraft.trim() || organizationRenameDraft.trim() === detail.name}
-                      size="lg"
-                      type="submit"
-                    >
-                      保存名称
-                    </Button>
-                  </div>
-                </form>
-                {detail.canManageProjectModules ? (
-                  <OrganizationProjectModulesPanel
-                    key={detail.id}
-                    organizationId={detail.id}
-                    modules={detail.projectModules}
-                    disabled={busy}
-                    onSaved={(nextDetail) => {
-                      setDetail(current => current?.id === nextDetail.id ? nextDetail : current)
-                      onProjectModulesChanged?.()
-                    }}
-                  />
-                ) : null}
-                <section className="organization-danger-zone" aria-labelledby="organization-danger-title">
-                  <div>
-                    <strong id="organization-danger-title">删除组织</strong>
-                    <span>删除成员关系、邀请、组织周报与汇总，项目和测试空间将解除组织归属并保留。</span>
-                  </div>
-                  <Button
-                    className="organization-settings-action"
-                    disabled={busy}
-                    size="lg"
-                    type="button"
-                    variant="destructive"
-                    onClick={() => {
-                      setSettingsOpen(false)
-                      setOrganizationSettingsError('')
-                      setDeleteOpen(true)
-                    }}
-                  >
-                    <Trash size={16} /> 删除组织
-                  </Button>
-                </section>
-              </DialogContent>
-            </Dialog>
-          ) : null}
-        </div>
-      </div>
+      {organizationSidebarNavigation}
 
       <ConfirmActionDialog
         key={detail.id}
@@ -1093,29 +1179,6 @@ export function OrganizationWorkbench({
         confirmLabel="永久删除组织"
         onConfirm={submitOrganizationDelete}
       />
-
-      <div className="organization-tabs-row">
-        <div className="organization-tabs" role="tablist" aria-label="组织模块">
-          {organizationTabs.map((item) => {
-            const Icon = item.icon
-            return (
-              <button
-                className={tab === item.id ? 'active' : ''}
-                key={item.id}
-                type="button"
-                role="tab"
-                aria-selected={tab === item.id}
-                onClick={() => setTab(item.id)}
-              >
-                <Icon size={17} /> {item.label}
-              </button>
-            )
-          })}
-        </div>
-        <span className="organization-access-badge">
-          {organizationRoleLabel[detail.accessRole]}
-        </span>
-      </div>
 
       {error ? <div className="organization-error" role="alert">{error}</div> : null}
 
@@ -2825,11 +2888,13 @@ export function OrganizationWeeklyReportView({ currentUser }: { currentUser: Aut
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {organizations.map((organization) => (
-              <SelectItem key={organization.id} value={String(organization.id)}>
-                {organization.name}
-              </SelectItem>
-            ))}
+            <SelectGroup>
+              {organizations.map((organization) => (
+                <SelectItem key={organization.id} value={String(organization.id)}>
+                  {organization.name}
+                </SelectItem>
+              ))}
+            </SelectGroup>
           </SelectContent>
         </Select>
       </div>

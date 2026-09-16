@@ -1757,6 +1757,8 @@ function App() {
   const [invitePasswordRequired, setInvitePasswordRequired] = useState(false)
   const [invitePasswordVerified, setInvitePasswordVerified] = useState(false)
   const [view, setView] = useState<View>(getInitialView)
+  const organizationReturnViewRef = useRef<View>('search')
+  const [organizationSidebarHost, setOrganizationSidebarHost] = useState<HTMLDivElement | null>(null)
   const [changelogCanManage, setChangelogCanManage] = useState(false)
   const [changelogEditorOpen, setChangelogEditorOpen] = useState(false)
   const [changelogCreateRequest, setChangelogCreateRequest] = useState(0)
@@ -3224,6 +3226,23 @@ function App() {
       if (!prepared) return
     }
     applyOrganizationContext(nextOrganizationId)
+  }
+
+  function openOrganizationManagement() {
+    if (view !== 'organization') organizationReturnViewRef.current = view
+    setView('organization')
+  }
+
+  function closeOrganizationManagement() {
+    const returnView = organizationReturnViewRef.current
+    const canRestoreReturnView = authUser
+      && returnView !== 'organization'
+      && canUseViewForUser(returnView, authUser)
+      && (returnView !== 'project' || (
+        selectedProjectId != null
+        && scopedProjects.some((project) => project.id === selectedProjectId)
+      ))
+    setView(canRestoreReturnView ? returnView : getRoleLandingView(authUser?.activeRole ?? 'developer'))
   }
 
   function selectProject(projectId: number) {
@@ -4835,7 +4854,7 @@ ${packageTimelineText}`
               onDisconnectFeishu={disconnectFeishuBinding}
               onSaveAccountSettings={updateAccountSettings}
               onRoleChange={(role) => void changeActiveUserRole(role)}
-              onOpenOrganization={() => setView('organization')}
+              onOpenOrganization={openOrganizationManagement}
               onOpenChangelog={() => setView('changelog')}
               onSignOut={signOut}
               onToggleTheme={toggleThemeMode}
@@ -4876,77 +4895,86 @@ ${packageTimelineText}`
               {openNotificationCount > 0 ? <span className="sidebar-notifications-dot" aria-hidden /> : null}
             </button>
           </div>
-          <OrganizationSwitcher
-            error={organizationContextError}
-            organizations={organizations}
-            selectedOrganizationId={selectedOrganizationId}
-            onChange={changeOrganization}
-          />
-          <nav className="nav-list">
-            <NavGroup label="日常工作" id="nav-group-daily">
-              <NavButton active={view === 'search'} onClick={() => setView('search')}>
-                <Target size={18} weight="duotone" /> 项目篮子
-              </NavButton>
-              <NavButton active={view === 'my_work'} onClick={openMyWork}>
-                <ListChecks size={18} weight="duotone" /> 我的待办
-                {openTodoCount > 0 && (
-                  <Badge className="nav-badge">{openTodoCount}</Badge>
-                )}
-              </NavButton>
-              {selectedOrganizationId === null ? (
-                <NavButton active={view === 'inbox'} onClick={() => setView('inbox')}>
-                  <Tray size={18} weight="duotone" /> 草稿箱
-                </NavButton>
-              ) : null}
-              {selectedOrganizationId !== null ? (
-                <NavButton active={view === 'weekly_report'} onClick={() => setView('weekly_report')}>
-                  <FileText size={18} weight="duotone" /> 周报管理
-                </NavButton>
-              ) : null}
-              {selectedOrganizationId === null ? (
-                <NavButton
-                  active={view === 'ai'}
-                  onClick={() => {
-                    setAiMobilePane(getDefaultAiPane())
-                    setView('ai')
-                  }}
-                >
-                  <Sparkle size={18} weight="duotone" /> Veges AI
-                </NavButton>
-              ) : null}
-            </NavGroup>
-            {selectedOrganizationId !== null ? (
-              <NavGroup label="协作与交付" id="nav-group-delivery">
-                {canNavigateToDeveloperBugs ? (
-                  <NavButton
-                    active={view === 'assigned_bugs'}
-                    onClick={() => void changeActiveUserRole('developer', 'assigned_bugs')}
-                  >
-                    <Bug size={18} weight="duotone" /> Bug 工作台
-                    {assignedBugCount > 0 && (
-                      <Badge className="nav-badge">{assignedBugCount}</Badge>
+          {view === 'organization' ? (
+            <div
+              className="organization-sidebar-navigation"
+              ref={setOrganizationSidebarHost}
+            />
+          ) : (
+            <>
+              <OrganizationSwitcher
+                error={organizationContextError}
+                organizations={organizations}
+                selectedOrganizationId={selectedOrganizationId}
+                onChange={changeOrganization}
+              />
+              <nav className="nav-list">
+                <NavGroup label="日常工作" id="nav-group-daily">
+                  <NavButton active={view === 'search'} onClick={() => setView('search')}>
+                    <Target size={18} weight="duotone" /> 项目篮子
+                  </NavButton>
+                  <NavButton active={view === 'my_work'} onClick={openMyWork}>
+                    <ListChecks size={18} weight="duotone" /> 我的待办
+                    {openTodoCount > 0 && (
+                      <Badge className="nav-badge">{openTodoCount}</Badge>
                     )}
                   </NavButton>
+                  {selectedOrganizationId === null ? (
+                    <NavButton active={view === 'inbox'} onClick={() => setView('inbox')}>
+                      <Tray size={18} weight="duotone" /> 草稿箱
+                    </NavButton>
+                  ) : null}
+                  {selectedOrganizationId !== null ? (
+                    <NavButton active={view === 'weekly_report'} onClick={() => setView('weekly_report')}>
+                      <FileText size={18} weight="duotone" /> 周报管理
+                    </NavButton>
+                  ) : null}
+                  {selectedOrganizationId === null ? (
+                    <NavButton
+                      active={view === 'ai'}
+                      onClick={() => {
+                        setAiMobilePane(getDefaultAiPane())
+                        setView('ai')
+                      }}
+                    >
+                      <Sparkle size={18} weight="duotone" /> Veges AI
+                    </NavButton>
+                  ) : null}
+                </NavGroup>
+                {selectedOrganizationId !== null ? (
+                  <NavGroup label="协作与交付" id="nav-group-delivery">
+                    {canNavigateToDeveloperBugs ? (
+                      <NavButton
+                        active={view === 'assigned_bugs'}
+                        onClick={() => void changeActiveUserRole('developer', 'assigned_bugs')}
+                      >
+                        <Bug size={18} weight="duotone" /> Bug 工作台
+                        {assignedBugCount > 0 && (
+                          <Badge className="nav-badge">{assignedBugCount}</Badge>
+                        )}
+                      </NavButton>
+                    ) : null}
+                    {canNavigateToTestWorkbench ? (
+                      <NavButton
+                        active={view === 'testing'}
+                        onClick={() => void changeActiveUserRole('tester', 'testing')}
+                      >
+                        <Flask size={18} weight="duotone" /> 测试工作台
+                      </NavButton>
+                    ) : null}
+                    {packageMarketVisible ? (
+                      <NavButton active={view === 'package_market'} onClick={() => setView('package_market')}>
+                        <ShoppingCartSimple size={18} weight="duotone" /> 安装包市场
+                      </NavButton>
+                    ) : null}
+                    <NavButton active={view === 'image_sync'} onClick={() => setView('image_sync')}>
+                      <CloudArrowUp size={18} weight="duotone" /> 镜像同步
+                    </NavButton>
+                  </NavGroup>
                 ) : null}
-                {canNavigateToTestWorkbench ? (
-                  <NavButton
-                    active={view === 'testing'}
-                    onClick={() => void changeActiveUserRole('tester', 'testing')}
-                  >
-                    <Flask size={18} weight="duotone" /> 测试工作台
-                  </NavButton>
-                ) : null}
-                {packageMarketVisible ? (
-                  <NavButton active={view === 'package_market'} onClick={() => setView('package_market')}>
-                    <ShoppingCartSimple size={18} weight="duotone" /> 安装包市场
-                  </NavButton>
-                ) : null}
-                <NavButton active={view === 'image_sync'} onClick={() => setView('image_sync')}>
-                  <CloudArrowUp size={18} weight="duotone" /> 镜像同步
-                </NavButton>
-              </NavGroup>
-            ) : null}
-          </nav>
+              </nav>
+            </>
+          )}
           <AccountMenu
             activeView={view}
             user={authUser}
@@ -4954,7 +4982,7 @@ ${packageTimelineText}`
             onDisconnectFeishu={disconnectFeishuBinding}
             onSaveAccountSettings={updateAccountSettings}
             onRoleChange={(role) => void changeActiveUserRole(role)}
-            onOpenOrganization={() => setView('organization')}
+            onOpenOrganization={openOrganizationManagement}
             onOpenChangelog={() => setView('changelog')}
             onSignOut={signOut}
             onToggleTheme={toggleThemeMode}
@@ -5474,6 +5502,8 @@ ${packageTimelineText}`
             currentUser={authUser}
             initialOrganizations={organizations}
             initialSelectedOrganizationId={selectedOrganizationId}
+            onBack={closeOrganizationManagement}
+            sidebarNavigationHost={organizationSidebarHost}
             onSubprojectsChanged={() => {
               workspaceMutationEpochRef.current += 1
               void Promise.resolve(workspaceRefreshPromiseRef.current).then(() => refreshWorkspace())

@@ -32,6 +32,17 @@ test('organization detail loading cannot render the empty organization state ear
   assert.match(workbenchSource, /if \(!detail \|\| detail\.id !== selectedOrganizationId\)/u)
 })
 
+test('organization management replaces the workspace navigation in the existing sidebar', () => {
+  assert.match(appSource, /view === 'organization'[\s\S]*?ref=\{setOrganizationSidebarHost\}/u)
+  assert.match(appSource, /sidebarNavigationHost=\{organizationSidebarHost\}/u)
+  assert.match(appSource, /onOpenOrganization=\{openOrganizationManagement\}/u)
+  assert.match(appSource, /onBack=\{closeOrganizationManagement\}/u)
+  assert.match(workbenchSource, /createPortal\([\s\S]*?organization-sidebar-panel[\s\S]*?sidebarNavigationHost/u)
+  assert.match(workbenchSource, /aria-label="组织管理导航"/u)
+  assert.match(workbenchSource, /返回工作区/u)
+  assert.doesNotMatch(workbenchSource, /className="organization-tabs-row"/u)
+})
+
 test('global package market uses the selected sidebar organization as its only context', () => {
   assert.match(appSource, /const activePackageMarketOrganization = selectedOrganizationId == null/u)
   assert.match(
