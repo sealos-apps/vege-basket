@@ -116,6 +116,7 @@ export type TestSubject = {
   canEdit: boolean
   createdAt: string
   description: string
+  directoryRoot: boolean
   id: number
   name: string
   testSpaceId: number
@@ -134,10 +135,13 @@ export type TestCase = {
   canDelete: boolean
   caseType: TestCaseType
   createdAt: string
+  csvCaseId: string
   customTags: string[]
   expectedResult: string
   folderId?: number
   id: number
+  moduleId?: number
+  moduleName?: string
   preconditions: string
   priority: Priority
   remarks: string
@@ -257,10 +261,13 @@ export type TestBug = {
   canTransfer?: boolean
   comments: TestBugComment[]
   createdAt: string
+  detailsLoaded?: boolean
   environment: string
   expectedResult: string
   events: TestBugEvent[]
   id: number
+  moduleId?: number
+  moduleName?: string
   organizationMembers?: Array<{ id: number; name: string }>
   priority: Priority
   reporterName?: string
@@ -299,11 +306,22 @@ export type TestWorkspaceUser = {
 }
 
 export type TestWorkbenchNotification = {
+  actionable?: boolean
+  commentAuthorName?: string
   createdAt: string
   kind: 'test_plan_assigned' | 'test_bug_status_changed' | 'test_bug_rejected' | 'test_bug_comment_added'
   sourceId: number
-  testSpaceName?: string
+  targetId: number
+  targetStatus?: BugStatus | TestPlanStatus
+  targetTitle: string
+  testCaseId?: number
+  testCaseTitle?: string
+  testSpaceId: number
+  testSpaceName: string
   testSpaceVersionLabel?: string
+  testSubjectId?: number
+  testSubjectName?: string
+  testSubjects?: Array<{ id: number; name: string }>
 } | {
   authorName: string
   commentPreview: string
@@ -324,23 +342,46 @@ export type TestWorkbenchData = {
   departedUserIds: number[]
   folders: TestCaseFolder[]
   notifications: TestWorkbenchNotification[]
+  modules: TestWorkbenchModule[]
   planCases: TestPlanCase[]
   plans: TestPlan[]
   spaces: TestSpace[]
   subjects: TestSubject[]
   testEnvironments: TestEnvironment[]
   users: TestWorkspaceUser[]
+  loadedSections?: TestWorkbenchSection[]
+}
+
+export type TestWorkbenchSection = 'bugs' | 'cases' | 'core' | 'notifications' | 'plans'
+
+export type TestWorkbenchModule = {
+  enabled: boolean
+  id: number
+  name: string
+  organizationId: number
 }
 
 export type TestWorkbenchProjectOption = Pick<Project, 'id' | 'name'>
 
 export type TestCaseImportPreview = {
+  createCount: number
+  invalidCount: number
+  items: Array<{
+    action: 'create' | 'update' | 'invalid'
+    message: string
+    rowNumber: number
+    sourceId: string
+    title: string
+  }>
   targetPath?: string
   newDirectoryCount?: number
+  newTopLevelDirectoryCount?: number
   reusedDirectoryCount?: number
   samplePaths?: string[]
   levelCounts: Record<'P0' | 'P1' | 'P2', number>
   moduleCount: number
   rowCount: number
   sampleTitles: string[]
+  updateCount: number
+  validCount: number
 }

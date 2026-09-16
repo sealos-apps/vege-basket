@@ -1,15 +1,10 @@
 import { parse } from 'csv-parse/sync'
-import { decodeDirectoryPath, directoryName, type TestCaseDirectoryMode } from '../shared/test-case-directories.ts'
-
-const requiredHeaders = [
-  '用例名称',
-  '所属模块',
-  '前置条件',
-  '步骤描述',
-  '预期结果',
-  '备注',
-  '用例等级',
-] as const
+import { decodeRootDirectoryPath } from '../shared/test-case-directories.ts'
+import {
+  testCaseCsvHeaders,
+  testCaseTypeByLabel,
+  type TestCaseCsvType,
+} from '../shared/test-case-csv.ts'
 
 const priorityByLevel = {
   P0: 'high',
@@ -18,15 +13,25 @@ const priorityByLevel = {
 } as const
 
 export type TestCaseImportRow = {
+  caseType: TestCaseCsvType
   customTags: string[]
   expectedResult: string
   level: keyof typeof priorityByLevel
-  modulePath: string
+  moduleName: string
   directorySegments: string[]
   preconditions: string
   priority: (typeof priorityByLevel)[keyof typeof priorityByLevel]
   remarks: string
+  rowNumber: number
+  sourceId: string
   steps: string
+  title: string
+}
+
+export type TestCaseImportIssue = {
+  message: string
+  rowNumber: number
+  sourceId: string
   title: string
 }
 
@@ -35,6 +40,7 @@ export type TestCaseImportPreview = {
   moduleCount: number
   rowCount: number
   sampleTitles: string[]
+  issues: TestCaseImportIssue[]
   targetPath?: string
   newDirectoryCount?: number
   reusedDirectoryCount?: number
@@ -57,15 +63,7 @@ function limited(value: unknown, maxLength: number, rowNumber: number, field: st
   return normalized
 }
 
-function parseTags(value: unknown, rowNumber: number) {
-  const raw = limited(value, 500, rowNumber, '自定义标签')
-  if (!raw) return []
-  return Array.from(new Set(raw.split(/[,，;；、\s]+/).map((item) => item.trim()).filter(Boolean)))
-    .slice(0, 12)
-    .map((item) => item.slice(0, 40))
-}
-
-export function parseTestCaseCsv(csvText: string, directoryMode: TestCaseDirectoryMode = 'legacy') {
+export function parseTestCaseCsv(csvText: string) {
   if (!csvText.trim()) importError('CSV 文件为空。')
 
   let headers: string[] = []
@@ -88,10 +86,17 @@ export function parseTestCaseCsv(csvText: string, directoryMode: TestCaseDirecto
   if (new Set(headers).size !== headers.length) {
     importError('CSV 表头存在重复字段。')
   }
-  const missingHeaders = requiredHeaders.filter((header) => (header !== '所属模块' || directoryMode === 'legacy') && !headers.includes(header))
-  if (directoryMode === 'tree' && !headers.includes('目录路径') && !headers.includes('所属模块')) importError('CSV 缺少字段：目录路径或所属模块。')
-  if (missingHeaders.length > 0) {
-    importError(`CSV 缺少字段：${missingHeaders.join('、')}。`)
+  const missingHeaders = testCaseCsvHeaders.filter((header) => !headers.includes(header))
+  const unknownHeaders = headers.filter((header) => !testCaseCsvHeaders.includes(header as (typeof testCaseCsvHeaders)[number]))
+  if (missingHeaders.length || unknownHeaders.length) {
+    const details = [
+      missingHeaders.length ? `缺少：${missingHeaders.join('、')}` : '',
+      unknownHeaders.length ? `多余：${unknownHeaders.join('、')}` : '',
+    ].filter(Boolean).join('；')
+    importError(`CSV 表头必须严格使用指定字段（${details}）。`)
+  }
+  if (headers.some((header, index) => header !== testCaseCsvHeaders[index])) {
+    importError(`CSV 表头顺序必须为：${testCaseCsvHeaders.join('、')}。`)
   }
   const records = parsedRecords.filter((record) =>
     headers.some((header) => String(record[header] ?? '').trim()),
@@ -99,48 +104,84 @@ export function parseTestCaseCsv(csvText: string, directoryMode: TestCaseDirecto
   if (records.length === 0) importError('CSV 中没有可导入的用例。')
   if (records.length > 1000) importError('单次最多导入 1000 条用例。')
 
-  const rows = records.map((record, index): TestCaseImportRow => {
+  const issues: TestCaseImportIssue[] = []
+  const rows = records.flatMap((record, index): TestCaseImportRow[] => {
     const rowNumber = index + 2
-    const title = limited(record['用例名称'], 160, rowNumber, '用例名称')
-    const modulePath = limited(record['所属模块'], directoryMode === 'legacy' ? 240 : 16000, rowNumber, '所属模块')
-    const level = limited(record['用例等级'], 2, rowNumber, '用例等级').toUpperCase()
-    if (!title) importError(`第 ${rowNumber} 行“用例名称”不能为空。`)
-    if (directoryMode === 'legacy' && !modulePath) importError(`第 ${rowNumber} 行“所属模块”不能为空。`)
-    const directorySegments = directoryMode === 'current' ? []
-      : directoryMode === 'tree' && headers.includes('目录路径')
-        ? decodeDirectoryPath(limited(record['目录路径'], 16000, rowNumber, '目录路径'))
-        : modulePath ? [directoryName(modulePath)] : []
-    if (!(level in priorityByLevel)) {
-      importError(`第 ${rowNumber} 行“用例等级”必须是 P0、P1 或 P2。`)
-    }
-    const normalizedLevel = level as keyof typeof priorityByLevel
-    return {
-      customTags: parseTags(record['自定义标签'] ?? record['标签'], rowNumber),
-      expectedResult: limited(record['预期结果'], 10000, rowNumber, '预期结果'),
-      level: normalizedLevel,
-      modulePath,
-      directorySegments,
-      preconditions: limited(record['前置条件'], 5000, rowNumber, '前置条件'),
-      priority: priorityByLevel[normalizedLevel],
-      remarks: limited(record['备注'], 5000, rowNumber, '备注'),
-      steps: limited(record['步骤描述'], 10000, rowNumber, '步骤描述'),
-      title,
+    const rawSourceId = String(record['用例ID'] ?? '').trim()
+    const rawTitle = String(record['用例名称'] ?? '').trim()
+    try {
+      const sourceId = limited(record['用例ID'], 40, rowNumber, '用例ID')
+      const title = limited(record['用例名称'], 160, rowNumber, '用例名称')
+      const moduleName = limited(record['所属模块'], 160, rowNumber, '所属模块')
+      const level = limited(record['用例等级'], 2, rowNumber, '用例等级').toUpperCase()
+      const caseTypeLabel = limited(record['用例类型'], 10, rowNumber, '用例类型')
+      const caseType = testCaseTypeByLabel[caseTypeLabel as keyof typeof testCaseTypeByLabel]
+      if (sourceId && !/^CASE-[1-9]\d*$/u.test(sourceId)) importError(`第 ${rowNumber} 行“用例ID”必须留空或使用 CASE-数字 格式。`)
+      if (!title) importError(`第 ${rowNumber} 行“用例名称”不能为空。`)
+      const directorySegments = decodeRootDirectoryPath(limited(record['用例目录'], 16000, rowNumber, '用例目录'))
+      if (!(level in priorityByLevel)) {
+        importError(`第 ${rowNumber} 行“用例等级”必须是 P0、P1 或 P2。`)
+      }
+      if (!caseType) importError(`第 ${rowNumber} 行“用例类型”必须是功能、回归、冒烟、安全或性能。`)
+      const normalizedLevel = level as keyof typeof priorityByLevel
+      return [{
+        caseType,
+        customTags: [],
+        expectedResult: limited(record['预期结果'], 10000, rowNumber, '预期结果'),
+        level: normalizedLevel,
+        moduleName,
+        directorySegments,
+        preconditions: limited(record['前置条件'], 5000, rowNumber, '前置条件'),
+        priority: priorityByLevel[normalizedLevel],
+        remarks: limited(record['备注'], 5000, rowNumber, '备注'),
+        rowNumber,
+        sourceId,
+        steps: limited(record['步骤描述'], 10000, rowNumber, '步骤描述'),
+        title,
+      }]
+    } catch (error) {
+      issues.push({
+        message: error instanceof Error ? error.message.replace(/^第 \d+ 行/u, '').trim() : '字段内容无效。',
+        rowNumber,
+        sourceId: rawSourceId,
+        title: rawTitle,
+      })
+      return []
     }
   })
 
+  const duplicateIds = new Set<string>()
+  const seenIds = new Set<string>()
+  for (const row of rows) {
+    if (!row.sourceId) continue
+    if (seenIds.has(row.sourceId)) duplicateIds.add(row.sourceId)
+    seenIds.add(row.sourceId)
+  }
+  const validRows = rows.filter((row) => {
+    if (!duplicateIds.has(row.sourceId)) return true
+    issues.push({
+      message: '“用例ID”在当前 CSV 中重复。',
+      rowNumber: row.rowNumber,
+      sourceId: row.sourceId,
+      title: row.title,
+    })
+    return false
+  })
+
   return {
-    preview: buildTestCaseImportPreview(rows),
-    rows,
+    preview: buildTestCaseImportPreview(validRows, issues),
+    rows: validRows,
   }
 }
 
-export function buildTestCaseImportPreview(rows: TestCaseImportRow[]): TestCaseImportPreview {
+export function buildTestCaseImportPreview(rows: TestCaseImportRow[], issues: TestCaseImportIssue[] = []): TestCaseImportPreview {
   const levelCounts: TestCaseImportPreview['levelCounts'] = { P0: 0, P1: 0, P2: 0 }
   for (const row of rows) levelCounts[row.level] += 1
   return {
     levelCounts,
-    moduleCount: new Set(rows.map((row) => row.modulePath)).size,
-    rowCount: rows.length,
+    issues,
+    moduleCount: new Set(rows.map((row) => row.moduleName).filter(Boolean)).size,
+    rowCount: rows.length + issues.length,
     sampleTitles: rows.slice(0, 5).map((row) => row.title),
   }
 }

@@ -7,7 +7,6 @@ export type TestCaseDirectory = {
   name: string
   parentId: number | null
 }
-export type TestCaseDirectoryMode = 'current' | 'tree' | 'legacy'
 
 export class TestCaseDirectoryError extends Error {
   status: number
@@ -73,7 +72,7 @@ export function createDirectoryIndex<T extends TestCaseDirectory>(
       const node = byId.get(cursor)
       if (!node)
         throw new TestCaseDirectoryError(
-          '目录不存在或不属于当前测试对象。',
+          '目录不存在或不属于当前一级目录。',
           404,
         )
       seen.add(cursor)
@@ -137,20 +136,46 @@ export function validateDirectoryPlacement(
 
 export function encodeDirectoryPath(segments: readonly string[]) {
   return segments
-    .map((segment) => segment.replace(/~/gu, '~0').replace(/\//gu, '~1'))
-    .join('/')
+    .map((segment) => segment.replace(/\\/gu, '\\\\').replace(/~/gu, '\\~'))
+    .join('~')
+}
+
+export function encodeRootDirectoryPath(segments: readonly string[]) {
+  return segments.length ? `~${encodeDirectoryPath(segments)}` : ''
 }
 
 export function decodeDirectoryPath(value: string) {
   if (!value) return []
-  const segments = value.split('/').map((segment) => {
-    if (/~(?![01])/u.test(segment))
-      throw new TestCaseDirectoryError('目录路径包含无效转义。')
-    return directoryName(segment.replace(/~1/gu, '/').replace(/~0/gu, '~'))
-  })
+  const segments: string[] = []
+  let segment = ''
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === '\\') {
+      const escaped = value[index + 1]
+      if (escaped !== '~' && escaped !== '\\')
+        throw new TestCaseDirectoryError('目录路径包含无效转义。')
+      segment += escaped
+      index += 1
+      continue
+    }
+    if (value[index] !== '~') {
+      segment += value[index]
+      continue
+    }
+    segments.push(directoryName(segment))
+    segment = ''
+  }
+  segments.push(directoryName(segment))
   if (segments.length > maxTestCaseDirectoryDepth)
     throw new TestCaseDirectoryError('目录路径超过 32 层。')
   return segments
+}
+
+export function decodeRootDirectoryPath(value: string) {
+  if (!value) return []
+  if (!value.startsWith('~') || value.length === 1) {
+    throw new TestCaseDirectoryError('非空目录路径必须以 ~ 开头。')
+  }
+  return decodeDirectoryPath(value.slice(1))
 }
 
 export function parseCaseMoveIds(value: unknown) {

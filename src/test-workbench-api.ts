@@ -12,6 +12,7 @@ import type {
   TestSpaceImportSource,
   TestSpaceSettings,
   TestWorkbenchData,
+  TestWorkbenchSection,
 } from './test-workbench-types'
 import type { Priority } from './types'
 import {
@@ -24,12 +25,17 @@ function withOrganizationContext(path: string, organizationId: OrganizationConte
   return `${path}?${params}`
 }
 
-export function fetchTestWorkbench(scope?: { spaceId?: number; subjectId?: number }) {
+export function fetchTestWorkbench(
+  scope?: { bugId?: number; sections?: TestWorkbenchSection[]; spaceId?: number; subjectId?: number },
+  options: Pick<RequestInit, 'signal'> = {},
+) {
   const params = new URLSearchParams()
+  if (scope?.bugId) params.set('bugId', String(scope.bugId))
   if (scope?.spaceId) params.set('spaceId', String(scope.spaceId))
   if (scope?.subjectId) params.set('subjectId', String(scope.subjectId))
+  if (scope?.sections?.length) params.set('sections', scope.sections.join(','))
   const query = params.toString()
-  return request<TestWorkbenchData>(`/api/test-workbench${query ? `?${query}` : ''}`)
+  return request<TestWorkbenchData>(`/api/test-workbench${query ? `?${query}` : ''}`, options)
 }
 
 export function createTestSpace(name: string, versionLabel: string, organizationId: number) {
@@ -39,8 +45,8 @@ export function createTestSpace(name: string, versionLabel: string, organization
   })
 }
 
-export function fetchTestSpaceSettings() {
-  return request<TestSpaceSettings>('/api/test-spaces/settings')
+export function fetchTestSpaceSettings(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<TestSpaceSettings>('/api/test-spaces/settings', options)
 }
 
 export function updateTestSpace(spaceId: number, payload: { name: string; organizationId?: number; versionLabel?: string }) {
@@ -220,6 +226,7 @@ export function createTestCase(spaceId: number, payload: {
   expectedResult: string
   folderId?: number | null
   modulePath?: string
+  moduleId?: number | null
   preconditions: string
   priority: Priority
   remarks: string
@@ -239,6 +246,7 @@ export function updateTestCase(spaceId: number, caseId: number, payload: Partial
   expectedResult: string
   folderId?: number | null
   modulePath?: string
+  moduleId?: number | null
   preconditions: string
   priority: Priority
   remarks: string
@@ -258,9 +266,9 @@ export function deleteTestCase(spaceId: number, caseId: number) {
   })
 }
 
-export function previewTestCaseImport(spaceId: number, testSubjectId: number, csvText: string, options?: { directoryMode: 'current' | 'tree'; targetFolderId: number | null }) {
+export function previewTestCaseImport(spaceId: number, csvText: string) {
   return request<{ preview: TestCaseImportPreview }>(
-    `/api/test-spaces/${spaceId}/cases/import?testSubjectId=${testSubjectId}&preview=true${importDirectoryQuery(options)}`,
+    `/api/test-spaces/${spaceId}/cases/import?preview=true`,
     {
       method: 'POST',
       body: csvText,
@@ -269,9 +277,9 @@ export function previewTestCaseImport(spaceId: number, testSubjectId: number, cs
   )
 }
 
-export async function importTestCases(spaceId: number, testSubjectId: number, csvText: string, options?: { directoryMode: 'current' | 'tree'; targetFolderId: number | null }) {
+export async function importTestCases(spaceId: number, csvText: string) {
   const result = await request<{ importedCount: number; workbench: TestWorkbenchData }>(
-    `/api/test-spaces/${spaceId}/cases/import?testSubjectId=${testSubjectId}${importDirectoryQuery(options)}`,
+    `/api/test-spaces/${spaceId}/cases/import`,
     {
       method: 'POST',
       body: csvText,
@@ -357,7 +365,9 @@ export function createTestBug(spaceId: number, payload: {
   testEnvironmentId?: number | null
   testPlanCaseId?: number
   testPlanId?: number
-  testCaseId: number
+  moduleId?: number | null
+  testCaseId?: number
+  testSubjectId?: number
   title: string
 }) {
   return request<TestWorkbenchData>(`/api/test-spaces/${spaceId}/bugs`, {
@@ -376,7 +386,9 @@ export function updateTestBug(spaceId: number, bugId: number, payload: {
   severity?: BugSeverity
   status?: BugStatus
   testEnvironmentId?: number | null
+  moduleId?: number | null
   testCaseId?: number
+  testSubjectId?: number | null
   title?: string
 }) {
   return request<TestWorkbenchData>(`/api/test-spaces/${spaceId}/bugs/${bugId}`, {
@@ -517,10 +529,6 @@ export function deleteAssignedTestBugComment(organizationId: OrganizationContext
 export function requestTestSpaceTransfer(spaceId:number,targetUserId:number){return request<{transferId:number}>(`/api/test-spaces/${spaceId}/transfer`,{method:'POST',body:JSON.stringify({targetUserId})})}
 export function transferOrganizationTestSpaceOwnership(organizationId:number,spaceId:number,targetUserId:number){return request<TestSpaceSettings>(`/api/organizations/${organizationId}/test-spaces/${spaceId}/transfer`,{method:'POST',body:JSON.stringify({targetUserId})})}
 export function respondTestSpaceTransfer(transferId:number,action:'accept'|'decline'){return request<{settings:TestSpaceSettings;workbench:TestWorkbenchData}>(`/api/test-space-transfers/${transferId}/respond`,{method:'POST',body:JSON.stringify({action})})}
-
-function importDirectoryQuery(options?: { directoryMode: 'current' | 'tree'; targetFolderId: number | null }) {
-  return options ? `&directoryMode=${options.directoryMode}${options.targetFolderId === null ? '' : `&targetFolderId=${options.targetFolderId}`}` : ''
-}
 
 export async function moveTestCases(spaceId: number, testSubjectId: number, caseIds: number[], targetFolderId: number | null) {
   const result = await request<{ movedCount: number; workbench: TestWorkbenchData }>(`/api/test-spaces/${spaceId}/cases/move`, {

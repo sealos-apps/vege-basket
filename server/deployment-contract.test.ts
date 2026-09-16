@@ -41,6 +41,13 @@ test('Sealos does not grant system administration to a predictable default usern
   assert.doesNotMatch(adminInput, /default: admin/u)
 })
 
+test('Sealos bounds application and digest worker database pools separately', () => {
+  assert.match(sealosTemplate, /name: DB_POOL_CONNECTION_TIMEOUT_MS\s+value: '3000'/u)
+  assert.match(sealosTemplate, /name: DB_POOL_IDLE_TIMEOUT_MS\s+value: '30000'/u)
+  assert.equal(sealosTemplate.match(/name: DB_POOL_MAX\s+value: '10'/gu)?.length, 1)
+  assert.equal(sealosTemplate.match(/name: DB_POOL_MAX\s+value: '2'/gu)?.length, 1)
+})
+
 test('main image workflow deploys the immutable image to the application Deployment', () => {
   const deployJob = dockerPushWorkflow.slice(dockerPushWorkflow.indexOf('  deploy-k8s:'))
 

@@ -46,6 +46,8 @@ export type BugShareView = {
   testSpaceName: string
   testSpaceVersionLabel?: string
   testSubjectName: string
+  moduleId?: number
+  moduleName?: string
   testCaseId?: number
   testCaseTitle?: string
   testCaseFolderName?: string
@@ -73,8 +75,10 @@ type ShareBugRow = {
   status: string
   test_plan_name: string | null
   test_space_name: string
+  test_subject_name: string | null
+  organization_module_id: string | null
+  organization_module_name: string | null
   test_space_version_label: string | null
-  test_subject_name: string
   title: string
   updated_at: Date
 }
@@ -126,13 +130,18 @@ async function readView(token: string, userId?: number | null) {
            space.name as test_space_name,
            space.version_label as test_space_version_label,
            subject.name as test_subject_name,
+           b.organization_module_id,
+           organization_module.name as organization_module_name,
            plan.name as test_plan_name,
            project.name as project_name,
            assignee.display_name as assignee_display_name
     from bug_share_links link
     join test_bugs b on b.id = link.test_bug_id
     join test_spaces space on space.id = b.test_space_id
-    join test_subjects subject on subject.id = b.test_subject_id
+    left join test_subjects subject on subject.id = b.test_subject_id
+    left join organization_project_modules organization_module
+      on organization_module.id = b.organization_module_id
+      and organization_module.organization_id = space.organization_id
     left join test_cases linked_case on linked_case.id = b.test_case_id and linked_case.test_space_id = b.test_space_id
     ${bugCaseDirectoryJoinSql}
     left join test_plans plan on plan.id = b.test_plan_id
@@ -215,7 +224,9 @@ async function readView(token: string, userId?: number | null) {
     testPlanName: bug.test_plan_name ? decryptText(bug.test_plan_name) : null,
     testSpaceName: decryptText(bug.test_space_name),
     testSpaceVersionLabel: bug.test_space_version_label ? decryptText(bug.test_space_version_label) : undefined,
-    testSubjectName: decryptText(bug.test_subject_name),
+    testSubjectName: bug.test_subject_name ? decryptText(bug.test_subject_name) : '未关联一级目录',
+    moduleId: bug.organization_module_id ? Number(bug.organization_module_id) : undefined,
+    moduleName: bug.organization_module_name ? decryptText(bug.organization_module_name) : undefined,
     testCaseId: bug.test_case_id ? Number(bug.test_case_id) : undefined,
     testCaseTitle: bug.test_case_title ? decryptText(bug.test_case_title) : undefined,
     testCaseFolderName: serializeBugCaseDirectory(bug.test_case_directory_path).testCaseFolderName,

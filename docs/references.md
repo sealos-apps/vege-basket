@@ -37,6 +37,14 @@ Required for server startup:
 | `APP_ENCRYPTION_ACTIVE_KEY_ID` | Key ID used for new AES-256-GCM writes. |
 | `APP_ENCRYPTION_KEYS` | Comma-separated `key-id:base64-key` ring; each key is 32 bytes. |
 
+PostgreSQL pool controls:
+
+| Variable | Default / behavior |
+| --- | --- |
+| `DB_POOL_MAX` | `10`. Maximum clients in one process; the digest CronJob sets `2`. |
+| `DB_POOL_CONNECTION_TIMEOUT_MS` | `3000`. Bounded wait for a PostgreSQL client connection. |
+| `DB_POOL_IDLE_TIMEOUT_MS` | `30000`. Idle time before a pooled client is closed. |
+
 Core and AI controls:
 
 | Variable | Default / behavior |
@@ -188,7 +196,7 @@ families are:
 | Organizations | `/api/organizations/*`, system-admin organization creation, owner/admin organization rename, week-start setting and confirmed deletion, direct member admission, expiring `/api/organization-invite-links/*` browser links, legacy Feishu invitations, resource attachment, organization-admin project governance, test-environment `POST/PATCH/DELETE /api/organizations/:organizationId/test-environments(/:environmentId)`, direct organization-member admission to organization projects without invite notifications, milestones including inline `PATCH .../milestones/:milestoneId/status`, task overview, weekly reports, weekly summaries, and the dedicated package-market catalog/policy settings Tab |
 | Organization project modules | `POST /api/organizations/:organizationId/project-modules` with `{ name }`; `PATCH .../project-modules/:moduleId` with nonempty `{ name?, enabled? }`; returns `OrganizationDetail` (201/200). Requires `organization_admin` and active organization owner/admin. Names trim to 1–40 characters, exact case-sensitive uniqueness including disabled names. Invalid input 400; permission change 403; missing nested resource 404; duplicate/legacy rename collision 409. |
 | Personal weekly reports | paginated `GET /api/weekly-reports/:organizationId`, `GET /api/weekly-reports/:organizationId/:weekStart`, the shared four-section editor/AI template, cursor-position source insertion, draft save, AI generation, and submit routes under `/api/weekly-reports/*` |
-| Test workbench | `GET /api/test-workbench`, owner-or-organization-manager administered `/api/test-spaces/*` including optional organization assignment on create/update, direct-member owner-or-Bug-creator `PATCH /api/test-spaces/:spaceId/version`, creator-owned test-subject deletion, editor-managed case folders, tester-managed cases including creator-only `DELETE /api/test-spaces/:spaceId/cases/:caseId`, CSV case preview/import, creator-managed plan details/cases/deletion, executions, creator-only `DELETE /api/test-spaces/:spaceId/bugs/:bugId`, environment-bound Bugs, comments, and author-owned comment edits/deletions |
+| Test workbench | `GET /api/test-workbench` supports optional `sections=core,cases,plans,bugs,notifications`, active `spaceId`, case/plan `subjectId`, and single-Bug `bugId` scopes; `bugId` and `subjectId` require `spaceId`, while omitting `sections` preserves the complete legacy response. Also includes owner-or-organization-manager administered `/api/test-spaces/*` with optional organization assignment on create/update, direct-member owner-or-Bug-creator `PATCH /api/test-spaces/:spaceId/version`, creator-owned test-subject deletion, editor-managed case folders, tester-managed cases including creator-only `DELETE /api/test-spaces/:spaceId/cases/:caseId`, CSV case preview/import, creator-managed plan details/cases/deletion, executions, creator-only `DELETE /api/test-spaces/:spaceId/bugs/:bugId`, environment-bound Bugs, comments, and author-owned comment edits/deletions |
 | Test-space collaboration | `GET /api/test-spaces/settings`, `POST /api/test-spaces/:spaceId/members` direct admission, username invitations, member access updates, pending invitation acceptance, and expiring `/api/test-space-invite-links/*` share links |
 | Assigned bugs | `GET/PATCH /api/test-bugs/*/assigned`, `POST /api/test-bugs/:bugId/assigned/transfer`, `POST /api/test-bugs/:bugId/assigned/reject` (mandatory reason, records an immutable `reject` comment and notifies the reporting tester by personal Feishu message), organization-admin assignment of unassigned Bugs with a direct Feishu notification to the new assignee, assigned-bug comments, and author-owned assigned-comment edits/deletions for the active developer role |
 
@@ -358,7 +366,8 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   but the workbench no longer exposes case versions or archived status as the primary
   workflow.
 - Test cases use `case_type` for functional, regression, smoke, security, or performance classification. The former baseline/archiving concept has been removed. Test cases also support encrypted custom tags.
-- Test-case folders/modules are scoped to one test subject. Test-space owners and editors
+- Test-case folders/modules use legacy test-subject rows as internal first-level directory
+  scopes; the product exposes no separate test-object concept. Test-space owners and editors
   can create, rename, and delete empty folders. Move cases out before deleting their folder;
   moving cases to the root clears `folder_id`, and their Bugs become uncategorized.
 - Test-case deletion requires test-space write access and is limited to the account that
@@ -366,10 +375,16 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   Bugs also cannot be deleted. Otherwise deletion permanently removes the source case, while existing test-plan
   execution snapshots remain and their nullable `test_case_id` is cleared.
 - Test-case CSV import accepts UTF-8 `text/csv` at
-  `POST /api/test-spaces/:spaceId/cases/import?testSubjectId=:id`; add `preview=true` for
-  validation-only preview. Required headers are `用例名称`, `所属模块`, `前置条件`,
-  `步骤描述`, `预期结果`, `备注`, and `用例等级`. Levels map as P0/high,
-  P1/medium, and P2/low. Files are limited to 2 MB and 1000 non-empty rows.
+  `POST /api/test-spaces/:spaceId/cases/import`; add `preview=true` for
+  validation-only preview. The canonical header order is exactly `用例ID`, `用例名称`,
+  `所属模块`, `用例目录`, `用例等级`, `用例类型`, `前置条件`, `步骤描述`, `预期结果`,
+  and `备注`; missing, extra, duplicate, or reordered fields are rejected. Legacy CSV headers
+  and path encodings are not accepted. `用例ID` may be empty or use `CASE-<positive integer>`.
+  Within a test space, a matching ID updates the CSV-controlled fields and may move the case to
+  another complete directory path; an empty or unknown ID
+  creates a case, and an unknown non-empty ID is retained as that case's stable CSV ID. Levels map
+  as P0/high, P1/medium, and P2/low. Types are `功能`, `回归`, `冒烟`, `安全`, or `性能`. Files are
+  limited to 2 MB and 1000 non-empty rows.
 - Test-plan status: `draft`, `in_progress`, `completed`, `aborted`.
 - Test plans are scoped to a test space and select cases from the space-level case library. Legacy subject IDs remain in snapshots for compatibility. A plan may optionally link to an accessible project through `projectId` and must select an environment assigned to the current space through `testEnvironmentId`;
   project access is checked when creating or updating the plan. A plan response includes
@@ -381,15 +396,16 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   Plan deletion keeps bugs and clears their plan and plan-case references.
 - Test result: `untested`, `passed`, `failed`, `blocked`, `skipped`.
 - Bug status: `new`, `pending_confirmation`, `assigned`, `in_progress`, `pending_verification`, `closed`, `rejected`.
-  `POST /api/test-spaces/:spaceId/bugs` requires `testCaseId`; the server derives the subject
-  from that case and checks any `testPlanCaseId` against the same canonical case.
+  `POST /api/test-spaces/:spaceId/bugs` accepts an optional `testCaseId`; when present, the
+  server derives the subject and module from that case and checks any `testPlanCaseId` against it.
+  Without a case, `testSubjectId` and `moduleId` may be supplied independently.
   Bug DTOs include optional `testCaseId`, `testCaseTitle`, `testCaseFolderId`, and
   `testCaseFolderName` (full path; optional for legacy unlinked Bugs or uncategorized cases).
   `testCaseDirectoryPath` contains only that case's ancestor IDs/names, in root-to-leaf order;
   choosing a parent directory matches all descendant cases, while equal names keep distinct IDs.
-  Creator-owned detail PATCH accepts `testCaseId` to fill a missing legacy association;
-  an existing association cannot change. Ordinary status/assignment updates remain possible
-  for legacy Bugs. Detail edits require case binding first.
+  Creator-owned detail PATCH accepts optional `testCaseId` and `moduleId`; selecting a case
+  refreshes its derived module, while clearing the case permits standalone triage.
+  Ordinary status/assignment updates remain possible for legacy Bugs.
   `POST /api/test-spaces/:spaceId/bugs/:bugId/transfer-space` requires `targetSpaceId` and
   `targetTestCaseId`. Target-space ownership and same-organization checks remain in force;
   old plan/execution links are cleared and recorded in encrypted collaboration text. Legacy
@@ -677,20 +693,23 @@ Folder DTOs include `parentId: number | null`. Under `/api/test-spaces/:spaceId`
   Moving a subtree to itself/descendants, sibling duplicates, or exceeding 32 levels
   is rejected. Names are trimmed, 1–240 characters, with no control characters.
 - `DELETE /folders/:folderId`: only an empty directory; nonempty returns 409.
-- Case create/update accepts `folderId` (null means uncategorized). The legacy
-  `modulePath` string is accepted separately as one root name; sending both is invalid.
+- Case create/update accepts `folderId` (null means uncategorized) and optional organization
+  `moduleId`; an omitted module is shown as `无模块`.
 - `POST /cases/move`: `{ testSubjectId, caseIds, targetFolderId }`, with 1–1000 distinct
   positive numeric IDs and a folder ID or null. The entire batch succeeds or fails.
   Response is `{ movedCount, workbench }`; unchanged assignments produce no notification.
-- `POST /cases/import?testSubjectId=…&directoryMode=current|tree&targetFolderId=…`:
+- `POST /cases/import`:
   UTF-8 CSV, at most 2 MiB / 1000 cases. `preview=true` validates without writes and
-  returns `preview` with `targetPath`, `newDirectoryCount`, `reusedDirectoryCount`,
-  `samplePaths` and the existing row/priority summaries. Submission revalidates.
+  returns `preview` with per-row create/update/invalid results, `targetPath`,
+  `newDirectoryCount`, `newTopLevelDirectoryCount`, `reusedDirectoryCount`, and row/priority
+  summaries. Any invalid row disables the whole import. Submission revalidates under the same
+  space and sorted first-level-directory locks before writing.
 
-`current` ignores directory columns and places all cases directly in the target.
-`tree` uses relative `目录路径`: `/` separates segments, `~1` escapes a literal slash,
-`~0` escapes a tilde, and an empty value means the selected target. If the path column
-is absent, `所属模块` is treated as one literal child name. Omitting `directoryMode`
-retains legacy root-module import behavior. Other required Chinese CSV fields and
-priority mappings remain unchanged. Exports include both a readable `所属模块` and the
-reversible relative `目录路径`; uncategorized exports use an empty path.
+`用例目录` is always a complete path from the case-directory root: every non-empty path starts
+with `~`, later `~` characters separate segments, `\~` escapes a literal tilde, `\\` escapes a
+literal backslash, and an empty value means the system root. The first segment is an ordinary first-level directory. Missing path segments are
+created atomically and existing sibling directories are reused. New exports use the strict
+canonical header order above, emit the organization module name in `所属模块`, and emit this
+complete reversible path in `用例目录`. Canonical exports intentionally omit custom tags. The case list can
+export either every case in the active directory/search/type/priority filter or the explicitly
+selected cases across pages.

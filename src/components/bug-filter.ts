@@ -8,6 +8,7 @@ export type BugFilterField =
   | 'caseFolder'
   | 'caseScope'
   | 'caseLink'
+  | 'module'
   | 'testPlan'
   | 'reporter'
   | 'assignee'
@@ -40,7 +41,8 @@ export const bugFilterFieldLabels: Record<BugFilterField, string> = {
   testCase: '测试用例',
   caseFolder: '用例目录',
   caseScope: '用例目录与用例',
-  caseLink: '用例关联状态',
+  caseLink: '关联状态',
+  module: '模块',
   testPlan: '测试计划',
   reporter: '创建人',
   assignee: '指派人',
@@ -66,7 +68,7 @@ export const bugFilterOperatorLabels: Record<BugFilterOperator, string> = {
 export const bugFilterFields: BugFilterField[] = [
   'title',
   'testSpace',
-  'caseScope',
+  'module',
   'caseLink',
   'testPlan',
   'reporter',
@@ -85,6 +87,7 @@ export const bugFilterOperatorsByField: Record<BugFilterField, BugFilterOperator
   caseFolder: ['equals', 'not_equals'],
   caseScope: ['equals', 'not_equals'],
   caseLink: ['equals', 'not_equals'],
+  module: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
   testPlan: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
   reporter: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
   assignee: ['equals', 'not_equals', 'is_empty', 'is_not_empty'],
@@ -167,11 +170,12 @@ export function normalizeBugFilterCondition(
 }
 
 function getFieldValue(bug: TestBug, field: BugFilterField) {
-  if (field === 'caseLink') return bug.testCaseId ? 'linked' : 'unlinked'
   if (field === 'title') return bug.title
   if (field === 'testSpace') return String(bug.testSpaceId)
+  if (field === 'caseLink') return bug.testCaseId ? 'linked' : 'unlinked'
   if (field === 'testCase') return bug.testCaseId ? String(bug.testCaseId) : ''
   if (field === 'caseFolder') return bug.testCaseId ? (bug.testCaseFolderId ? String(bug.testCaseFolderId) : 'uncategorized') : 'unlinked'
+  if (field === 'module') return bug.moduleId ? String(bug.moduleId) : ''
   if (field === 'testPlan') return bug.testPlanId ? String(bug.testPlanId) : ''
   if (field === 'reporter') return bug.reporterUserId ? String(bug.reporterUserId) : ''
   if (field === 'assignee') return bug.assigneeUserId ? String(bug.assigneeUserId) : ''
@@ -204,7 +208,9 @@ function matchesCondition(bug: TestBug, condition: BugFilterCondition): boolean 
   if (normalized.operator === 'not_contains') {
     return !fieldValue.toLowerCase().includes(targetValue.trim().toLowerCase())
   }
-  const equalsTarget = normalized.field === 'caseFolder' && /^\d+$/.test(targetValue)
+  const equalsTarget = normalized.field === 'module' && targetValue === 'none'
+    ? !fieldValue
+    : normalized.field === 'caseFolder' && /^\d+$/.test(targetValue)
     ? fieldValue === targetValue || Boolean(bug.testCaseDirectoryPath?.some((folder) => String(folder.id) === targetValue))
     : normalized.field === 'status' && targetValue === 'new'
     ? fieldValue === 'new' || fieldValue === 'pending_confirmation'

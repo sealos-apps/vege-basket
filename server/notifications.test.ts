@@ -401,7 +401,7 @@ test('keeps assigned Bug Feishu text and card fields aligned with the Bug detail
   assert.match(serverSource, /space\.version_label as test_space_version_label/u)
   assert.match(serverSource, /subject\.name as test_subject_name/u)
   assert.match(serverSource, /bugId: Number\(bug\.id\)/u)
-  assert.match(serverSource, /testSubjectName: decryptText\(bug\.test_subject_name\)/u)
+  assert.match(serverSource, /testSubjectName: bug\.test_subject_name \? decryptText\(bug\.test_subject_name\) : '未关联一级目录'/u)
   assert.match(serverSource, /testSpaceVersionLabel: bug\.test_space_version_label/u)
 
   const textBuilderStart = serverSource.indexOf('function buildFeishuNotificationText(')
@@ -415,7 +415,7 @@ test('keeps assigned Bug Feishu text and card fields aligned with the Bug detail
     'Bug 标题',
     '负责人',
     '测试空间',
-    '测试对象',
+    '一级目录',
     '版本号',
     '严重程度',
     '优先级',
@@ -446,7 +446,7 @@ test('keeps assigned Bug Feishu text and card fields aligned with the Bug detail
   for (const label of [
     '**Bug 编号**',
     '**Bug 标题**',
-    '**测试对象**',
+    '**一级目录**',
     '**版本号**',
     '**环境**',
     '**复现步骤**',
@@ -592,7 +592,10 @@ test('notifies the Bug reporter privately when a developer rejects it', () => {
   assert.match(serverSource, /function enqueueTestBugRejectedDelivery/u)
   assert.match(testWorkbenchSource, /onTestBugRejected\(\{/u)
   assert.match(testWorkbenchSource, /'test_bug_rejected'/u)
-  assert.match(testWorkbenchClientSource, /rejectedBugNotifications/u)
+  assert.match(
+    testWorkbenchClientSource,
+    /notification\.kind === 'test_bug_rejected' && notification\.actionable/u,
+  )
   assert.equal(shouldDeliverNotificationToProjectChat('test_bug_rejected'), false)
 })
 
@@ -760,12 +763,16 @@ test('supports a slower interval for heavier workspace refreshes', () => {
   assert.equal(intervalDelay, workspaceRefreshIntervalMs)
 })
 
-test('refreshes the workspace snapshot independently from notification polling', () => {
+test('does not refresh the workspace snapshot just because the view changes', () => {
   assert.match(appSource, /const refreshWorkspace = useCallback\(async \(\) =>/u)
   assert.match(appSource, /fetchWorkspace\(\)/u)
   assert.match(appSource, /intervalMs: workspaceRefreshIntervalMs/u)
-  assert.match(appSource, /if \(!workspaceHydratedRef\.current\) \{\s*workspaceHydratedRef\.current = true\s*return/u)
-  assert.match(appSource, /\[loggedIn, view, workspaceLoaded, refreshWorkspace\]/u)
+  assert.doesNotMatch(appSource, /workspaceHydratedRef/u)
+  assert.doesNotMatch(appSource, /\[loggedIn, view, workspaceLoaded, refreshWorkspace\]/u)
+  assert.match(
+    appSource,
+    /const refreshed = await refreshWorkspace\(\)\s*if \(refreshed\) setOrganizationRefreshVersion/u,
+  )
   assert.match(appSource, /refreshToken=\{workspaceRefreshVersion\}/u)
 })
 

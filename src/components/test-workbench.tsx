@@ -2,7 +2,7 @@ import { ConfirmActionDialog } from './confirm-action-dialog'
 import { useConfirmAction } from '../hooks/use-confirm-action'
 import { reconcileAction } from '../confirmed-action'
 import { useDirectoryTreeState } from '../use-case-directory-tree'
-import { buildTestCaseCsv, testCaseCsvHeaders } from '../test-case-csv'
+import { buildTestCaseCsv, testCaseCsvFieldGuidance, testCaseCsvHeaders } from '../test-case-csv'
 import { DirectoryPicker, DirectoryTree } from './test-case-directory-tree'
 import { countDirectoryCases, createDirectoryIndex } from '../../shared/test-case-directories'
 import {
@@ -13,7 +13,7 @@ import {
   getDirectoryPanelMaxWidth,
   hasDirectoryPanelResizeMoved,
 } from '../test-directory-panel-width'
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import {
   ArrowCounterClockwise,
   ArrowLeft,
@@ -80,6 +80,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { MentionTextarea, type MentionMember } from './mention-textarea'
 import {
   WeeklyReportWorkbench,
@@ -187,6 +188,7 @@ import type {
   TestWorkbenchData,
   TestWorkbenchNotification,
   TestWorkbenchProjectOption,
+  TestWorkbenchSection,
 } from '@/test-workbench-types'
 import type { OrganizationContext } from '../../shared/organization-context'
 import { containerImageReferenceKey, normalizeContainerImageReference } from '../../shared/container-image-reference'
@@ -231,12 +233,140 @@ const emptyWorkbench: TestWorkbenchData = {
   departedUserIds: [],
   folders: [],
   notifications: [],
+  modules: [],
   planCases: [],
   plans: [],
   spaces: [],
   subjects: [],
   testEnvironments: [],
   users: [],
+}
+
+const allTestWorkbenchSections: TestWorkbenchSection[] = [
+  'core',
+  'cases',
+  'plans',
+  'bugs',
+  'notifications',
+]
+
+function testWorkbenchSectionsForTab(tab: WorkbenchTab): TestWorkbenchSection[] {
+  if (tab === 'notifications' || tab === 'weekly_report') return []
+  if (tab === 'bugs') return ['bugs', 'cases']
+  if (tab === 'plans') return ['plans', 'cases']
+  return [tab]
+}
+
+type TestWorkbenchRequestScope = {
+  bugId?: number
+  sections: TestWorkbenchSection[]
+  spaceId?: number
+  subjectId?: number
+}
+
+function testWorkbenchRequestForTab(
+  tab: WorkbenchTab,
+  spaceId?: number,
+): TestWorkbenchRequestScope {
+  return {
+    sections: testWorkbenchSectionsForTab(tab),
+    ...(spaceId ? { spaceId } : {}),
+  }
+}
+
+function testWorkbenchScopeKey(tab: WorkbenchTab, spaceId?: number) {
+  if (tab === 'notifications' || tab === 'weekly_report' || !spaceId) return ''
+  return `${tab}:${spaceId}`
+}
+
+function testWorkbenchCasesScopeKey(spaceId: number) {
+  return `cases:${spaceId}`
+}
+
+type TestResourceWorkbenchNotification = Exclude<
+  TestWorkbenchNotification,
+  { kind: 'package_event_comment_added' }
+>
+
+function replaceScopedItems<T>(
+  current: T[],
+  next: T[],
+  belongsToScope: (item: T) => boolean,
+) {
+  return [...current.filter((item) => !belongsToScope(item)), ...next]
+}
+
+function mergeTestWorkbenchData(
+  current: TestWorkbenchData,
+  next: TestWorkbenchData,
+  scope: Omit<TestWorkbenchRequestScope, 'sections'> = {},
+) {
+  const currentSections = current.loadedSections ?? []
+  const sections = new Set<TestWorkbenchSection>(next.loadedSections ?? allTestWorkbenchSections)
+  const caseInScope = (item: TestCase | TestWorkbenchData['folders'][number]) => (
+    (!scope.spaceId || item.testSpaceId === scope.spaceId)
+    && (!scope.subjectId || item.testSubjectId === scope.subjectId)
+  )
+  const planInScope = (item: TestPlan) => (
+    (!scope.spaceId || item.testSpaceId === scope.spaceId)
+    && (!scope.subjectId || item.testSubjectId === scope.subjectId || item.testSubjectIds.includes(scope.subjectId))
+  )
+  const scopedPlanIds = new Set(current.plans.filter(planInScope).map((plan) => plan.id))
+  const mergedBugs = (() => {
+    if (!sections.has('bugs')) return current.bugs
+    if (scope.bugId) {
+      return replaceScopedItems(current.bugs, next.bugs, (bug) => bug.id === scope.bugId)
+    }
+    const currentBugsById = new Map(current.bugs.map((bug) => [bug.id, bug]))
+    const summaries = next.bugs.map((bug) => {
+      const cached = currentBugsById.get(bug.id)
+      if (!bug.detailsLoaded && cached?.detailsLoaded && cached.updatedAt === bug.updatedAt) {
+        return {
+          ...bug,
+          actualResult: cached.actualResult,
+          comments: cached.comments,
+          detailsLoaded: true,
+          events: cached.events,
+          expectedResult: cached.expectedResult,
+          reproductionSteps: cached.reproductionSteps,
+          verificationSubmissions: cached.verificationSubmissions,
+        }
+      }
+      return bug
+    })
+    return replaceScopedItems(
+      current.bugs,
+      summaries,
+      (bug) => !scope.spaceId || bug.testSpaceId === scope.spaceId,
+    )
+  })()
+  return {
+    ...current,
+    ...next,
+    bugs: mergedBugs,
+    cases: sections.has('cases')
+      ? replaceScopedItems(current.cases, next.cases, caseInScope)
+      : current.cases,
+    departedUserIds: sections.has('core') ? next.departedUserIds : current.departedUserIds,
+    folders: sections.has('cases')
+      ? replaceScopedItems(current.folders, next.folders, caseInScope)
+      : current.folders,
+    modules: sections.has('core') || sections.has('cases') || sections.has('plans') || sections.has('bugs')
+      ? next.modules
+      : current.modules,
+    notifications: sections.has('notifications') ? next.notifications : current.notifications,
+    planCases: sections.has('plans')
+      ? [...current.planCases.filter((planCase) => !scopedPlanIds.has(planCase.testPlanId)), ...next.planCases]
+      : current.planCases,
+    plans: sections.has('plans')
+      ? replaceScopedItems(current.plans, next.plans, planInScope)
+      : current.plans,
+    spaces: sections.has('core') ? next.spaces : current.spaces,
+    subjects: sections.has('core') ? next.subjects : current.subjects,
+    testEnvironments: sections.has('core') ? next.testEnvironments : current.testEnvironments,
+    users: sections.has('core') ? next.users : current.users,
+    loadedSections: [...new Set([...currentSections, ...sections])],
+  }
 }
 
 const priorityLabel: Record<Priority, string> = { high: '高', low: '低', medium: '中' }
@@ -331,22 +461,6 @@ const testSpaceInviteParam = 'testSpaceInvite'
 const seenBugCommentStoragePrefix = 'veges.testWorkbench.seenBugComments.v1'
 const readNotificationStoragePrefix = 'veges.testWorkbench.readNotifications.v1'
 const assignedBugSpaceStoragePrefix = 'veges.assignedBugs.testSpace.v1'
-
-type BugCommentNotification = {
-  bug: TestBug
-  comment: TestBugComment
-  notification: TestWorkbenchNotification
-}
-
-type BugReturnNotification = {
-  bug: TestBug
-  notification: TestWorkbenchNotification
-}
-
-type PlanAssignmentNotification = {
-  notification: TestWorkbenchNotification
-  plan: TestPlan
-}
 
 function getTestSpaceInviteTokenFromUrl() {
   if (typeof window === 'undefined') return ''
@@ -547,6 +661,9 @@ export function TestWorkbench({
 }) {
   const [data, setData] = useState<TestWorkbenchData>(emptyWorkbench)
   const [loading, setLoading] = useState(true)
+  const [sectionLoading, setSectionLoading] = useState(false)
+  const [bugDetailLoading, setBugDetailLoading] = useState(false)
+  const [loadedScopeKeys, setLoadedScopeKeys] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [tab, setTab] = useState<WorkbenchTab>('cases')
@@ -603,7 +720,9 @@ export function TestWorkbench({
   const [seenBugCommentIds, setSeenBugCommentIds] = useState<Set<number>>(() => readSeenBugCommentIds(currentUserId))
   const [readNotificationKeySet, setReadNotificationKeySet] = useState<Set<string>>(() => loadReadNotificationKeys(currentUserId))
   const acceptingInviteTokenRef = useRef('')
+  const activatedScopeKeyRef = useRef('')
   const refreshInFlightRef = useRef(false)
+  const selectedBugDetailScopeRef = useRef('')
   const viewStateReadyRef = useRef(false)
   const weeklyReportWorkbenchRef = useRef<WeeklyReportWorkbenchHandle>(null)
 
@@ -614,7 +733,11 @@ export function TestWorkbench({
 
   useEffect(() => {
     let cancelled = false
-    fetchTestWorkbench()
+    const controller = new AbortController()
+    setLoadedScopeKeys(new Set())
+    activatedScopeKeyRef.current = ''
+    selectedBugDetailScopeRef.current = ''
+    fetchTestWorkbench({ sections: ['core', 'notifications'] }, { signal: controller.signal })
       .then((result) => {
         if (cancelled) return
         setData(result)
@@ -623,46 +746,34 @@ export function TestWorkbench({
           ? saved.spaceId
           : undefined
         setSpaceId(savedSpaceId ?? result.spaces[0]?.id)
-        if (saved && savedSpaceId) {
-          if (saved.subjectId != null && result.subjects.some((subject) => (
-            subject.id === saved.subjectId && subject.testSpaceId === savedSpaceId
-          ))) {
-            setSubjectId(saved.subjectId)
-          }
-          if (saved.selectedCaseId != null && result.cases.some((item) => (
-            item.id === saved.selectedCaseId && item.testSpaceId === savedSpaceId
-          ))) {
-            setSelectedCaseId(saved.selectedCaseId)
-          }
-          if (saved.selectedPlanId != null && result.plans.some((plan) => (
-            plan.id === saved.selectedPlanId && plan.testSpaceId === savedSpaceId
-          ))) {
-            setSelectedPlanId(saved.selectedPlanId)
-          }
-          if (saved.selectedBugId != null && result.bugs.some((bug) => (
-            bug.id === saved.selectedBugId && bug.testSpaceId === savedSpaceId
-          ))) {
-            setSelectedBugId(saved.selectedBugId)
-          }
-        }
+        const savedSubjectId = saved?.subjectId && savedSpaceId && result.subjects.some((subject) => (
+          subject.id === saved.subjectId && subject.testSpaceId === savedSpaceId
+        )) ? saved.subjectId : undefined
+        setSubjectId(savedSubjectId)
+        setSelectedCaseId(saved?.selectedCaseId)
+        setSelectedPlanId(saved?.selectedPlanId)
+        setSelectedBugId(saved?.selectedBugId)
         setTab(saved?.tab ?? 'cases')
         viewStateReadyRef.current = true
         setLoading(false)
+        void fetchTestSpaceSettings({ signal: controller.signal })
+          .then((settings) => {
+            if (cancelled) return
+            setSpaceSettings(settings)
+            if (settings.spaces.length === 0 && settings.invitations.length > 0) {
+              setTab('notifications')
+            }
+          })
+          .catch(() => undefined)
       })
       .catch((loadError) => {
         if (cancelled) return
         setError(loadError instanceof Error ? loadError.message : '测试工作台加载失败。')
         setLoading(false)
       })
-    fetchTestSpaceSettings()
-      .then((result) => {
-        if (cancelled) return
-        setSpaceSettings(result)
-        if (result.spaces.length === 0 && result.invitations.length > 0) setTab('notifications')
-      })
-      .catch(() => undefined)
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [currentUserId])
 
@@ -681,43 +792,99 @@ export function TestWorkbench({
   useEffect(() => {
     if (loading) return
     let cancelled = false
+    let controller: AbortController | null = null
     const refreshIfVisible = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       if (busy) return
       if (refreshInFlightRef.current) return
       refreshInFlightRef.current = true
+      controller = new AbortController()
+      const activeRequest = testWorkbenchRequestForTab(tab, spaceId)
+      const sections = [...new Set<TestWorkbenchSection>([
+        'core',
+        'notifications',
+        ...activeRequest.sections,
+      ])]
       Promise.all([
-        fetchTestWorkbench()
+        fetchTestWorkbench(
+          { ...activeRequest, sections },
+          { signal: controller.signal },
+        )
           .then((result) => {
-            if (!cancelled) setData(result)
+            if (!cancelled) {
+              setData((current) => mergeTestWorkbenchData(current, result, activeRequest))
+            }
           })
           .catch(() => undefined),
-        fetchTestSpaceSettings()
+        (tab === 'bugs' && spaceId && selectedBugId
+          ? fetchTestWorkbench(
+            { bugId: selectedBugId, sections: ['bugs'], spaceId },
+            { signal: controller.signal },
+          )
+          : Promise.resolve(null))
           .then((result) => {
-            if (!cancelled) setSpaceSettings(result)
+            if (!cancelled && result && selectedBugId) {
+              setData((current) => mergeTestWorkbenchData(current, result, { bugId: selectedBugId, spaceId }))
+            }
           })
           .catch(() => undefined),
-      ]).then(() => {
+        (tab === 'notifications' || spaceSwitcherOpen || spaceAdministrationOpen || spaceCreateOpen
+          ? fetchTestSpaceSettings({ signal: controller.signal })
+          : Promise.resolve(null))
+          .then((result) => {
+            if (!cancelled && result) setSpaceSettings(result)
+          })
+          .catch(() => undefined),
+      ]).finally(() => {
         refreshInFlightRef.current = false
       })
     }
     const interval = window.setInterval(refreshIfVisible, notificationRefreshIntervalMs)
     return () => {
       cancelled = true
+      controller?.abort()
       window.clearInterval(interval)
     }
-  }, [busy, loading, spaceId, subjectId, tab])
+  }, [busy, loading, selectedBugId, spaceAdministrationOpen, spaceCreateOpen, spaceId, spaceSwitcherOpen, tab])
 
   useEffect(() => {
-    if (loading || (tab !== 'bugs' && tab !== 'plans' && tab !== 'cases')) return
+    const requestScope = testWorkbenchRequestForTab(tab, spaceId)
+    const scopeKey = testWorkbenchScopeKey(tab, spaceId)
+    const scopeActivated = activatedScopeKeyRef.current !== scopeKey
+    activatedScopeKeyRef.current = scopeKey
+    if (
+      loading
+      || requestScope.sections.length === 0
+      || !scopeKey
+      || (loadedScopeKeys.has(scopeKey) && !scopeActivated)
+    ) {
+      setSectionLoading(false)
+      return
+    }
     let cancelled = false
-    fetchTestWorkbench().then((result) => {
-      if (!cancelled) setData(result)
+    const controller = new AbortController()
+    setSectionLoading(true)
+    fetchTestWorkbench(requestScope, { signal: controller.signal }).then((result) => {
+      if (!cancelled) {
+        setData((current) => mergeTestWorkbenchData(current, result, requestScope))
+        setLoadedScopeKeys((current) => {
+          const next = new Set(current).add(scopeKey)
+          if (requestScope.sections.includes('cases') && requestScope.spaceId && !requestScope.subjectId) {
+            next.add(testWorkbenchCasesScopeKey(requestScope.spaceId))
+          }
+          return next
+        })
+      }
     }).catch((loadError: unknown) => {
       if (!cancelled) setError(loadError instanceof Error ? loadError.message : '用例加载失败。')
+    }).finally(() => {
+      if (!cancelled) setSectionLoading(false)
     })
-    return () => { cancelled = true }
-  }, [loading, tab, spaceId, subjectId])
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [loadedScopeKeys, loading, spaceId, tab])
 
   useEffect(() => {
     setInvitePasswordDraft('')
@@ -815,7 +982,6 @@ export function TestWorkbench({
   }, [data.spaces, spaceSettings.organizations, spaceSettings.spaces])
   const activeSpaceReadOnly = activeSpace?.accessLevel === 'viewer'
   const subjects = data.subjects.filter((subject) => subject.testSpaceId === spaceId)
-  const activeSubject = subjects.find((subject) => subject.id === subjectId)
   const spaceCases = useMemo(
     () => data.cases.filter((testCase) => testCase.testSpaceId === spaceId),
     [data.cases, spaceId],
@@ -846,6 +1012,8 @@ export function TestWorkbench({
       bug.assigneeName,
     ].filter(Boolean).some((value) => String(value).toLocaleLowerCase('zh-CN').includes(normalizedBugSearchQuery))
   }), [bugFilterConditions, bugFilterJoin, bugs, normalizedBugSearchQuery])
+  const activeContentScopeKey = testWorkbenchScopeKey(tab, spaceId)
+  const activeContentLoaded = !activeContentScopeKey || loadedScopeKeys.has(activeContentScopeKey)
   const bugFilterOptions = useMemo<BugFilterOptions>(() => ({
     assignees: uniqueBugFilterOptions(bugs, (bug) => bug.assigneeUserId && bug.assigneeName
       ? { label: bug.assigneeName, value: String(bug.assigneeUserId) }
@@ -857,80 +1025,31 @@ export function TestWorkbench({
       ? { label: bug.reporterName, value: String(bug.reporterUserId) }
       : undefined),
     spaces: [],
+    modules: [{ label: '无模块', value: 'none' }, ...Array.from(new Map([
+      ...data.modules.filter((module) => module.enabled).map((module) => [String(module.id), { label: module.name, value: String(module.id) }] as const),
+      ...bugs.flatMap((bug) => bug.moduleId && bug.moduleName ? [[String(bug.moduleId), { label: bug.moduleName, value: String(bug.moduleId) }] as const] : []),
+    ]).values())],
     ...(() => {
       const folders = data.folders.filter((folder) => folder.testSpaceId === spaceId)
       const index = createDirectoryIndex(folders)
       return {
-        cases: data.cases.filter((item) => item.testSpaceId === spaceId).map((item) => ({
-          label: `CASE-${item.id} ${item.title}`, value: String(item.id),
-          folderIds: index.path(item.folderId ?? null).map((folder) => String(folder.id)),
-        })),
+        cases: [],
         folders: folders.map((folder) => ({
           label: `${data.subjects.find((subject) => subject.id === folder.testSubjectId)?.name || ''} / ${index.path(folder.id).map((item) => item.name).join(' / ')}`,
           value: String(folder.id),
         })),
       }
     })(),
-  }), [bugs, data.cases, data.folders, data.subjects, spaceId])
-  const returnedBugs: BugReturnNotification[] = data.notifications.flatMap((notification) => {
-    if (notification.kind !== 'test_bug_status_changed') return []
-    const bug = data.bugs.find((candidate) => candidate.id === notification.sourceId)
-    if (!bug || (bug.status !== 'pending_verification' && bug.status !== 'pending_confirmation')) return []
-    return [{ bug, notification }]
-  })
-  const rejectedBugNotifications: BugReturnNotification[] = data.notifications.flatMap((notification) => {
-    if (notification.kind !== 'test_bug_rejected') return []
-    const bug = data.bugs.find((candidate) => candidate.id === notification.sourceId)
-    if (!bug || bug.status !== 'rejected') return []
-    return [{ bug, notification }]
-  })
-  const bugCommentNotifications: BugCommentNotification[] = data.notifications.flatMap((notification) => {
-    if (notification.kind !== 'test_bug_comment_added') return []
-    for (const bug of data.bugs) {
-      const comment = bug.comments.find((candidate) => candidate.id === notification.sourceId)
-      if (!comment) continue
-      if (bug.status === 'closed' || bug.status === 'rejected') return []
-      return [{ bug, comment, notification }]
-    }
-    return []
-  })
-  const planAssignmentNotifications: PlanAssignmentNotification[] = currentUserId
-    ? data.notifications.flatMap((notification) => {
-      if (notification.kind !== 'test_plan_assigned') return []
-      const plan = data.plans.find((candidate) => candidate.id === notification.sourceId)
-      if (
-        !plan ||
-        plan.ownerUserId !== currentUserId ||
-        plan.createdByUserId === currentUserId ||
-        plan.status === 'completed' ||
-        plan.status === 'aborted'
-      ) return []
-      return [{ notification, plan }]
-    })
-    : []
-  const packageEventCommentNotifications = data.notifications.filter(
-    (notification) => notification.kind === 'package_event_comment_added',
-  )
-  const returnedBugUnreadCount = returnedBugs.filter(({ notification }) =>
-    !readNotificationKeySet.has(getTestWorkbenchNotificationKey(notification)),
-  ).length
-  const rejectedBugUnreadCount = rejectedBugNotifications.filter(({ notification }) =>
-    !readNotificationKeySet.has(getTestWorkbenchNotificationKey(notification)),
-  ).length
-  const planAssignmentUnreadCount = planAssignmentNotifications.filter(({ notification }) =>
-    !readNotificationKeySet.has(getTestWorkbenchNotificationKey(notification)),
-  ).length
-  const bugCommentUnreadCount = bugCommentNotifications.filter(({ comment }) => !seenBugCommentIds.has(comment.id)).length
-  const packageEventCommentUnreadCount = packageEventCommentNotifications.filter((notification) =>
-    !readNotificationKeySet.has(getTestWorkbenchNotificationKey(notification)),
-  ).length
+  }), [bugs, data.folders, data.modules, data.subjects, spaceId])
+  const workbenchNotificationUnreadCount = data.notifications.filter((notification) => (
+    (!('actionable' in notification) || notification.actionable !== false)
+    && (notification.kind === 'test_bug_comment_added'
+      ? !seenBugCommentIds.has(notification.sourceId)
+      : !readNotificationKeySet.has(getTestWorkbenchNotificationKey(notification)))
+  )).length
   const notificationUnreadCount =
     (spaceSettings.ownershipTransfers?.length ?? 0) + spaceSettings.invitations.length +
-    returnedBugUnreadCount +
-    rejectedBugUnreadCount +
-    bugCommentUnreadCount +
-    planAssignmentUnreadCount +
-    packageEventCommentUnreadCount
+    workbenchNotificationUnreadCount
 
   function markBugCommentAsSeen(commentId?: number) {
     if (!commentId || !currentUserId) return
@@ -963,10 +1082,46 @@ export function TestWorkbench({
   }, [data.spaces, spaceId, subjectId, subjects])
 
   useEffect(() => {
+    if (!activeContentLoaded) return
     if (!cases.some((item) => item.id === selectedCaseId)) setSelectedCaseId(cases[0]?.id)
     if (!plans.some((item) => item.id === selectedPlanId)) setSelectedPlanId(plans[0]?.id)
     if (!filteredBugs.some((item) => item.id === selectedBugId)) setSelectedBugId(filteredBugs[0]?.id)
-  }, [bugs, cases, filteredBugs, plans, selectedBugId, selectedCaseId, selectedPlanId])
+  }, [activeContentLoaded, bugs, cases, filteredBugs, plans, selectedBugId, selectedCaseId, selectedPlanId])
+
+  useEffect(() => {
+    if (loading || tab !== 'bugs' || !spaceId || !selectedBugId) {
+      selectedBugDetailScopeRef.current = ''
+      setBugDetailLoading(false)
+      return
+    }
+    const detailScopeKey = `${spaceId}:${selectedBugId}`
+    const selectionChanged = selectedBugDetailScopeRef.current !== detailScopeKey
+    selectedBugDetailScopeRef.current = detailScopeKey
+    const selected = data.bugs.find((bug) => bug.id === selectedBugId && bug.testSpaceId === spaceId)
+    if (!selected || (selected.detailsLoaded && !selectionChanged)) {
+      setBugDetailLoading(false)
+      return
+    }
+    let cancelled = false
+    const controller = new AbortController()
+    setBugDetailLoading(true)
+    fetchTestWorkbench({ bugId: selectedBugId, sections: ['bugs'], spaceId }, { signal: controller.signal })
+      .then((result) => {
+        if (!cancelled) {
+          setData((current) => mergeTestWorkbenchData(current, result, { bugId: selectedBugId, spaceId }))
+        }
+      })
+      .catch((loadError: unknown) => {
+        if (!cancelled) setError(loadError instanceof Error ? loadError.message : 'Bug 详情加载失败。')
+      })
+      .finally(() => {
+        if (!cancelled) setBugDetailLoading(false)
+      })
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [data.bugs, loading, selectedBugId, spaceId, tab])
 
   useEffect(() => {
     if (subjectDeleteDialogOpen || !subjectPendingDelete) return
@@ -1019,9 +1174,37 @@ export function TestWorkbench({
     }
   }
 
+  async function loadTestSpaceCases(targetSpaceId: number) {
+    const scopeKey = testWorkbenchCasesScopeKey(targetSpaceId)
+    if (loadedScopeKeys.has(scopeKey)) return
+    const requestScope = { sections: ['cases' as const], spaceId: targetSpaceId }
+    const result = await fetchTestWorkbench(requestScope)
+    setData((current) => mergeTestWorkbenchData(current, result, requestScope))
+    setLoadedScopeKeys((current) => new Set(current).add(scopeKey))
+  }
+
+  function invalidateWorkbenchScope(targetTab: WorkbenchTab, targetSpaceId: number) {
+    const scopeKey = testWorkbenchScopeKey(targetTab, targetSpaceId)
+    if (!scopeKey) return
+    setLoadedScopeKeys((current) => {
+      if (!current.has(scopeKey)) return current
+      const next = new Set(current)
+      next.delete(scopeKey)
+      return next
+    })
+  }
+
   async function refreshWorkbench(preferredSpaceId?: number) {
-    const result = await fetchTestWorkbench()
-    setData(result)
+    const targetSpaceId = preferredSpaceId ?? spaceId
+    const activeRequest = testWorkbenchRequestForTab(tab, targetSpaceId)
+    const requestScope = {
+      ...activeRequest,
+      sections: [...new Set<TestWorkbenchSection>(['core', 'notifications', ...activeRequest.sections])],
+    }
+    const result = await fetchTestWorkbench(requestScope)
+    setData((current) => mergeTestWorkbenchData(current, result, activeRequest))
+    const scopeKey = testWorkbenchScopeKey(tab, targetSpaceId)
+    if (scopeKey) setLoadedScopeKeys((current) => new Set(current).add(scopeKey))
     setSpaceId((current) => {
       if (preferredSpaceId && result.spaces.some((space) => space.id === preferredSpaceId)) return preferredSpaceId
       if (current && result.spaces.some((space) => space.id === current)) return current
@@ -1039,6 +1222,7 @@ export function TestWorkbench({
       const prepared = await weeklyReportWorkbenchRef.current?.prepareOrganizationChange() ?? true
       if (!prepared) return
     }
+    setSubjectId(data.subjects.find((subject) => subject.testSpaceId === nextSpaceId)?.id)
     setSpaceId(nextSpaceId)
   }
 
@@ -1216,7 +1400,7 @@ export function TestWorkbench({
       </aside>
 
       <section className="test-workbench-content">
-          {workspaceContent ?? (loading ? (
+          {workspaceContent ?? (loading || sectionLoading ? (
             <div className="test-workbench-loading">正在加载测试工作台...</div>
           ) : tab === 'weekly_report' ? (
             <div className="test-workbench-weekly-report">
@@ -1233,30 +1417,28 @@ export function TestWorkbench({
               <NotificationsView
                 busy={busy}
                 data={data}
-                bugCommentNotifications={bugCommentNotifications}
                 ownershipTransfers={spaceSettings.ownershipTransfers ?? []}
                 onRespondOwnershipTransfer={(id,action)=>void handleOwnershipTransfer(id,action)}
                 invitations={spaceSettings.invitations}
-                planAssignmentNotifications={planAssignmentNotifications}
                 readNotificationKeys={readNotificationKeySet}
-                rejectedBugNotifications={rejectedBugNotifications}
-                returnedBugs={returnedBugs}
                 seenBugCommentIds={seenBugCommentIds}
                 onAcceptInvitation={(invitation) => void handleAcceptInvitation(invitation.spaceId)}
                 onDeclineInvitation={(invitation) => void handleDeclineInvitation(invitation.spaceId)}
-                onOpenBug={(bug, notification, commentId) => {
+                onOpenBug={(notification, commentId) => {
                   markNotificationAsRead(getTestWorkbenchNotificationKey(notification))
                   markBugCommentAsSeen(commentId)
-                  setSpaceId(bug.testSpaceId)
-                  setSubjectId(bug.testSubjectId)
-                  setSelectedBugId(bug.id)
+                  invalidateWorkbenchScope('bugs', notification.testSpaceId)
+                  setSpaceId(notification.testSpaceId)
+                  setSubjectId(notification.testSubjectId)
+                  setSelectedBugId(notification.targetId)
                   setTab('bugs')
                 }}
-                onOpenPlan={(plan, notification) => {
+                onOpenPlan={(notification) => {
                   markNotificationAsRead(getTestWorkbenchNotificationKey(notification))
-                  setSpaceId(plan.testSpaceId)
+                  invalidateWorkbenchScope('plans', notification.testSpaceId)
+                  setSpaceId(notification.testSpaceId)
                   setSubjectId(undefined)
-                  setSelectedPlanId(plan.id)
+                  setSelectedPlanId(notification.targetId)
                   setTab('plans')
                 }}
                 onMarkNotificationRead={(notification) => markNotificationAsRead(getTestWorkbenchNotificationKey(notification))}
@@ -1266,7 +1448,7 @@ export function TestWorkbench({
             <div className="test-workbench-empty">
               <Flask size={34} weight="duotone" />
               <h1>建立第一个测试空间</h1>
-              <p>测试空间用于隔离测试对象、用例、计划和 Bug，不依赖现有项目。</p>
+              <p>测试空间用于隔离用例目录、用例、计划和 Bug，不依赖现有项目。</p>
               <div className="test-empty-actions">
                 <Button onClick={() => setSpaceCreateOpen(true)}><Plus /> 新增测试空间</Button>
               </div>
@@ -1315,8 +1497,8 @@ export function TestWorkbench({
                   setCaseDeleteDialogOpen(true)
                 }}
                 onEdit={(testCase) => { setSubjectId(testCase.testSubjectId); setEditingCase(testCase); setCaseDialogOpen(true) }}
-                onExport={(items, folderId) => downloadTestCaseCsv(items, data.folders, folderId)}
-                onImport={(testSubjectId, folderId) => { setSubjectId(testSubjectId); setCaseTargetFolderId(folderId); setCaseImportDialogOpen(true) }}
+                onExport={(items) => downloadTestCaseCsv(items, data.folders, data.subjects)}
+                onImport={() => setCaseImportDialogOpen(true)}
               />
             </>
           ) : tab === 'plans' ? (
@@ -1374,12 +1556,14 @@ export function TestWorkbench({
               <WorkspaceError message={error} />
               <BugsView
                 bugs={filteredBugs}
+                bugDetailLoading={bugDetailLoading}
                 busy={busy}
                 data={data}
                 draftOwnerUserId={currentUserId}
                 filterConditions={bugFilterConditions}
                 onFilterOpenChange={setBugFilterDialogOpen}
                 onFilterClear={() => setBugFilterConditions([])}
+                onLoadTransferCases={loadTestSpaceCases}
                 searchQuery={bugSearchQuery}
                 onSearchQueryChange={setBugSearchQuery}
                 readOnly={activeSpaceReadOnly}
@@ -1518,18 +1702,16 @@ export function TestWorkbench({
           (next) => !next.cases.some((item) => item.id === casePendingDelete.id)) : Promise.resolve(false)}
       />
       <ImportCasesDialog
-        key={`${caseImportDialogOpen}-${spaceId}-${subjectId}-${caseTargetFolderId}`}
-        targetFolderId={caseTargetFolderId}
-        folders={data.folders.filter((folder) => (
-          folder.testSpaceId === spaceId && folder.testSubjectId === subjectId
-        ))}
+        key={`${caseImportDialogOpen}-${spaceId}`}
         busy={busy}
+        modules={data.modules.filter((module) => (
+          module.enabled && module.organizationId === activeSpace?.organizationId
+        ))}
         open={caseImportDialogOpen}
         spaceId={spaceId}
-        subject={activeSubject}
         onOpenChange={setCaseImportDialogOpen}
-        onSubmit={(csvText, directoryMode) => subjectId
-          ? mutate(() => importTestCases(spaceId!, subjectId, csvText, { directoryMode, targetFolderId: caseTargetFolderId }))
+        onSubmit={(csvText) => spaceId
+          ? mutate(() => importTestCases(spaceId, csvText))
           : Promise.resolve(false)}
       />
       <PlanDialog
@@ -1568,6 +1750,7 @@ export function TestWorkbench({
         busy={busy}
         editing={Boolean(editingBug)}
         environments={testEnvironments}
+        modules={data.modules}
         open={bugDialogOpen}
         seed={bugSeed}
         cases={spaceCases}
@@ -1606,7 +1789,6 @@ export function TestWorkbench({
 }
 
 function NotificationsView({
-  bugCommentNotifications,
   busy,
   data,
   ownershipTransfers,
@@ -1617,13 +1799,9 @@ function NotificationsView({
   onOpenBug,
   onOpenPlan,
   onMarkNotificationRead,
-  planAssignmentNotifications,
   readNotificationKeys,
-  rejectedBugNotifications,
-  returnedBugs,
   seenBugCommentIds,
 }: {
-  bugCommentNotifications: BugCommentNotification[]
   busy: boolean
   data: TestWorkbenchData
   ownershipTransfers: TestSpaceOwnershipTransfer[]
@@ -1631,13 +1809,10 @@ function NotificationsView({
   invitations: TestSpaceInvitation[]
   onAcceptInvitation: (invitation: TestSpaceInvitation) => void
   onDeclineInvitation: (invitation: TestSpaceInvitation) => void
-  onOpenBug: (bug: TestBug, notification: TestWorkbenchNotification, commentId?: number) => void
-  onOpenPlan: (plan: TestPlan, notification: TestWorkbenchNotification) => void
+  onOpenBug: (notification: TestResourceWorkbenchNotification, commentId?: number) => void
+  onOpenPlan: (notification: TestResourceWorkbenchNotification) => void
   onMarkNotificationRead: (notification: TestWorkbenchNotification) => void
-  planAssignmentNotifications: PlanAssignmentNotification[]
   readNotificationKeys: Set<string>
-  rejectedBugNotifications: BugReturnNotification[]
-  returnedBugs: BugReturnNotification[]
   seenBugCommentIds: Set<number>
 }) {
   const notificationItems = [
@@ -1649,43 +1824,42 @@ function NotificationsView({
       kind: 'invitation' as const,
       sortAt: Date.parse(invitation.createdAt),
     })),
-    ...returnedBugs.map(({ bug, notification }) => ({
-      bug,
+    ...data.notifications.flatMap((notification) => notification.kind === 'test_bug_status_changed' && notification.actionable
+      ? [{
       createdAt: notification.createdAt,
-      key: `bug-${bug.id}`,
+      key: `bug-${notification.targetId}`,
       kind: 'bug_return' as const,
       notification,
       notificationKey: getTestWorkbenchNotificationKey(notification),
       sortAt: Date.parse(notification.createdAt),
-    })),
-    ...rejectedBugNotifications.map(({ bug, notification }) => ({
-      bug,
+    }] : []),
+    ...data.notifications.flatMap((notification) => notification.kind === 'test_bug_rejected' && notification.actionable
+      ? [{
       createdAt: notification.createdAt,
-      key: `bug-rejected-${bug.id}`,
+      key: `bug-rejected-${notification.targetId}`,
       kind: 'bug_rejected' as const,
       notification,
       notificationKey: getTestWorkbenchNotificationKey(notification),
       sortAt: Date.parse(notification.createdAt),
-    })),
-    ...bugCommentNotifications.map(({ bug, comment, notification }) => ({
-      bug,
-      comment,
+    }] : []),
+    ...data.notifications.flatMap((notification) => notification.kind === 'test_bug_comment_added' && notification.actionable
+      ? [{
       createdAt: notification.createdAt,
-      key: `bug-comment-${comment.id}`,
+      key: `bug-comment-${notification.sourceId}`,
       kind: 'bug_comment' as const,
       notification,
       notificationKey: getTestWorkbenchNotificationKey(notification),
       sortAt: getTimestampMs(notification.createdAt),
-    })),
-    ...planAssignmentNotifications.map(({ notification, plan }) => ({
+    }] : []),
+    ...data.notifications.flatMap((notification) => notification.kind === 'test_plan_assigned' && notification.actionable
+      ? [{
       createdAt: notification.createdAt,
-      key: `plan-assignment-${plan.id}`,
+      key: `plan-assignment-${notification.targetId}`,
       kind: 'plan_assignment' as const,
       notification,
       notificationKey: getTestWorkbenchNotificationKey(notification),
-      plan,
       sortAt: getTimestampMs(notification.createdAt),
-    })),
+    }] : []),
     ...data.notifications
       .filter((notification) => notification.kind === 'package_event_comment_added')
       .map((notification) => ({
@@ -1703,7 +1877,7 @@ function NotificationsView({
   })
   const unreadCount = notificationItems.filter((item) => {
     if (item.kind === 'invitation' || item.kind === 'ownership_transfer') return true
-    if (item.kind === 'bug_comment') return !seenBugCommentIds.has(item.comment.id)
+    if (item.kind === 'bug_comment') return !seenBugCommentIds.has(item.notification.sourceId)
     return !readNotificationKeys.has(item.notificationKey)
   }).length
   const readCount = Math.max(0, notificationItems.length - unreadCount)
@@ -1752,26 +1926,27 @@ function NotificationsView({
                 )
               }
               if (item.kind === 'plan_assignment') {
-                const plan = item.plan
-                const planSpace = data.spaces.find((space) => space.id === plan.testSpaceId)
-                const spaceName = planSpace ? formatTestSpaceReference(planSpace.name, planSpace.versionLabel) : '未知测试空间'
-                const subjectNames = (plan.testSubjectIds.length ? plan.testSubjectIds : [plan.testSubjectId])
-                  .map((id) => data.subjects.find((subject) => subject.id === id)?.name)
-                  .filter(Boolean)
-                  .join('、') || '未关联测试对象'
+                const notification = item.notification
+                const subjectNames = notification.testSubjects?.map((subject) => subject.name).join('、')
+                  || notification.testSubjectName
+                  || '未关联测试对象'
+                const spaceName = formatTestSpaceReference(
+                  notification.testSpaceName || '未知测试空间',
+                  notification.testSpaceVersionLabel,
+                )
                 const read = readNotificationKeys.has(item.notificationKey)
                 return (
                   <article key={item.key} className={read ? 'test-notification-card read' : 'test-notification-card unread'}>
                     <div className="test-notification-copy">
                       <span className={read ? 'test-notification-kind' : 'test-notification-kind unread'}>计划指派</span>
                       <div>
-                        <strong>PLAN-{plan.id} · {plan.name}</strong>
+                        <strong>PLAN-{notification.targetId} · {notification.targetTitle}</strong>
                         <p>这个测试计划已指派给你，需要跟进执行。</p>
                         <small>{spaceName} · {subjectNames} · {formatTimestamp(item.createdAt)}</small>
                       </div>
                     </div>
                     <div>
-                      <Button variant="outline" onClick={() => onOpenPlan(plan, item.notification)}><ListChecks /> 查看计划</Button>
+                      <Button variant="outline" onClick={() => onOpenPlan(notification)}><ListChecks /> 查看计划</Button>
                     </div>
                   </article>
                 )
@@ -1801,25 +1976,28 @@ function NotificationsView({
                   </article>
                 )
               }
-              const bug = item.bug
-              const bugSpace = data.spaces.find((space) => space.id === bug.testSpaceId)
-              const spaceName = bugSpace ? formatTestSpaceReference(bugSpace.name, bugSpace.versionLabel) : '未知测试空间'
-              const caseName = bug.testCaseId ? `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}` : '待补关联'
+              const notification = item.notification
+              const caseName = notification.testCaseId
+                ? `CASE-${notification.testCaseId} ${notification.testCaseTitle || ''}`
+                : '待补关联'
+              const spaceName = formatTestSpaceReference(
+                notification.testSpaceName || '未知测试空间',
+                notification.testSpaceVersionLabel,
+              )
               if (item.kind === 'bug_comment') {
-                const comment = item.comment
-                const read = seenBugCommentIds.has(comment.id)
+                const read = seenBugCommentIds.has(notification.sourceId)
                 return (
                   <article key={item.key} className={read ? 'test-notification-card read' : 'test-notification-card unread'}>
                     <div className="test-notification-copy">
                       <span className={read ? 'test-notification-kind' : 'test-notification-kind unread'}>Bug 回复</span>
                       <div>
-                        <strong>BUG-{bug.id} · {bug.title}</strong>
-                        <p>{comment.authorName} 添加了协作备注，需要测试侧查看。</p>
+                        <strong>BUG-{notification.targetId} · {notification.targetTitle}</strong>
+                        <p>{notification.commentAuthorName || '协作者'} 添加了协作备注，需要测试侧查看。</p>
                         <small>{spaceName} · {caseName} · {formatTimestamp(item.createdAt)}</small>
                       </div>
                     </div>
                     <div>
-                      <Button variant="outline" onClick={() => onOpenBug(bug, item.notification, comment.id)}><Bug /> 查看 Bug</Button>
+                      <Button variant="outline" onClick={() => onOpenBug(notification, notification.sourceId)}><Bug /> 查看 Bug</Button>
                     </div>
                   </article>
                 )
@@ -1831,13 +2009,13 @@ function NotificationsView({
                     <div className="test-notification-copy">
                       <span className={read ? 'test-notification-kind' : 'test-notification-kind unread'}>Bug 驳回</span>
                       <div>
-                        <strong>BUG-{bug.id} · {bug.title}</strong>
+                        <strong>BUG-{notification.targetId} · {notification.targetTitle}</strong>
                         <p>开发工程师驳回了这个 Bug，需要测试侧处理。</p>
                         <small>{spaceName} · {caseName} · {formatTimestamp(item.createdAt)}</small>
                       </div>
                     </div>
                     <div>
-                      <Button variant="outline" onClick={() => onOpenBug(bug, item.notification)}><Bug /> 查看 Bug</Button>
+                      <Button variant="outline" onClick={() => onOpenBug(notification)}><Bug /> 查看 Bug</Button>
                     </div>
                   </article>
                 )
@@ -1848,13 +2026,13 @@ function NotificationsView({
                   <div className="test-notification-copy">
                     <span className={read ? 'test-notification-kind' : 'test-notification-kind unread'}>Bug 返回</span>
                     <div>
-                      <strong>BUG-{bug.id} · {bug.title}</strong>
-                      <p>{bugStatusLabel[bug.status]}，需要测试侧回看。</p>
+                      <strong>BUG-{notification.targetId} · {notification.targetTitle}</strong>
+                      <p>{bugStatusLabel[notification.targetStatus as BugStatus] ?? '状态已更新'}，需要测试侧回看。</p>
                       <small>{spaceName} · {caseName} · {formatTimestamp(item.createdAt)}</small>
                     </div>
                   </div>
                   <div>
-                    <Button variant="outline" onClick={() => onOpenBug(bug, item.notification)}><Bug /> 查看 Bug</Button>
+                    <Button variant="outline" onClick={() => onOpenBug(notification)}><Bug /> 查看 Bug</Button>
                   </div>
                 </article>
               )
@@ -1893,8 +2071,8 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
   onCreateFolder: (testSubjectId: number, name: string, parentId: number | null) => Promise<boolean>
   onDelete: (testCase: TestCase) => void
   onEdit: (testCase: TestCase) => void
-  onExport: (items: TestCase[], root: number | null) => void
-  onImport: (testSubjectId: number, folderId: number | null) => void
+  onExport: (items: TestCase[]) => void
+  onImport: () => void
   onSelect: (id: number) => void
 }) {
   const listPanelRef = useRef<HTMLDivElement>(null)
@@ -1936,6 +2114,7 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
   const [moveTarget, setMoveTarget] = useState<number | null>(null)
   const [moveError, setMoveError] = useState('')
   const [exportOpen, setExportOpen] = useState(false)
+  const [exportScope, setExportScope] = useState<'filtered' | 'selected'>('filtered')
   const selectedFolderId = folderFilter.startsWith('folder:') ? Number(folderFilter.slice(7)) : undefined
   const selectedSubjectId = folderFilter.startsWith('subject:')
     ? Number(folderFilter.slice(8))
@@ -1949,6 +2128,13 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
   const selectedSubjectName = subjects.find((subject) => subject.id === selectedSubjectId)?.name
   const scopeLabel = effectiveFolderFilter === 'all' ? '全部用例' : activeFolderId === null ? `${selectedSubjectName ?? '一级目录'} / 全部用例` : directoryIndex.byId.has(activeFolderId) ? [selectedSubjectName, ...directoryIndex.path(activeFolderId).map(f => f.name)].filter(Boolean).join(' / ') : '目录已删除'
   const selectedCaseIds = cases.filter(c => checkedIds.has(c.id)).map(c => c.id)
+  const caseDirectoryLabel = useCallback((item: TestCase) => {
+    const subject = subjects.find((candidate) => candidate.id === item.testSubjectId)
+    return [
+      subject?.directoryRoot ? '' : subject?.name,
+      ...directoryIndex.path(item.folderId ?? null).map((folder) => folder.name),
+    ].filter(Boolean).join(' / ') || '根目录'
+  }, [directoryIndex, subjects])
   const defaultDirectoryPanelWidth = getDefaultDirectoryPanelWidth(compactDirectory)
   const directoryPanelWidth = clampDirectoryPanelWidth(
     preferredDirectoryPanelWidth ?? defaultDirectoryPanelWidth,
@@ -2082,11 +2268,11 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
   const filteredCases = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLocaleLowerCase('zh-CN')
     return cases.filter((item) => {
-      const folderPath = directoryIndex.path(item.folderId ?? null).map(f => f.name).join(' / ')
+      const folderPath = caseDirectoryLabel(item)
       const matchesSearch = !normalizedQuery || [
         `CASE-${item.id}`,
         item.title,
-        folderPath || '未分类',
+        folderPath,
         item.preconditions,
         item.steps,
         item.expectedResult,
@@ -2101,7 +2287,7 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
         && (typeFilter === 'all' || item.caseType === typeFilter)
         && (priorityFilter === 'all' || item.priority === priorityFilter)
     })
-  }, [cases, directoryIndex, effectiveFolderFilter, priorityFilter, searchQuery, selectedSubjectId, typeFilter, scopeIds])
+  }, [caseDirectoryLabel, cases, effectiveFolderFilter, priorityFilter, searchQuery, selectedSubjectId, typeFilter, scopeIds])
   const selected = filteredCases.find((item) => item.id === selectedId)
   const selectedIndex = filteredCases.findIndex((item) => item.id === selectedId)
   const totalPages = Math.max(1, Math.ceil(filteredCases.length / pageSize))
@@ -2152,7 +2338,7 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
     <div className="test-module-view test-cases-module-view">
       <div className="test-module-toolbar">
         <div><span>用例库</span><h1>用例管理</h1></div>
-        <div><Button variant="outline" disabled={!filteredCases.length} onClick={() => setExportOpen(true)}><UploadSimple /> 导出用例 ({filteredCases.length})</Button>{!readOnly && <><Button variant="outline" disabled={!selectedSubjectId} onClick={() => selectedSubjectId && onImport(selectedSubjectId, activeFolderId)}><DownloadSimple /> 导入用例</Button><Button disabled={!selectedSubjectId} onClick={() => selectedSubjectId && onCreate(selectedSubjectId, activeFolderId)}><Plus /> 新建用例</Button></>}</div>
+        <div><Button variant="outline" disabled={!filteredCases.length && !selectedCaseIds.length} onClick={() => { setExportScope(selectedCaseIds.length ? 'selected' : 'filtered'); setExportOpen(true) }}><UploadSimple /> 导出用例</Button>{!readOnly && <><Button variant="outline" disabled={!spaceId} onClick={onImport}><DownloadSimple /> 导入用例</Button><Button disabled={!selectedSubjectId} onClick={() => selectedSubjectId && onCreate(selectedSubjectId, activeFolderId)}><Plus /> 新建用例</Button></>}</div>
       </div>
       <div
         ref={directoryWorkspaceRef}
@@ -2220,19 +2406,19 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
                   }}
         ><XCircle /> 清除</Button>
       </div>
-      {!readOnly && <div className="test-directory-batch"><Label><Checkbox aria-label="选择本页用例" checked={visibleCases.length > 0 && visibleCases.every(c => checkedIds.has(c.id))} onCheckedChange={checked => setCheckedIds(prev => { const next = new Set(prev); visibleCases.forEach(c => { if (checked) next.add(c.id); else next.delete(c.id) }); return next })} /> 本页</Label><span>已选 {selectedCaseIds.length} 条</span><Button size="sm" variant="outline" disabled={busy || !selectedSubjectId || !selectedCaseIds.length || selectedCaseIds.length > 1000} onClick={() => startMove(selectedCaseIds)}>迁移用例</Button><Button size="sm" variant="ghost" disabled={!selectedCaseIds.length} onClick={() => setCheckedIds(new Set())}>清空选择</Button><small>单次最多 1000 条</small></div>}
+      <div className="test-directory-batch"><Label><Checkbox aria-label="选择本页用例" checked={visibleCases.length > 0 && visibleCases.every(c => checkedIds.has(c.id))} onCheckedChange={checked => setCheckedIds(prev => { const next = new Set(prev); visibleCases.forEach(c => { if (checked) next.add(c.id); else next.delete(c.id) }); return next })} /> 本页</Label><span>已选 {selectedCaseIds.length} 条</span>{!readOnly ? <Button size="sm" variant="outline" disabled={busy || !selectedSubjectId || !selectedCaseIds.length || selectedCaseIds.length > 1000} onClick={() => startMove(selectedCaseIds)}>迁移用例</Button> : null}<Button size="sm" variant="ghost" disabled={!selectedCaseIds.length} onClick={() => setCheckedIds(new Set())}>清空选择</Button>{!readOnly ? <small>迁移单次最多 1000 条</small> : null}</div>
       <div className="test-split-view test-cases-split-view">
         <div ref={listPanelRef} className="test-record-list-panel">
           <div
             className="test-record-list test-case-record-list"
           >
             {filteredCases.length ? visibleCases.map((item) => (
-              <div key={item.id} className="test-directory-case-row">{!readOnly && <Checkbox aria-label={`选择 CASE-${item.id}`} checked={checkedIds.has(item.id)} onCheckedChange={value => setCheckedIds(prev => { const next = new Set(prev); if (value) next.add(item.id); else next.delete(item.id); return next })} />}<button className={item.id === selectedId ? 'active' : ''} onClick={() => onSelect(item.id)}>
+              <div key={item.id} className="test-directory-case-row"><Checkbox aria-label={`选择 CASE-${item.id}`} checked={checkedIds.has(item.id)} onCheckedChange={value => setCheckedIds(prev => { const next = new Set(prev); if (value) next.add(item.id); else next.delete(item.id); return next })} /><button className={item.id === selectedId ? 'active' : ''} onClick={() => onSelect(item.id)}>
                 <div><code>CASE-{item.id}</code><Badge variant="outline">{caseTypeLabel[item.caseType]}</Badge></div>
                 <strong>{item.title}</strong>
-                <small>{caseLevelLabel[item.priority]} · {[subjects.find((subject) => subject.id === item.testSubjectId)?.name, directoryIndex.path(item.folderId ?? null).map(f => f.name).join(' / ') || '未分类'].filter(Boolean).join(' / ')}{item.customTags.length ? ` · ${item.customTags.join('、')}` : ''}</small>
+                <small>{caseLevelLabel[item.priority]} · {caseDirectoryLabel(item)}{item.customTags.length ? ` · ${item.customTags.join('、')}` : ''}</small>
               </button></div>
-            )) : <p className="test-list-empty">{cases.length ? '没有符合条件的用例。' : '当前测试对象还没有用例。'}</p>}
+            )) : <p className="test-list-empty">{cases.length ? '没有符合条件的用例。' : '当前测试空间还没有用例。'}</p>}
           </div>
           <nav className="test-case-pagination" aria-label="用例分页">
             <span className="test-case-pagination-summary">
@@ -2257,7 +2443,7 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
                   <h2>{selected.title}</h2>
                   <p className="test-case-folder">
                     <span>所属目录</span>
-                    <strong>{directoryIndex.path(selected.folderId ?? null).map(f => f.name).join(' / ') || '未分类'}</strong>
+                    <strong>{caseDirectoryLabel(selected)}</strong>
                   </p>
                 </div>
                 {!readOnly ? <div><Button variant="outline" onClick={() => onEdit(selected)}>编辑</Button><Button variant="outline" disabled={busy || !selectedSubjectId} onClick={() => startMove([selected.id])}>迁移</Button>{selected.canDelete ? <Button variant="destructive" onClick={() => onDelete(selected)}><Trash /> 删除</Button> : null}</div> : null}
@@ -2273,8 +2459,8 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
         </div>
       </div>
       </div></div>
-      <Dialog open={Boolean(moveIds)} onOpenChange={open => { if (!open && !busy) setMoveIds(undefined) }}><DialogContent><DialogHeader><DialogTitle>迁移 {moveIds?.length ?? 0} 条用例</DialogTitle><DialogDescription>用例编号、内容与已有执行快照保持不变。用例只能在当前测试对象内迁移。</DialogDescription></DialogHeader><DirectoryPicker folders={subjectFolders} value={moveTarget} onChange={setMoveTarget} disabled={busy} />{moveError && <p role="alert">{moveError}</p>}<DialogFooter><Button variant="outline" disabled={busy} onClick={() => setMoveIds(undefined)}>取消</Button><Button disabled={busy || !selectedSubjectId} onClick={async () => { if (!moveIds || !selectedSubjectId) return; if (await onMove(selectedSubjectId, moveIds, moveTarget)) { setMoveIds(undefined); setCheckedIds(new Set()) } else setMoveError('迁移失败，请检查权限或刷新后重试。') }}>确认迁移</Button></DialogFooter></DialogContent></Dialog>
-      <Dialog open={exportOpen} onOpenChange={setExportOpen}><DialogContent><DialogHeader><DialogTitle>导出用例</DialogTitle><DialogDescription>导出“{scopeLabel}”中符合当前筛选的全部 {filteredCases.length} 条用例（包含所有分页）。{activeFolderId !== null ? includeChildren ? '包含下级目录。' : '仅直属用例。' : ''}</DialogDescription></DialogHeader><p>筛选：{searchQuery.trim() ? `搜索“${searchQuery.trim()}”` : "不限关键词"} · {typeFilter === "all" ? "全部类型" : caseTypeLabel[typeFilter as TestCaseType]} · {priorityFilter === "all" ? "全部等级" : caseLevelLabel[priorityFilter as Priority]}</p><p>CSV 保留相对于当前目录的目录路径。</p><DialogFooter><Button variant="outline" onClick={() => setExportOpen(false)}>取消</Button><Button disabled={!filteredCases.length} onClick={() => { onExport(filteredCases, activeFolderId); setExportOpen(false) }}>导出 {filteredCases.length} 条</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={Boolean(moveIds)} onOpenChange={open => { if (!open && !busy) setMoveIds(undefined) }}><DialogContent><DialogHeader><DialogTitle>迁移 {moveIds?.length ?? 0} 条用例</DialogTitle><DialogDescription>用例编号、内容与已有执行快照保持不变。用例只能在当前一级目录内迁移。</DialogDescription></DialogHeader><DirectoryPicker folders={subjectFolders} value={moveTarget} onChange={setMoveTarget} disabled={busy} rootLabel={subjects.find((subject) => subject.id === selectedSubjectId)?.directoryRoot ? '根目录' : '一级目录'} />{moveError && <p role="alert">{moveError}</p>}<DialogFooter><Button variant="outline" disabled={busy} onClick={() => setMoveIds(undefined)}>取消</Button><Button disabled={busy || !selectedSubjectId} onClick={async () => { if (!moveIds || !selectedSubjectId) return; if (await onMove(selectedSubjectId, moveIds, moveTarget)) { setMoveIds(undefined); setCheckedIds(new Set()) } else setMoveError('迁移失败，请检查权限或刷新后重试。') }}>确认迁移</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={exportOpen} onOpenChange={setExportOpen}><DialogContent><DialogHeader><DialogTitle>导出用例</DialogTitle><DialogDescription>选择导出当前筛选结果，或仅导出已经勾选的用例。</DialogDescription></DialogHeader><Tabs value={exportScope} onValueChange={value => setExportScope(value as 'filtered' | 'selected')}><TabsList aria-label="导出范围"><TabsTrigger value="filtered">筛选结果 ({filteredCases.length})</TabsTrigger><TabsTrigger value="selected" disabled={!selectedCaseIds.length}>已选择 ({selectedCaseIds.length})</TabsTrigger></TabsList></Tabs><p>{exportScope === 'filtered' ? `范围：“${scopeLabel}”中符合当前筛选的全部用例，包含所有分页。` : `范围：已勾选的 ${selectedCaseIds.length} 条用例。`}</p><p>CSV 的非空用例目录以 ~ 开头，并用 ~ 分隔从根节点开始的完整路径。</p><DialogFooter><Button variant="outline" onClick={() => setExportOpen(false)}>取消</Button><Button disabled={exportScope === 'filtered' ? !filteredCases.length : !selectedCaseIds.length} onClick={() => { const items = exportScope === 'filtered' ? filteredCases : cases.filter(item => checkedIds.has(item.id)); onExport(items); setExportOpen(false) }}>导出 {exportScope === 'filtered' ? filteredCases.length : selectedCaseIds.length} 条</Button></DialogFooter></DialogContent></Dialog>
     </div>
   )
 }
@@ -2295,11 +2481,15 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
   readOnly: boolean
   selectedId?: number
 }) {
-  const [subjectFilter, setSubjectFilter] = useState('all')
-  const planSubjects = data.subjects.filter((subject) => plans.some((plan) => plan.testSpaceId === subject.testSpaceId))
-  const visiblePlans = subjectFilter === 'all'
+  const [moduleFilter, setModuleFilter] = useState('all')
+  const planModuleIds = (plan: TestPlan) => new Set(data.planCases
+    .filter((item) => item.testPlanId === plan.id && item.testCaseId)
+    .map((item) => data.cases.find((candidate) => candidate.id === item.testCaseId)?.moduleId ?? null))
+  const visiblePlans = moduleFilter === 'all'
     ? plans
-    : plans.filter((plan) => plan.testSubjectIds.includes(Number(subjectFilter)))
+    : plans.filter((plan) => moduleFilter === 'none'
+      ? planModuleIds(plan).has(null)
+      : planModuleIds(plan).has(Number(moduleFilter)))
   const [executionPage, setExecutionPage] = useState(0)
   const [executionPageSize, setExecutionPageSize] = useState(6)
   const [detailExecutionId, setDetailExecutionId] = useState<number>()
@@ -2348,7 +2538,7 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
 
   return (
     <div className="test-module-view">
-      <div className="test-module-toolbar"><div><span>执行与回归</span><h1>测试计划</h1></div><div><Select value={subjectFilter} onValueChange={(value) => { setSubjectFilter(value); const first = value === 'all' ? plans[0] : plans.find((plan) => plan.testSubjectIds.includes(Number(value))); if (first) onSelect(first.id) }}><SelectTrigger aria-label="按测试用例目录筛选计划"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部测试用例目录</SelectItem>{planSubjects.map((subject) => <SelectItem key={subject.id} value={String(subject.id)}>{subject.name}</SelectItem>)}</SelectContent></Select>{!readOnly ? <Button onClick={onCreate}><Plus /> 新建计划</Button> : null}</div></div>
+      <div className="test-module-toolbar"><div><span>执行与回归</span><h1>测试计划</h1></div><div><Select value={moduleFilter} onValueChange={(value) => { setModuleFilter(value); const first = value === 'all' ? plans[0] : plans.find((plan) => (value === 'none' ? planModuleIds(plan).has(null) : planModuleIds(plan).has(Number(value)))); if (first) onSelect(first.id) }}><SelectTrigger aria-label="按模块筛选计划"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部模块</SelectItem><SelectItem value="none">无模块</SelectItem>{data.modules.filter((module) => module.enabled).map((module) => <SelectItem key={module.id} value={String(module.id)}>{module.name}</SelectItem>)}</SelectContent></Select>{!readOnly ? <Button onClick={onCreate}><Plus /> 新建计划</Button> : null}</div></div>
       <div className="test-split-view">
         <div className="test-record-list">
           {visiblePlans.length ? visiblePlans.map((plan) => {
@@ -2373,7 +2563,7 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
                 <code>PLAN-{selected.id}</code>
                 <h2>{selected.name}</h2>
                 <p className="test-plan-subtitle">
-                  <span>{planSubjectNames.join('、') || '未关联测试对象'}</span>
+                  <span>{planSubjectNames.join('、') || '未关联一级目录'}</span>
                   <span>关联项目：{projectName}</span>
                   <span>负责人：{ownerName}</span>
                 </p>
@@ -2394,7 +2584,7 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
             <div className="test-plan-progress"><div><strong>{passed}</strong><span>通过</span></div><div><strong>{executions.filter((item) => item.result === 'failed').length}</strong><span>失败</span></div><div><strong>{executions.filter((item) => item.result === 'blocked').length}</strong><span>阻塞</span></div><div><strong>{executions.length ? Math.round((executions.filter((item) => item.result !== 'untested').length / executions.length) * 100) : 0}%</strong><span>进度</span></div></div>
             <div ref={executionListRef} className="test-execution-list">
               {visibleExecutions.map((row) => <article key={row.id}>
-                <div className="test-execution-copy"><code>CASE-{row.testCaseId ?? 'SNAPSHOT'}</code><strong>{row.snapshotTitle}</strong><small>{data.subjects.find((subject) => subject.id === row.testSubjectId)?.name || '未知测试对象'}</small></div>
+                <div className="test-execution-copy"><code>CASE-{row.testCaseId ?? 'SNAPSHOT'}</code><strong>{row.snapshotTitle}</strong><small>{data.subjects.find((subject) => subject.id === row.testSubjectId)?.name || '未知一级目录'}</small></div>
                 <Select value={row.result} onValueChange={(value) => onResult(row.id, value as TestResult)} disabled={busy || readOnly}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{Object.entries(resultLabel).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
                 <div className="test-execution-actions">
                   <Button variant="outline" onClick={() => setDetailExecutionId(row.id)}><ClipboardText /> 详情</Button>
@@ -2457,8 +2647,9 @@ function PlanCaseDetailDialog({ onClose, planCase }: {
   )
 }
 
-function BugsView({ bugs, busy, data, draftOwnerUserId, filterConditions, onAssignee, onComment, onCreate, onDelete, onDeleteComment, onEdit, onFilterClear, onFilterOpenChange, onSelect, onStatus, onTransferSpace, onUpdateComment, readOnly, searchQuery, onSearchQueryChange, selectedId }: {
+function BugsView({ bugs, bugDetailLoading, busy, data, draftOwnerUserId, filterConditions, onAssignee, onComment, onCreate, onDelete, onDeleteComment, onEdit, onFilterClear, onFilterOpenChange, onLoadTransferCases, onSelect, onStatus, onTransferSpace, onUpdateComment, readOnly, searchQuery, onSearchQueryChange, selectedId }: {
   bugs: TestBug[]
+  bugDetailLoading: boolean
   busy: boolean
   data: TestWorkbenchData
   draftOwnerUserId?: number
@@ -2471,6 +2662,7 @@ function BugsView({ bugs, busy, data, draftOwnerUserId, filterConditions, onAssi
   onEdit: (bug: TestBug) => void
   onFilterClear: () => void
   onFilterOpenChange: (open: boolean) => void
+  onLoadTransferCases: (spaceId: number) => Promise<void>
   onSearchQueryChange: (value: string) => void
   onSelect: (id: number) => void
   onStatus: (bug: TestBug, status: BugStatus) => void
@@ -2521,14 +2713,18 @@ function BugsView({ bugs, busy, data, draftOwnerUserId, filterConditions, onAssi
             {bugs.length ? bugs.map((bug) => <button key={bug.id} className={bug.id === selectedId ? 'active' : ''} onClick={() => onSelect(bug.id)}><div><code>BUG-{bug.id}</code><Badge className={`test-bug-status ${bug.status}`} variant="outline">{bugStatusLabel[bug.status]}</Badge></div><strong>{bug.title}</strong><small>{formatTimestamp(bug.updatedAt)} · <UserName departedUserIds={data.departedUserIds} name={bug.assigneeName || '未分配'} userId={bug.assigneeUserId} />{bug.assigneeTransferSource === 'offboarding' ? '（离职转移）' : null}</small></button>) : <div className="test-list-empty">{filterConditions.length > 0 || searchQuery.trim() ? <><FunnelSimple size={24} /><span>没有符合当前条件的 Bug。</span>{filterConditions.length > 0 ? <Button type="button" variant="outline" onClick={onFilterClear}>清除筛选</Button> : null}{searchQuery.trim() ? <Button type="button" variant="outline" onClick={() => onSearchQueryChange('')}>清除搜索</Button> : null}</> : '当前测试空间还没有 Bug。'}</div>}
         </div>
         <div className="test-record-detail">
-          {selected ? <BugDetail bug={selected} busy={busy} cases={data.cases} departedUserIds={data.departedUserIds} draftOwnerUserId={draftOwnerUserId} readOnly={readOnly} users={data.users} onAssignee={onAssignee} onComment={readOnly ? undefined : onComment} onDelete={onDelete} onDeleteComment={readOnly ? undefined : onDeleteComment} onEdit={onEdit} onStatus={onStatus} onTransferSpace={onTransferSpace} onUpdateComment={readOnly ? undefined : onUpdateComment} /> : <div className="test-detail-empty"><Bug size={28} /><p>选择一个 Bug 查看和流转。</p></div>}
+          {selected && selected.detailsLoaded
+            ? <BugDetail bug={selected} busy={busy} cases={data.cases} departedUserIds={data.departedUserIds} draftOwnerUserId={draftOwnerUserId} readOnly={readOnly} users={data.users} onAssignee={onAssignee} onComment={readOnly ? undefined : onComment} onDelete={onDelete} onDeleteComment={readOnly ? undefined : onDeleteComment} onEdit={onEdit} onLoadTransferCases={onLoadTransferCases} onStatus={onStatus} onTransferSpace={onTransferSpace} onUpdateComment={readOnly ? undefined : onUpdateComment} />
+            : selected && bugDetailLoading
+              ? <div className="test-detail-empty"><Bug size={28} /><p>正在加载 Bug 详情...</p></div>
+              : <div className="test-detail-empty"><Bug size={28} /><p>选择一个 Bug 查看和流转。</p></div>}
         </div>
       </div>
     </div>
   )
 }
 
-function BugDetail({ bug, busy, cases, departedUserIds, draftOwnerUserId, onAssignee, onComment, onDelete, onDeleteComment, onEdit, onStatus, onTransferSpace, onUpdateComment, readOnly, users }: {
+function BugDetail({ bug, busy, cases, departedUserIds, draftOwnerUserId, onAssignee, onComment, onDelete, onDeleteComment, onEdit, onLoadTransferCases, onStatus, onTransferSpace, onUpdateComment, readOnly, users }: {
   bug: TestBug
   busy: boolean
   cases: TestCase[]
@@ -2539,6 +2735,7 @@ function BugDetail({ bug, busy, cases, departedUserIds, draftOwnerUserId, onAssi
   onDelete: (bug: TestBug) => void
   onDeleteComment?: (bug: TestBug, comment: TestBugComment) => Promise<boolean>
   onEdit: (bug: TestBug) => void
+  onLoadTransferCases: (spaceId: number) => Promise<void>
   onStatus: (bug: TestBug, status: BugStatus) => void
   onTransferSpace: (bug: TestBug, targetSpaceId: number, targetTestCaseId: number) => Promise<boolean>
   onUpdateComment?: (bug: TestBug, comment: TestBugComment, content: string) => Promise<boolean>
@@ -2581,6 +2778,7 @@ function BugDetail({ bug, busy, cases, departedUserIds, draftOwnerUserId, onAssi
     <div className="test-detail-meta test-bug-detail-meta">
       <span>测试用例 <strong>{bug.testCaseId ? `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}` : '待补关联'}</strong></span>
       <span>用例目录 <strong>{bug.testCaseId ? bug.testCaseFolderName || '未分类' : '待补关联'}</strong></span>
+      <span>模块 <strong>{bug.moduleName || '无模块'}</strong></span>
       {bug.testPlanName ? <span>测试计划 <strong>{bug.testPlanName}</strong></span> : null}
       <span>测试空间 <strong>{bug.testSpaceName || '未记录'}</strong></span>
         <span>空间版本 <span className="test-detail-meta-label"><strong>{bug.testSpaceVersionLabel || '未指定'}</strong>{bug.canTransferSpace ? <Button aria-label="迁移到其他测试空间" className="test-detail-meta-copy" disabled={busy} onClick={() => setTransferSpaceOpen(true)} size="icon-xs" title="迁移到其他测试空间" variant="ghost"><PencilSimple /></Button> : null}</span></span>
@@ -2608,26 +2806,43 @@ function BugDetail({ bug, busy, cases, departedUserIds, draftOwnerUserId, onAssi
       onUpdateComment={onUpdateComment}
     />
     <BugShareDialog bugId={bug.id} open={shareOpen} onOpenChange={setShareOpen} />
-    <BugSpaceTransferDialog bug={bug} busy={busy} cases={cases} open={transferSpaceOpen} onOpenChange={setTransferSpaceOpen} onSubmit={onTransferSpace} />
+    <BugSpaceTransferDialog bug={bug} busy={busy} cases={cases} open={transferSpaceOpen} onLoadCases={onLoadTransferCases} onOpenChange={setTransferSpaceOpen} onSubmit={onTransferSpace} />
     <BugTimelineDialog bug={bug} departedUserIds={departedUserIds} open={timelineOpen} onOpenChange={setTimelineOpen} />
   </>
 }
 
-function BugSpaceTransferDialog({ bug, busy, cases, onOpenChange, onSubmit, open }: {
+function BugSpaceTransferDialog({ bug, busy, cases, onLoadCases, onOpenChange, onSubmit, open }: {
   bug: TestBug
   busy: boolean
   cases: TestCase[]
+  onLoadCases: (spaceId: number) => Promise<void>
   onOpenChange: (open: boolean) => void
   onSubmit: (bug: TestBug, targetSpaceId: number, targetTestCaseId: number) => Promise<boolean>
   open: boolean
 }) {
   const [targetSpaceId, setTargetSpaceId] = useState('')
   const [targetCaseId, setTargetCaseId] = useState('')
+  const [loadingSpaceId, setLoadingSpaceId] = useState('')
+  const [loadError, setLoadError] = useState('')
   const targetCases = cases.filter((item) => String(item.testSpaceId) === targetSpaceId)
 
   useEffect(() => {
-    if (open) { setTargetSpaceId(''); setTargetCaseId('') }
+    if (open) { setTargetSpaceId(''); setTargetCaseId(''); setLoadingSpaceId(''); setLoadError('') }
   }, [bug.id, open])
+
+  function selectTargetSpace(value: string) {
+    setTargetSpaceId(value)
+    setTargetCaseId('')
+    setLoadingSpaceId(value)
+    setLoadError('')
+    void onLoadCases(Number(value))
+      .catch((error: unknown) => {
+        setLoadError(error instanceof Error ? error.message : '目标空间用例加载失败，请重试。')
+      })
+      .finally(() => {
+        setLoadingSpaceId((current) => current === value ? '' : current)
+      })
+  }
 
   async function submit() {
     if (!targetSpaceId || !targetCaseId) return
@@ -2644,7 +2859,7 @@ function BugSpaceTransferDialog({ bug, busy, cases, onOpenChange, onSubmit, open
         </DialogHeader>
         {(bug.transferSpaceCandidates?.length ?? 0) > 0 ? (
           <Label>目标测试空间
-            <Select value={targetSpaceId} onValueChange={(value) => { setTargetSpaceId(value); setTargetCaseId('') }}>
+            <Select value={targetSpaceId} onValueChange={selectTargetSpace}>
               <SelectTrigger aria-label="目标测试空间"><SelectValue placeholder="选择测试空间" /></SelectTrigger>
               <SelectContent>
                 {bug.transferSpaceCandidates?.map((space) => (
@@ -2661,11 +2876,14 @@ function BugSpaceTransferDialog({ bug, busy, cases, onOpenChange, onSubmit, open
             <SelectTrigger aria-label="目标测试用例"><SelectValue placeholder="选择测试用例" /></SelectTrigger>
             <SelectContent>{targetCases.map((item) => <SelectItem key={item.id} value={String(item.id)}>CASE-{item.id} {item.title}</SelectItem>)}</SelectContent>
           </Select>
-          {!targetCases.length ? <span>目标空间暂无用例，请先创建用例。</span> : null}
+          {loadingSpaceId === targetSpaceId
+            ? <span>正在加载目标空间用例...</span>
+            : loadError ? <span>{loadError}</span>
+              : !targetCases.length ? <span>目标空间暂无用例，请先创建用例。</span> : null}
         </Label> : null}
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-          <Button disabled={busy || !targetSpaceId || !targetCaseId} onClick={() => void submit()}><ArrowsLeftRight />{busy ? '转移中...' : '确认转移'}</Button>
+          <Button disabled={busy || Boolean(loadError) || loadingSpaceId === targetSpaceId || !targetSpaceId || !targetCaseId} onClick={() => void submit()}><ArrowsLeftRight />{busy ? '转移中...' : '确认转移'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -3577,7 +3795,7 @@ function TestSpaceCreateDialog({ busy, onOpenChange, onSubmit, open, organizatio
       <DialogContent fixedHeader className="test-workbench-dialog">
         <DialogHeader>
           <DialogTitle>新建测试空间</DialogTitle>
-          <DialogDescription>测试空间用于隔离测试对象、用例、计划和 Bug，也可以归属到你所在的组织。</DialogDescription>
+          <DialogDescription>测试空间用于隔离用例目录、用例、计划和 Bug，也可以归属到你所在的组织。</DialogDescription>
         </DialogHeader>
         <form
           className="test-dialog-form"
@@ -3857,7 +4075,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
           open={deleteSpaceOpen && open}
           onOpenChange={setDeleteSpaceOpen}
           title="确认删除测试空间？"
-          description={`「${selectedSpace?.name}」及其全部测试对象、用例、计划、Bug 和评论将永久删除。`}
+          description={`「${selectedSpace?.name}」及其全部用例目录、用例、计划、Bug 和评论将永久删除。`}
           confirmationName={selectedSpace?.name ?? ''}
           confirmDisabled={!selectedSpace}
           confirmLabel="删除测试空间"
@@ -3998,7 +4216,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
                   </section> : null}
 
                   {canDelete ? <div className="test-space-danger-zone">
-                    <div><strong>删除测试空间</strong><small>将永久删除空间内全部测试对象、用例、计划、Bug 和评论。</small></div>
+                    <div><strong>删除测试空间</strong><small>将永久删除空间内全部用例目录、用例、计划、Bug 和评论。</small></div>
                     <Button type="button" variant="destructive" disabled={busy} onClick={() => setDeleteSpaceOpen(true)}><Trash /> 删除空间</Button>
                   </div> : null}
                 </>
@@ -4095,6 +4313,7 @@ type TestCaseFormPayload = {
   customTags?: string[]
   expectedResult: string
   folderId?: number | null
+  moduleId?: number | null
   preconditions: string
   priority: Priority
   remarks: string
@@ -4110,6 +4329,8 @@ export function CaseDialog({ defaultFolderId = null, busy, data, onOpenChange, o
 
 function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSubmit, open, spaceId, subjectId, testCase }: Parameters<typeof CaseDialog>[0]) {
   const folders = data.folders.filter((folder) => folder.testSpaceId === spaceId && folder.testSubjectId === subjectId)
+  const currentSpace = data.spaces.find((space) => space.id === spaceId)
+  const modules = data.modules.filter((module) => module.organizationId === currentSpace?.organizationId)
   const [title, setTitle] = useState(testCase?.title ?? '')
   const [folderId, setFolderId] = useState<number | null>(testCase ? testCase.folderId ?? null : defaultFolderId)
   const [preconditions, setPreconditions] = useState(testCase?.preconditions ?? '')
@@ -4119,6 +4340,7 @@ function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSu
   const [priority, setPriority] = useState<Priority>(testCase?.priority ?? 'medium')
   const [caseType, setCaseType] = useState<TestCaseType>(testCase?.caseType ?? 'functional')
   const [customTagsInput, setCustomTagsInput] = useState(testCase?.customTags.join('、') ?? '')
+  const [moduleId, setModuleId] = useState(testCase?.moduleId ? String(testCase.moduleId) : 'none')
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -4136,6 +4358,7 @@ function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSu
               customTags: Array.from(new Set(customTagsInput.split(/[,，;；、\s]+/).map((tag) => tag.trim()).filter(Boolean))).slice(0, 12),
               expectedResult,
               folderId,
+              moduleId: moduleId === 'none' ? null : Number(moduleId),
               preconditions,
               priority,
               remarks,
@@ -4149,6 +4372,7 @@ function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSu
             <legend>基础信息</legend>
             <Label>用例名称<Input autoFocus maxLength={160} value={title} onChange={(event) => setTitle(event.target.value)} /></Label>
             <Label>所属目录<DirectoryPicker folders={folders} value={folderId} onChange={setFolderId} /></Label>
+            <Label>模块<Select value={moduleId} onValueChange={setModuleId}><SelectTrigger aria-label="选择用例模块"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">无模块</SelectItem>{modules.filter((module) => module.enabled || module.id === testCase?.moduleId).map((module) => <SelectItem key={module.id} value={String(module.id)}>{module.name}{module.enabled ? '' : '（已停用）'}</SelectItem>)}</SelectContent></Select></Label>
             <div className="test-form-grid test-case-classification-grid">
               <Label>用例等级<Select value={priority} onValueChange={(value) => setPriority(value as Priority)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="high">P0</SelectItem><SelectItem value="medium">P1</SelectItem><SelectItem value="low">P2</SelectItem></SelectContent></Select></Label>
               <Label>类型<Select value={caseType} onValueChange={(value) => setCaseType(value as TestCaseType)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{Object.entries(caseTypeLabel).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></Label>
@@ -4172,8 +4396,8 @@ function CaseDialogForm({ defaultFolderId = null, busy, data, onOpenChange, onSu
   )
 }
 
-function downloadTestCaseCsv(cases: TestCase[], folders: TestCaseFolder[], rootId: number | null = null) {
-  const csvContent = buildTestCaseCsv(cases, folders, rootId)
+function downloadTestCaseCsv(cases: TestCase[], folders: TestCaseFolder[], subjects: TestSubject[]) {
+  const csvContent = buildTestCaseCsv(cases, folders, subjects)
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -4198,15 +4422,13 @@ function downloadTestCaseCsvTemplate() {
   URL.revokeObjectURL(url)
 }
 
-export function ImportCasesDialog({ targetFolderId, folders, busy, onOpenChange, onSubmit, open, spaceId, subject }: {
-  targetFolderId: number | null
-  folders: TestCaseFolder[]
+export function ImportCasesDialog({ busy, modules, onOpenChange, onSubmit, open, spaceId }: {
   busy: boolean
+  modules: TestWorkbenchData['modules']
   onOpenChange: (open: boolean) => void
-  onSubmit: (csvText: string, directoryMode: 'current' | 'tree') => Promise<boolean>
+  onSubmit: (csvText: string) => Promise<boolean>
   open: boolean
   spaceId?: number
-  subject?: TestWorkbenchData['subjects'][number]
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [fileName, setFileName] = useState('')
@@ -4214,12 +4436,9 @@ export function ImportCasesDialog({ targetFolderId, folders, busy, onOpenChange,
   const [preview, setPreview] = useState<TestCaseImportPreview>()
   const [previewing, setPreviewing] = useState(false)
   const [error, setError] = useState('')
-  const [directoryMode, setDirectoryMode] = useState<'current' | 'tree'>('current')
   const generation = useRef(0)
   useEffect(() => () => { generation.current += 1 }, [])
-  const targetIndex = createDirectoryIndex(folders)
-  const targetExists = targetFolderId === null || targetIndex.byId.has(targetFolderId)
-  const targetPath = targetExists ? targetIndex.path(targetFolderId).map(f => f.name).join(' / ') || '根目录 / 未分类' : '目录已删除，请重新选择'
+  const moduleExamples = modules.map((module) => module.name)
 
   function reset() {
     generation.current += 1
@@ -4238,7 +4457,7 @@ export function ImportCasesDialog({ targetFolderId, folders, busy, onOpenChange,
 
   async function selectFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
-    if (!file || !spaceId || !subject) return
+    if (!file || !spaceId) return
     const requestGeneration = ++generation.current
     setCsvText('')
     setError('')
@@ -4256,7 +4475,7 @@ export function ImportCasesDialog({ targetFolderId, folders, busy, onOpenChange,
     try {
       const content = await file.text()
       if (requestGeneration !== generation.current) return
-      const result = await previewTestCaseImport(spaceId, subject.id, content, { directoryMode, targetFolderId })
+      const result = await previewTestCaseImport(spaceId, content)
       if (requestGeneration !== generation.current) return
       setCsvText(content)
       setPreview(result.preview)
@@ -4271,7 +4490,7 @@ export function ImportCasesDialog({ targetFolderId, folders, busy, onOpenChange,
 
   async function confirmImport() {
     if (!csvText || !preview) return
-    const imported = await onSubmit(csvText, directoryMode)
+    const imported = await onSubmit(csvText)
     if (imported) changeOpen(false)
     else setError('导入失败，请根据工作台中的错误提示检查文件。')
   }
@@ -4281,10 +4500,16 @@ export function ImportCasesDialog({ targetFolderId, folders, busy, onOpenChange,
       <DialogContent fixedHeader className="test-wide-dialog test-import-dialog">
         <DialogHeader>
           <DialogTitle>导入用例</DialogTitle>
-          <DialogDescription>目标：{subject?.name} / {targetPath}。提交时会重新校验目录与权限。</DialogDescription>
+          <DialogDescription>CSV 中的用例目录从根节点开始解析；提交时会重新校验完整路径与权限。</DialogDescription>
         </DialogHeader>
-        <Label>导入方式<Select disabled={busy} value={directoryMode} onValueChange={value => { reset(); setDirectoryMode(value as 'current' | 'tree') }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="current">全部导入当前目录</SelectItem><SelectItem value="tree">按相对目录路径导入</SelectItem></SelectContent></Select></Label>
-        <p>{directoryMode === 'current' ? '忽略文件中的目录列，全部用例放入当前目录。' : '目录路径以 / 分隔；名称中的 / 写为 ~1，~ 写为 ~0。空路径表示当前目录。旧所属模块列作为单个子目录名称。'}</p>
+        <p>非空用例目录以 ~ 开头并用 ~ 分隔完整层级，名称中的 ~ 写为 \~，反斜杠写为 \\。空路径表示用例目录根节点，不存在的目录会自动创建。</p>
+        <details className="test-import-guidance">
+          <summary>填写说明与字段示例</summary>
+          <div className="test-import-guidance-table">
+            <div className="test-import-guidance-heading"><strong>字段</strong><strong>填写规则</strong><strong>示例</strong></div>
+            {testCaseCsvFieldGuidance.map((item) => <div key={item.field}><strong>{item.field}{item.required ? ' *' : ''}</strong><span>{item.rule}</span><code>{item.field === '所属模块' ? (moduleExamples.join('、') || '当前无可用模块，请留空') : item.example}</code></div>)}
+          </div>
+        </details>
         <div className="test-import-picker">
           <input ref={fileInputRef} hidden accept=".csv,text/csv" type="file" onChange={(event) => void selectFile(event)} />
           <FileCsv size={28} weight="duotone" />
@@ -4300,20 +4525,22 @@ export function ImportCasesDialog({ targetFolderId, folders, busy, onOpenChange,
           <div className="test-import-preview">
             <div className="test-import-metrics">
               <span><strong>{preview.rowCount}</strong> 条用例</span>
-              <span><strong>{preview.newDirectoryCount ?? 0}</strong> 个新目录</span><span><strong>{preview.reusedDirectoryCount ?? 0}</strong> 个复用目录</span>
-              <span><strong>{preview.levelCounts.P0}</strong> P0</span>
-              <span><strong>{preview.levelCounts.P1}</strong> P1</span>
-              <span><strong>{preview.levelCounts.P2}</strong> P2</span>
+              <span><strong>{preview.createCount}</strong> 条新增</span>
+              <span><strong>{preview.updateCount}</strong> 条覆盖</span>
+              <span><strong>{preview.invalidCount}</strong> 条不满足</span>
+              <span><strong>{preview.newTopLevelDirectoryCount ?? 0}</strong> 个新一级目录</span>
+              <span><strong>{preview.newDirectoryCount ?? 0}</strong> 个新目录</span>
+              <span><strong>{preview.reusedDirectoryCount ?? 0}</strong> 个复用目录</span>
             </div>
-            <div className="test-import-samples">
-              <span>内容预览</span>{preview.samplePaths?.map((path, i) => <small key={`${path}-${i}`}>{path}</small>)}
-              {preview.sampleTitles.map((title, index) => <p key={`${title}-${index}`}><code>{index + 1}</code>{title}</p>)}
+            <div className="test-import-results">
+              <div className="test-import-results-heading"><strong>行</strong><strong>用例</strong><strong>预检测结果</strong></div>
+              {preview.items.map((item) => <div key={`${item.rowNumber}-${item.sourceId}-${item.title}`} data-action={item.action}><code>{item.rowNumber}</code><span><strong>{item.sourceId || '新用例'}</strong><small>{item.title || '未填写名称'}</small></span><span>{item.message}</span></div>)}
             </div>
           </div>
         ) : null}
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => changeOpen(false)}>取消</Button>
-          <Button type="button" disabled={busy || previewing || !preview || !targetExists} onClick={() => void confirmImport()}>{busy ? '导入中...' : preview ? `导入 ${preview.rowCount} 条用例` : '确认导入'}</Button>
+          <Button type="button" disabled={busy || previewing || !preview || preview.invalidCount > 0} onClick={() => void confirmImport()}>{busy ? '导入中...' : preview ? `执行 ${preview.validCount} 条变更` : '确认导入'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -4686,17 +4913,19 @@ type BugDialogPayload = {
   reproductionSteps: string
   severity: BugSeverity
   testEnvironmentId?: number | null
+  moduleId?: number | null
   testPlanCaseId?: number
   testPlanId?: number
-  testCaseId: number
+  testCaseId?: number
+  testSubjectId?: number
   title: string
 }
 
-function BugDialog(props: { busy: boolean; editing: boolean; environments: TestEnvironment[]; onOpenChange: (open: boolean) => void; onSubmit: (payload: BugDialogPayload) => void; open: boolean; seed: Partial<TestBug>; subjects: TestSubject[]; cases: TestCase[]; folders: TestCaseFolder[]; users: TestWorkbenchData['users'] }) {
+function BugDialog(props: { busy: boolean; editing: boolean; environments: TestEnvironment[]; modules: TestWorkbenchData['modules']; onOpenChange: (open: boolean) => void; onSubmit: (payload: BugDialogPayload) => void; open: boolean; seed: Partial<TestBug>; subjects: TestSubject[]; cases: TestCase[]; folders: TestCaseFolder[]; users: TestWorkbenchData['users'] }) {
   return <BugDialogForm key={`${props.open}-${props.editing ? props.seed.id : props.seed.testPlanCaseId ?? 'new'}`} {...props} />
 }
 
-function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, open, seed, subjects, cases, folders, users }: Parameters<typeof BugDialog>[0]) {
+function BugDialogForm({ busy, editing, environments, modules, onOpenChange, onSubmit, open, seed, subjects, cases, folders, users }: Parameters<typeof BugDialog>[0]) {
   const [title, setTitle] = useState(seed.title ?? '')
   const [severity, setSeverity] = useState<BugSeverity>(seed.severity ?? 'major')
   const [priority, setPriority] = useState<Priority>(seed.priority ?? 'medium')
@@ -4711,9 +4940,10 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
   const [actualResult, setActualResult] = useState(seed.actualResult ?? '')
   const [assigneeUserId, setAssigneeUserId] = useState(seed.assigneeUserId ? String(seed.assigneeUserId) : 'none')
   const [testCaseId, setTestCaseId] = useState(seed.testCaseId ? String(seed.testCaseId) : '')
+  const [moduleId, setModuleId] = useState(seed.moduleId ? String(seed.moduleId) : 'none')
   const [caseSearch, setCaseSearch] = useState('')
   const [caseFolder, setCaseFolder] = useState('all')
-  const caseLocked = editing ? Boolean(seed.testCaseId) : Boolean(seed.testPlanCaseId)
+  const caseLocked = !editing && Boolean(seed.testPlanCaseId)
   const caseDirectoryIndex = createDirectoryIndex(folders)
   const selectedDirectoryIds = caseDirectoryIndex.byId.has(Number(caseFolder))
     ? caseDirectoryIndex.descendants(Number(caseFolder)) : new Set<number>()
@@ -4752,7 +4982,8 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
               ...(testEnvironmentId === 'manual' ? {} : { testEnvironmentId: Number(testEnvironmentId) }),
               testPlanCaseId: seed.testPlanCaseId,
               testPlanId: seed.testPlanId,
-              testCaseId: Number(testCaseId),
+              moduleId: moduleId === 'none' ? null : Number(moduleId),
+              testCaseId: testCaseId ? Number(testCaseId) : undefined,
               title,
             })
           }}
@@ -4793,21 +5024,30 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
                 </Label>
                 <Input aria-label="搜索测试用例" placeholder="搜索用例编号或标题" value={caseSearch} onChange={(event) => setCaseSearch(event.target.value)} />
               </> : null}
-              <Label>测试用例（必填）
-                <Select value={testCaseId} disabled={caseLocked} onValueChange={(value) => {
-                  setTestCaseId(value)
+              <Label>测试用例（选填）
+                <Select value={testCaseId || 'none'} disabled={caseLocked} onValueChange={(value) => {
+                  setTestCaseId(value === 'none' ? '' : value)
                   const item = cases.find((candidate) => String(candidate.id) === value)
-                  if (item && !editing) { setReproductionSteps(item.steps); setExpectedResult(item.expectedResult) }
+                  if (item) {
+                    setModuleId(item.moduleId ? String(item.moduleId) : 'none')
+                    if (!editing) { setReproductionSteps(item.steps); setExpectedResult(item.expectedResult) }
+                  }
                 }}>
                   <SelectTrigger aria-label="关联测试用例"><SelectValue placeholder="选择测试用例">{selectedCase ? `CASE-${selectedCase.id} ${selectedCase.title}` : undefined}</SelectValue></SelectTrigger>
-                  <SelectContent>{selectableCases.map((item) => <SelectItem key={item.id} value={String(item.id)}>CASE-{item.id} {item.title}</SelectItem>)}</SelectContent>
+                  <SelectContent><SelectItem value="none">不关联用例</SelectItem>{selectableCases.map((item) => <SelectItem key={item.id} value={String(item.id)}>CASE-{item.id} {item.title}</SelectItem>)}</SelectContent>
                 </Select>
               </Label>
-              {!cases.length ? <p className="test-list-empty">当前测试空间暂无用例，请先创建测试用例。</p> : null}
+              {!cases.length ? <p className="test-list-empty">当前测试空间暂无用例，可先不关联用例。</p> : null}
               {caseLocked && !selectedCase ? <p className="test-list-empty">来源用例已删除，无法从此执行记录创建 Bug。</p> : null}
               {!caseLocked && cases.length > 0 && !selectableCases.length ? <p className="test-list-empty">没有符合条件的用例。</p> : null}
             </div>
-            <Label>
+              <Label>模块
+                <Select value={moduleId} disabled={Boolean(selectedCase)} onValueChange={setModuleId}>
+                  <SelectTrigger aria-label="选择 Bug 模块"><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="none">无模块</SelectItem>{modules.filter((module) => module.enabled || module.id === seed.moduleId).map((module) => <SelectItem key={module.id} value={String(module.id)}>{module.name}{module.enabled ? '' : '（已停用）'}</SelectItem>)}</SelectContent>
+                </Select>
+              </Label>
+              <Label>
               测试环境
               <Select
                 value={testEnvironmentId}
@@ -4854,7 +5094,7 @@ function BugDialogForm({ busy, editing, environments, onOpenChange, onSubmit, op
           />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-            <Button disabled={busy || evidenceUploading || !title.trim() || !selectedCase}>
+            <Button disabled={busy || evidenceUploading || !title.trim()}>
               {evidenceUploading ? '附件上传中...' : editing ? '保存修改' : '创建 Bug'}
             </Button>
           </DialogFooter>
@@ -5655,6 +5895,7 @@ export function AssignedTestBugs({
       ? { label: bug.reporterName, value: String(bug.reporterUserId) }
       : undefined),
     spaces: [],
+    modules: [{ label: '无模块', value: 'none' }, ...spaceBugs.flatMap((bug) => bug.moduleId && bug.moduleName ? [{ label: bug.moduleName, value: String(bug.moduleId) }] : []).filter((item, index, all) => all.findIndex((candidate) => candidate.value === item.value) === index)],
     cases: uniqueBugFilterOptions(spaceBugs, (bug) => bug.testCaseId
       ? { label: `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}`, value: String(bug.testCaseId) }
       : undefined).map((item) => ({ ...item, folderIds: spaceBugs.find((bug) => String(bug.testCaseId) === item.value)?.testCaseDirectoryPath?.map((folder) => String(folder.id)) ?? [] })),
@@ -5830,6 +6071,7 @@ export function AssignedTestBugs({
                   <span>负责人 <UserName departedUserIds={departedUserIds} name={selected.assigneeName || '未分配'} userId={selected.assigneeUserId} /></span>
                   <span>测试用例 <strong>{selected.testCaseId ? `CASE-${selected.testCaseId} ${selected.testCaseTitle || ''}` : '待补关联'}</strong></span>
                   <span>用例目录 <strong>{selected.testCaseId ? selected.testCaseFolderName || '未分类' : '待补关联'}</strong></span>
+                  <span>模块 <strong>{selected.moduleName || '无模块'}</strong></span>
                   <span>测试空间 <strong>{selected.testSpaceName || '未记录'}</strong></span>
                   <span>版本号 <strong>{selected.testSpaceVersionLabel || '未指定'}</strong></span>
                   <span>严重程度 <strong>{severityLabel[selected.severity]}</strong></span>

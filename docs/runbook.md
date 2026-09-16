@@ -68,6 +68,14 @@ curl --fail --silent http://127.0.0.1:8787/api/health
 Expected response: `{"ok":true}`. This health endpoint proves the process is serving;
 it does not prove database, OSS, Feishu, or AI workflows.
 
+The application pool defaults to 10 clients and the digest worker deployment is capped at 2.
+Before changing `DB_POOL_MAX`, compare the sum across the maximum number of application replicas
+and concurrent workers with PostgreSQL `max_connections`, leaving at least 20 percent for database
+administration, deployment overlap, and maintenance. Slow-query diagnostics report only elapsed
+milliseconds and `total`, `idle`, and `waiting` pool counts. They intentionally omit SQL and
+parameters. A sustained nonzero `waiting` count should first be addressed by reducing duplicate or
+over-broad reads before increasing the connection budget.
+
 ## Organization Resource Management Verification
 
 After explicitly authorizing an external development PostgreSQL instance, run:
@@ -93,12 +101,12 @@ existing database. Do not run the migration separately merely to repeat startup 
 
 ## Database Operations
 
-### Bug Case Association Migration
+### Bug Case Association and Module Migration
 
-`server/migrations/20260911_bug_test_case_association.sql` adds direct case references,
-backfills surviving plan-case links, and prevents new unlinked Bugs. Apply only with explicit
-database-write authorization and a pre-release backup. Bootstrap in `server/schema.ts` carries
-the same rules; starting the API applies them and is not a read-only check.
+`server/migrations/20260914_test_workbench_modules_optional_bugs.sql` adds organization module
+references to test cases and Bugs, and makes Bug case/subject associations optional. Apply only
+with explicit database-write authorization and a pre-release backup. Bootstrap in `server/schema.ts`
+carries the same rules; starting the API applies them and is not a read-only check.
 
 After authorized migration, inventory unresolved IDs without decrypting content:
 
@@ -107,21 +115,12 @@ select id, test_space_id, test_plan_id, test_plan_case_id
 from test_bugs where test_case_id is null order by test_space_id, id;
 ```
 
-Creators use the Bug editor to associate each unresolved Bug with a real case in its space.
-Do not synthesize cases or guess associations from titles. Once no unresolved rows remain,
-an authorized operator can enforce the final invariant:
+The updated Bug editor permits standalone Bugs. Selecting a case derives its module; without a
+case, an enabled organization module may be selected manually. Empty module values are stored as
+`NULL` and displayed as `无模块`.
 
-```sql
-alter table test_bugs alter column test_case_id set not null;
-```
-
-The next bootstrap also enables NOT NULL when there are no unresolved rows. Until then,
-the trigger permits existing unlinked Bugs to be triaged but rejects new unlinked rows,
-unlinking, and unlinked space transfers. This is a staged data migration, not proof that
-all production Bugs already have cases.
-
-Validate creation, legacy binding, mismatched execution rejection, concurrent case deletion,
-subject deletion protection, same-organization transfer, and full-space deletion in an
+Validate creation with and without a case, module validation, mismatched execution rejection,
+concurrent case deletion, subject deletion protection, same-organization transfer, and full-space deletion in an
 authorized disposable database before production rollout. Application-only rollback to a
 version that creates unlinked Bugs is incompatible with the new constraints. Prefer a forward
 fix; any schema rollback or backup restore requires separate approval and must preserve Bug
@@ -457,6 +456,24 @@ Once nested directories or same-named directories in different branches exist,
 rolling back only the container image is not safe. Restore a compatible database
 snapshot and encryption key ring as part of a coordinated rollback, or roll forward.
 Do not attempt to recreate the old global uniqueness constraint on a populated tree.
+
+## Root-based CSV case paths
+
+`server/migrations/20260916_test_case_csv_root_paths.sql` adds one optional system-root
+marker per test space, makes stable CSV case IDs unique across the whole test space, and
+makes the Bug/case scope foreign key deferrable so a linked case can move between
+first-level directories atomically with its Bugs. Normal startup applies the same DDL.
+Take a database snapshot and retain the full encryption key ring before starting the
+new API. The migration aborts before replacing the old CSV-ID index if duplicate IDs
+already exist within a test space; inventory and resolve those conflicts explicitly
+rather than renaming IDs automatically.
+
+Application rollback does not remove the additive root marker or restore subject-scoped
+CSV-ID uniqueness. Old code can read ordinary rows, but it cannot safely reproduce the
+new full-path import behavior. Prefer a forward fix or restore the approved snapshot.
+In an authorized rehearsal database, verify empty-path root cases, multi-root imports,
+leading-`~` complete paths, ID-based moves with linked Bugs, concurrent directory creation, and complete-path
+export/import round trips before production rollout.
 
 Acceptance in an authorized isolated PostgreSQL environment must exercise concurrent
 create/move/import/delete requests (including permission revocation while waiting),

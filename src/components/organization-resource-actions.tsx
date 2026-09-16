@@ -947,7 +947,7 @@ function SpaceActionDialog({
             {action === 'delete' ? (
               <>
                 <p>
-                  将永久删除空间内的测试对象、用例、计划、Bug 和评论，无法撤销。
+                  将永久删除空间内的用例目录、用例、计划、Bug 和评论，无法撤销。
                 </p>
                 <Label>
                   输入空间名称确认

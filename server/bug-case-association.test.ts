@@ -9,7 +9,7 @@ const { serializeBugCaseDirectory, bugCaseDirectoryJoinSql } = await import('./b
 const source = readFileSync(new URL('./test-workbench.ts', import.meta.url), 'utf8')
 const client = readFileSync(new URL('../src/components/test-workbench.tsx', import.meta.url), 'utf8')
 const schema = readFileSync(new URL('./schema.ts', import.meta.url), 'utf8')
-const migration = readFileSync(new URL('./migrations/20260911_bug_test_case_association.sql', import.meta.url), 'utf8')
+const migration = readFileSync(new URL('./migrations/20260914_test_workbench_modules_optional_bugs.sql', import.meta.url), 'utf8')
 
 test('Bug directory metadata decrypts ordered ancestry without exposing envelopes', () => {
   const result = serializeBugCaseDirectory([{ id: 10, name: encryptText('账户') }, { id: 11, name: encryptText('登录') }])
@@ -23,28 +23,26 @@ test('Bug directory metadata decrypts ordered ancestry without exposing envelope
   assert.match(bugCaseDirectoryJoinSql, /not parent.id = any\(child.visited\)/)
 })
 
-test('bootstrap and migration preserve legacy rows while enforcing new case bindings', () => {
-  for (const sql of [schema, migration]) {
-    assert.match(sql, /foreign key \(test_case_id, test_space_id, test_subject_id\)/)
-    assert.match(sql, /references test_cases \(id, test_space_id, test_subject_id\);/)
-    assert.match(sql, /b.test_case_id is null and b.test_plan_case_id = pc.id/)
-    assert.match(sql, /b.test_space_id = c.test_space_id and b.test_subject_id = c.test_subject_id/)
-    assert.match(sql, /tg_op = 'INSERT'/)
-    assert.match(sql, /old.test_case_id is not null or new.test_space_id <> old.test_space_id/)
-    assert.match(sql, /if not exists \(select 1 from test_bugs where test_case_id is null\)/)
-    assert.match(sql, /alter column test_case_id set not null/)
-    assert.match(sql, /create trigger test_subjects_protect_bugs before delete/)
-  }
+test('bootstrap and migration keep Bug case and subject associations optional while preserving FKs', () => {
+  assert.match(schema, /organization_module_id bigint[\s\S]*references organization_project_modules\(id\) on delete set null/)
+  assert.match(schema, /alter column test_case_id drop not null/)
+  assert.match(schema, /alter column test_subject_id drop not null/)
+  assert.match(schema, /create or replace function enforce_test_bug_case\(\)/)
+  assert.match(migration, /alter table test_bugs[\s\S]*alter column test_case_id drop not null/)
+  assert.match(migration, /alter table test_bugs[\s\S]*alter column test_subject_id drop not null/)
+  assert.match(migration, /drop trigger if exists test_bugs_require_case on test_bugs/)
+  assert.match(migration, /organization_module_id bigint/)
 })
 
-test('create and legacy repair validate canonical cases and preserve prior execution IDs', () => {
+test('create and edit allow standalone Bugs while validating optional canonical cases', () => {
   const create = source.slice(source.indexOf("router.post('/test-spaces/:spaceId/bugs'"), source.indexOf("router.post('/test-spaces/:spaceId/bugs/:bugId/transfer-space'"))
   assert.match(create, /positiveId\(request.body.testCaseId\)/)
-  assert.doesNotMatch(create, /positiveId\(request.body.testSubjectId\)/)
+  assert.match(create, /const requestedSubjectId = positiveId\(request.body.testSubjectId\)/)
+  assert.match(create, /const requestedModuleValue = request.body.moduleId/)
   assert.match(create, /Number\(execution.rows\[0\].test_case_id\) !== caseId/)
-  assert.ok(create.indexOf('await lockTestCaseSpace') < create.indexOf('select test_subject_id from test_cases'))
-  assert.match(client, /const caseLocked = editing \? Boolean\(seed.testCaseId\) : Boolean\(seed.testPlanCaseId\)/)
+  assert.ok(create.indexOf('await lockTestCaseSpace') < create.indexOf('select test_subject_id, organization_module_id from test_cases'))
+  assert.match(client, /const caseLocked = !editing && Boolean\(seed.testPlanCaseId\)/)
   assert.match(source, /历史 Bug 补关联：原计划/)
   assert.match(source, /if \(sources.some\(\(source\) => source.categories.includes\('bugs'\)\) && !targetCase\)/)
-  assert.doesNotMatch(source, /scopeBugs/)
+  assert.match(source, /const scopeBugs = .*b\.test_space_id/u)
 })

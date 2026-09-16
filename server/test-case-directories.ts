@@ -18,10 +18,9 @@ export async function lockTestCaseSpace(client: PoolClient, spaceId: number) {
 }
 
 /** Every directory/assignment writer takes space -> subject -> resource locks. */
-export async function lockTestCaseScope(
+export async function lockTestCaseSpaceAccess(
   client: PoolClient,
   spaceId: number,
-  subjectId: number,
   userId: number,
 ) {
   await lockTestCaseSpace(client, spaceId)
@@ -33,12 +32,22 @@ export async function lockTestCaseScope(
   if (!['owner', 'editor'].includes(membership.rows[0]?.access_level)) {
     throw new TestCaseDirectoryError('需要测试空间的编辑权限。', 403)
   }
+}
+
+/** Every directory/assignment writer takes space -> subject -> resource locks. */
+export async function lockTestCaseScope(
+  client: PoolClient,
+  spaceId: number,
+  subjectId: number,
+  userId: number,
+) {
+  await lockTestCaseSpaceAccess(client, spaceId, userId)
   const subject = await client.query(
     'select id from test_subjects where id = $1 and test_space_id = $2 for update',
     [subjectId, spaceId],
   )
   if (!subject.rows.length)
-    throw new TestCaseDirectoryError('测试对象不存在。', 404)
+    throw new TestCaseDirectoryError('一级目录不存在。', 404)
 }
 
 export async function readCaseDirectories(
@@ -194,7 +203,7 @@ export async function moveCaseDirectories(
   )
   if (cases.rows.length !== caseIds.length)
     throw new TestCaseDirectoryError(
-      '部分用例不存在或不属于当前测试对象。',
+      '部分用例不存在或不属于当前一级目录。',
       404,
     )
   const changed = cases.rows.filter(

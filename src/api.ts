@@ -565,8 +565,8 @@ export function updateManagedUserRoles(userId: number, roles: UserRole[]) {
   })
 }
 
-export function fetchOrganizations() {
-  return request<{ canCreate: boolean; organizations: OrganizationListItem[] }>('/api/organizations')
+export function fetchOrganizations(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<{ canCreate: boolean; organizations: OrganizationListItem[] }>('/api/organizations', options)
 }
 
 export function fetchOrganizationPackageMarketCatalog(organizationId: number) {
@@ -600,8 +600,16 @@ export function createOrganization(payload: { name: string; ownerUsername?: stri
   })
 }
 
-export function fetchOrganization(organizationId: number) {
-  return request<OrganizationDetail>(`/api/organizations/${organizationId}`)
+export function fetchOrganization(
+  organizationId: number,
+  options: Pick<RequestInit, 'signal'> & { sections?: OrganizationDetail['loadedSections'] } = {},
+) {
+  const params = new URLSearchParams()
+  if (options.sections?.length) params.set('sections', options.sections.join(','))
+  const query = params.toString()
+  return request<OrganizationDetail>(`/api/organizations/${organizationId}${query ? `?${query}` : ''}`, {
+    signal: options.signal,
+  })
 }
 
 export function updateOrganization(organizationId: number, name: string) {

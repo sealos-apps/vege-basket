@@ -79,6 +79,12 @@ spec:
                       key: password
                 - name: DATABASE_URL
                   value: postgresql://$(PG_USER):$(PG_PASSWORD)@$(PG_HOST):$(PG_PORT)/vegebasket
+                - name: DB_POOL_MAX
+                  value: '2'
+                - name: DB_POOL_CONNECTION_TIMEOUT_MS
+                  value: '3000'
+                - name: DB_POOL_IDLE_TIMEOUT_MS
+                  value: '30000'
               resources:
                 requests:
                   cpu: 20m

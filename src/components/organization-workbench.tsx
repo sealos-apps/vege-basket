@@ -76,6 +76,7 @@ import {
 } from '../api'
 import type {
   OrganizationDetail,
+  OrganizationDetailSection,
   OrganizationListItem,
   OrganizationProject,
   OrganizationProjectHealthStatus,
@@ -140,6 +141,51 @@ type OrganizationTab =
   | 'reports'
   | 'packageMarket'
   | 'settings'
+
+function organizationSectionForTab(tab: OrganizationTab): OrganizationDetailSection {
+  return tab
+}
+
+function mergeOrganizationDetail(current: OrganizationDetail, next: OrganizationDetail) {
+  const allSections: OrganizationDetailSection[] = [
+    'members',
+    'overview',
+    'packageMarket',
+    'projects',
+    'reports',
+    'settings',
+    'testSpaces',
+  ]
+  const sections = new Set<OrganizationDetailSection>(next.loadedSections ?? allSections)
+  const includes = (...candidates: OrganizationDetailSection[]) => (
+    candidates.some((section) => sections.has(section))
+  )
+  return {
+    ...current,
+    ...next,
+    attachableProjects: includes('projects') ? next.attachableProjects : current.attachableProjects,
+    attachableTestSpaces: includes('testSpaces') ? next.attachableTestSpaces : current.attachableTestSpaces,
+    departedUserIds: includes('overview') ? next.departedUserIds : current.departedUserIds,
+    invitations: includes('members', 'settings') ? next.invitations : current.invitations,
+    loadedSections: [...new Set([...(current.loadedSections ?? []), ...sections])],
+    members: includes('members', 'overview', 'projects', 'reports', 'settings', 'testSpaces')
+      ? next.members
+      : current.members,
+    packageMarketPolicy: includes('packageMarket', 'settings')
+      ? next.packageMarketPolicy
+      : current.packageMarketPolicy,
+    projects: includes('overview', 'projects') ? next.projects : current.projects,
+    projectModules: includes('settings') ? next.projectModules : current.projectModules,
+    reports: includes('reports') ? next.reports : current.reports,
+    summaries: includes('reports') ? next.summaries : current.summaries,
+    tasks: includes('overview') ? next.tasks : current.tasks,
+    testEnvironments: includes('testSpaces') ? next.testEnvironments : current.testEnvironments,
+    testSpaces: includes('overview', 'testSpaces') ? next.testSpaces : current.testSpaces,
+    weeklyReportAssigneeUserIds: includes('reports', 'settings')
+      ? next.weeklyReportAssigneeUserIds
+      : current.weeklyReportAssigneeUserIds,
+  }
+}
 
 const organizationTabs: Array<{
   icon: typeof Buildings
@@ -350,7 +396,10 @@ function buildOrganizationInviteUrl(token: string) {
 }
 
 export function OrganizationWorkbench({
+  canCreate: initialCanCreate,
   currentUser,
+  initialOrganizations,
+  initialSelectedOrganizationId,
   onBack,
   onOrganizationsChanged,
   onProjectModulesChanged,
@@ -358,7 +407,10 @@ export function OrganizationWorkbench({
   onPackageMarketVisibilityChange,
   refreshToken = 0,
 }: {
+  canCreate: boolean
   currentUser: AuthUser
+  initialOrganizations: OrganizationListItem[]
+  initialSelectedOrganizationId: number | null
   onBack: () => void
   onOrganizationsChanged?: () => void
   onProjectModulesChanged?: () => void
@@ -366,10 +418,10 @@ export function OrganizationWorkbench({
   onPackageMarketVisibilityChange?: (organizationId: number, enabled: boolean) => void
   refreshToken?: number
 }) {
-  const [organizations, setOrganizations] = useState<OrganizationListItem[]>([])
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState(0)
+  const [organizations, setOrganizations] = useState<OrganizationListItem[]>(initialOrganizations)
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState(initialSelectedOrganizationId ?? initialOrganizations[0]?.id ?? 0)
   const [detail, setDetail] = useState<OrganizationDetail | null>(null)
-  const [canCreate, setCanCreate] = useState(false)
+  const [canCreate, setCanCreate] = useState(initialCanCreate)
   const [tab, setTab] = useState<OrganizationTab>('overview')
   const [testResourceTab, setTestResourceTab] = useState<'spaces' | 'environments'>('spaces')
   const actionScope = `${currentUser.id}:${selectedOrganizationId}:${tab}`
@@ -416,8 +468,8 @@ export function OrganizationWorkbench({
   const canAccessOrganizationManagement = currentUser.isSystemAdmin
     || currentUser.roles.includes('organization_admin')
 
-  const loadOrganizations = useCallback(async (preferredId?: number) => {
-    const result = await fetchOrganizations()
+  const loadOrganizations = useCallback(async (preferredId?: number, signal?: AbortSignal) => {
+    const result = await fetchOrganizations({ signal })
     setOrganizations(result.organizations)
     setCanCreate(result.canCreate)
     const nextId = preferredId && result.organizations.some((item) => item.id === preferredId)
@@ -429,19 +481,15 @@ export function OrganizationWorkbench({
   }, [])
 
   useEffect(() => {
-    let active = true
-    setLoading(true)
-    loadOrganizations(selectedOrganizationId || undefined)
-      .catch((loadError) => {
-        if (active) setError(errorMessage(loadError))
-      })
-      .finally(() => {
-        if (active) setLoading(false)
-      })
-    return () => {
-      active = false
-    }
-  }, [loadOrganizations, refreshToken, selectedOrganizationId])
+    setOrganizations(initialOrganizations)
+    setCanCreate(initialCanCreate)
+    setSelectedOrganizationId((current) => (
+      initialOrganizations.some((organization) => organization.id === current)
+        ? current
+        : initialSelectedOrganizationId ?? initialOrganizations[0]?.id ?? 0
+    ))
+    setLoading(false)
+  }, [initialCanCreate, initialOrganizations, initialSelectedOrganizationId])
 
   useEffect(() => {
     if (!selectedOrganizationId) {
@@ -450,9 +498,13 @@ export function OrganizationWorkbench({
       return
     }
     let active = true
+    const controller = new AbortController()
     setDetailLoading(true)
     setLoading(true)
-    fetchOrganization(selectedOrganizationId)
+    fetchOrganization(selectedOrganizationId, {
+      sections: ['overview', 'settings'],
+      signal: controller.signal,
+    })
       .then((nextDetail) => {
         if (active) {
           setDetail(nextDetail)
@@ -470,8 +522,37 @@ export function OrganizationWorkbench({
       })
     return () => {
       active = false
+      controller.abort()
     }
   }, [refreshToken, selectedOrganizationId])
+
+  const activeDetailSection = organizationSectionForTab(tab)
+  const activeDetailSectionLoaded = detail?.loadedSections?.includes(activeDetailSection) ?? true
+  useEffect(() => {
+    if (!detail || activeDetailSectionLoaded) return
+    let active = true
+    const controller = new AbortController()
+    setDetailLoading(true)
+    fetchOrganization(detail.id, {
+      sections: [activeDetailSection],
+      signal: controller.signal,
+    })
+      .then((nextDetail) => {
+        if (active) setDetail((current) => (
+          current?.id === nextDetail.id ? mergeOrganizationDetail(current, nextDetail) : current
+        ))
+      })
+      .catch((loadError) => {
+        if (active) setError(errorMessage(loadError))
+      })
+      .finally(() => {
+        if (active) setDetailLoading(false)
+      })
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [activeDetailSection, activeDetailSectionLoaded, detail])
 
   useEffect(() => {
     setOrganizationRenameDraft(detail?.name ?? '')
@@ -1097,7 +1178,10 @@ export function OrganizationWorkbench({
           {error ? <div className="organization-error" role="alert">{error}</div> : null}
 
           <div className="organization-content">
-        {tab === 'overview' ? (
+            {!activeDetailSectionLoaded && detailLoading ? (
+              <div className="organization-state">正在加载组织...</div>
+            ) : null}
+        {tab === 'overview' && activeDetailSectionLoaded ? (
           <div className="organization-overview">
             <div className="organization-metrics">
               <Metric label="成员" value={detail.members.length} />
@@ -1112,7 +1196,7 @@ export function OrganizationWorkbench({
           </div>
         ) : null}
 
-        {tab === 'projects' ? (
+        {tab === 'projects' && activeDetailSectionLoaded ? (
           <section className="organization-section organization-resource-panel">
             <header>
               <div className="organization-section-heading">
@@ -1221,14 +1305,14 @@ export function OrganizationWorkbench({
           </section>
         ) : null}
 
-        {tab === 'testSpaces' ? <>
+        {tab === 'testSpaces' && activeDetailSectionLoaded ? <>
           {testResourceTab === 'spaces' ? <section className="organization-section organization-resource-panel">
             <OrganizationTestSpaces key={detail.id} detail={detail} onRefresh={refreshResources} heading={<TestResourceTabs value={testResourceTab} onChange={setTestResourceTab} detail={detail} />} />
             {detail.attachableTestSpaces.length > 0 ? <div className="organization-attach-list">{detail.attachableTestSpaces.map(space=><Button disabled={busy} key={space.id} variant="outline" onClick={()=>void mutate(()=>attachTestSpaceToOrganization(detail.id,space.id))}><Plus size={15}/>{space.name}</Button>)}</div>:null}
           </section> : <OrganizationTestEnvironmentPanel busy={busy} detail={detail} onMutate={mutate} heading={<TestResourceTabs value={testResourceTab} onChange={setTestResourceTab} detail={detail} />} />}
         </> : null}
 
-        {tab === 'members' ? (
+        {tab === 'members' && activeDetailSectionLoaded ? (
           <section className="organization-section organization-members-section">
             <header>
               <h2>组织成员</h2>
@@ -1383,7 +1467,7 @@ export function OrganizationWorkbench({
           </section>
         ) : null}
 
-        {tab === 'reports' ? (
+        {tab === 'reports' && activeDetailSectionLoaded ? (
           <section className="organization-section organization-report-summary">
             <header>
               <div>
@@ -1676,7 +1760,7 @@ export function OrganizationWorkbench({
           </section>
         ) : null}
 
-        {tab === 'packageMarket' ? (
+        {tab === 'packageMarket' && activeDetailSectionLoaded ? (
           <OrganizationPackageMarketPanel
             catalog={packageMarketCatalog}
             catalogLoading={packageMarketCatalogLoading}
@@ -1690,7 +1774,7 @@ export function OrganizationWorkbench({
           />
         ) : null}
 
-        {tab === 'settings' && detail.canManage ? (
+        {tab === 'settings' && detail.canManage && activeDetailSectionLoaded ? (
           <section className="organization-section organization-settings-page">
             <header>
               <div className="organization-section-heading">
