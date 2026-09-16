@@ -7,6 +7,10 @@ const workbenchSource = readFileSync(
   'utf8',
 )
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+const workbenchCssSource = readFileSync(
+  new URL('../src/components/organization-workbench.css', import.meta.url),
+  'utf8',
+)
 const packageWorkbenchSource = readFileSync(
   new URL('../src/components/project-package-workbench.tsx', import.meta.url),
   'utf8',
@@ -25,7 +29,36 @@ test('organization weekly collection does not reload from whole detail object re
 test('organization detail loading cannot render the empty organization state early', () => {
   assert.match(workbenchSource, /const \[detailLoading, setDetailLoading\] = useState\(false\)/u)
   assert.match(workbenchSource, /setDetailLoading\(nextId !== 0\)/u)
-  assert.match(workbenchSource, /if \(!detail && \(loading \|\| detailLoading\)\)/u)
+  assert.match(
+    workbenchSource,
+    /if \(\(!detail \|\| detail\.id !== selectedOrganizationId\) && \(loading \|\| detailLoading\)\)/u,
+  )
+  assert.match(workbenchSource, /if \(!detail \|\| detail\.id !== selectedOrganizationId\)/u)
+})
+
+test('organization management replaces the workspace navigation in the existing sidebar', () => {
+  assert.match(appSource, /view === 'organization'[\s\S]*?ref=\{setOrganizationSidebarHost\}/u)
+  assert.match(appSource, /sidebarNavigationHost=\{organizationSidebarHost\}/u)
+  assert.match(appSource, /ref=\{view === 'organization' \? setOrganizationTopbarHost : undefined\}/u)
+  assert.match(appSource, /topbarActionHost=\{organizationTopbarHost\}/u)
+  assert.match(appSource, /onOpenOrganization=\{openOrganizationManagement\}/u)
+  assert.doesNotMatch(appSource, /onCloseOrganization/u)
+  assert.match(workbenchSource, /createPortal\([\s\S]*?organization-sidebar-panel[\s\S]*?sidebarNavigationHost/u)
+  assert.match(workbenchSource, /createPortal\([\s\S]*?organization-topbar-controls[\s\S]*?topbarActionHost/u)
+  assert.match(workbenchSource, /aria-label="组织管理导航"/u)
+  assert.match(workbenchSource, /className="organization-topbar-switcher" aria-label="选择组织"/u)
+  assert.match(workbenchSource, /id: 'settings', label: '组织设置'/u)
+  assert.match(workbenchSource, /item\.id !== 'settings' \|\| selectedDetail\?\.canManage/u)
+  assert.match(workbenchSource, /tab === 'settings'[\s\S]*?organization-settings-page/u)
+  assert.doesNotMatch(workbenchSource, /organization-sidebar-back/u)
+  assert.doesNotMatch(workbenchSource, /organization-sidebar-switcher/u)
+  assert.doesNotMatch(workbenchSource, /organization-settings-dialog/u)
+  assert.doesNotMatch(workbenchSource, /organizationTabs\.slice/u)
+  assert.doesNotMatch(workbenchSource, /className="organization-tabs-row"/u)
+  assert.match(
+    workbenchCssSource,
+    /\.organization-sidebar-nav\s*\{[\s\S]*?align-content: start;/u,
+  )
 })
 
 test('global package market uses the selected sidebar organization as its only context', () => {

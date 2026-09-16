@@ -426,6 +426,12 @@ textarea:focus {
   background: color-mix(in oklch, var(--sidebar) 92%, transparent);
 }
 
+.organization-sidebar-navigation {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
 .brand-block {
   display: flex;
   align-items: center;
@@ -11634,6 +11640,11 @@ textarea:focus {
     height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+  }
+
+  .organization-sidebar-navigation {
+    min-height: auto;
+    flex: none;
   }
 
   .embedded-module-workspace {
