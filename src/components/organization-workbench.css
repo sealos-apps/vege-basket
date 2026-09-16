@@ -27,71 +27,55 @@
   outline: none;
 }
 
-.organization-sidebar-panel {
-  height: 100%;
+.organization-topbar-controls {
   min-width: 0;
-  min-height: 0;
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.organization-sidebar-back {
-  width: 100%;
-  justify-content: flex-start;
-  color: var(--muted-text);
-}
-
-.organization-sidebar-context {
-  min-width: 0;
-  display: grid;
-  gap: 7px;
-}
-
-.organization-sidebar-switcher-group {
-  padding: 0 4px;
-}
-
-.organization-sidebar-switcher {
-  min-width: 0;
-  flex: 1 1 auto;
+.organization-topbar-switcher {
+  width: min(320px, 36vw);
+  min-width: 220px;
   border-color: var(--line);
   background: var(--surface);
   font-size: 13px;
   font-weight: 580;
 }
 
-.organization-sidebar-switcher:focus-visible {
+.organization-topbar-switcher:focus-visible {
   border-color: color-mix(in oklch, var(--primary) 35%, var(--line));
   box-shadow: none;
   outline: none;
 }
 
-.organization-sidebar-access,
-.organization-sidebar-empty {
-  margin: 0 9px;
+.organization-topbar-access {
   color: var(--muted-text);
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: 12px;
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.organization-topbar-controls .solid-button {
+  flex: 0 0 auto;
+}
+
+.organization-sidebar-panel {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .organization-sidebar-nav {
   min-height: 0;
+  flex: 1 1 auto;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 2px;
-}
-
-.organization-switcher-group {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.organization-switcher-group [data-slot='button'] {
-  min-width: 40px;
-  min-height: 40px;
 }
 
 .organization-report-actions,
@@ -1813,7 +1797,6 @@
   gap: 6px;
 }
 
-.organization-settings-dialog,
 .organization-delete-dialog {
   width: min(92vw, 520px);
 }
@@ -1830,13 +1813,41 @@
   gap: 8px;
 }
 
-.organization-settings-dialog .organization-settings-action {
+.organization-settings-page .organization-settings-action {
   height: 36px;
   padding-right: 12px;
   padding-left: 12px;
   font-size: 14px;
   font-weight: 560;
   line-height: 1;
+}
+
+.organization-settings-body {
+  display: grid;
+  gap: 20px;
+  padding: 18px;
+}
+
+.organization-settings-section {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.organization-settings-section-heading {
+  display: grid;
+  gap: 4px;
+}
+
+.organization-settings-section-heading p {
+  margin: 0;
+  color: var(--muted-text);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.organization-settings-page > header .organization-section-heading {
+  flex-wrap: wrap;
 }
 
 .organization-danger-zone {
@@ -1937,20 +1948,44 @@
   }
 }
 
+@media (max-width: 1100px) {
+  .organization-topbar-controls {
+    width: 100%;
+  }
+
+  .organization-topbar-switcher {
+    width: auto;
+    flex: 1 1 260px;
+  }
+}
+
 @media (max-width: 720px) {
   .organization-workbench,
   .organization-content {
     min-width: 0;
   }
 
-  .organization-sidebar-switcher-group {
+  .organization-topbar-controls {
     width: 100%;
+    justify-content: flex-start;
   }
 
-  .organization-sidebar-switcher-group [data-slot='select-trigger'] {
-    width: auto;
+  .organization-topbar-switcher {
+    width: 100%;
     min-width: 0;
-    flex: 1 1 auto;
+    flex: 1 1 240px;
+  }
+
+  .organization-settings-page > header {
+    align-items: flex-start;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
+  .organization-settings-page > header .organization-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 
   .organization-weekly-submit .organization-toolbar {
@@ -3216,8 +3251,6 @@
 .organization-project-edit-status { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media(max-width:700px) { .organization-project-edit-status { grid-template-columns: 1fr; } }
 /* Organization-wide project module catalog. */
-.organization-settings-dialog { width: min(92vw, 600px); max-height: min(90dvh, 780px); grid-template-rows: auto minmax(0, 1fr); }
-.organization-settings-dialog > [data-slot="dialog-body"] { overflow-y: auto; min-height: 0; display: grid; gap: 22px; padding: 2px; margin: -2px; }
 .organization-project-modules { padding-top: 20px; border-top: 1px solid var(--line); }
 .organization-project-modules-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .organization-project-modules-heading h3 { font-size: 14px; font-weight: 650; margin: 0; }

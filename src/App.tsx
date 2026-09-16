@@ -1759,6 +1759,7 @@ function App() {
   const [view, setView] = useState<View>(getInitialView)
   const organizationReturnViewRef = useRef<View>('search')
   const [organizationSidebarHost, setOrganizationSidebarHost] = useState<HTMLDivElement | null>(null)
+  const [organizationTopbarHost, setOrganizationTopbarHost] = useState<HTMLDivElement | null>(null)
   const [changelogCanManage, setChangelogCanManage] = useState(false)
   const [changelogEditorOpen, setChangelogEditorOpen] = useState(false)
   const [changelogCreateRequest, setChangelogCreateRequest] = useState(0)
@@ -4854,6 +4855,7 @@ ${packageTimelineText}`
               onDisconnectFeishu={disconnectFeishuBinding}
               onSaveAccountSettings={updateAccountSettings}
               onRoleChange={(role) => void changeActiveUserRole(role)}
+              onCloseOrganization={closeOrganizationManagement}
               onOpenOrganization={openOrganizationManagement}
               onOpenChangelog={() => setView('changelog')}
               onSignOut={signOut}
@@ -4982,6 +4984,7 @@ ${packageTimelineText}`
             onDisconnectFeishu={disconnectFeishuBinding}
             onSaveAccountSettings={updateAccountSettings}
             onRoleChange={(role) => void changeActiveUserRole(role)}
+            onCloseOrganization={closeOrganizationManagement}
             onOpenOrganization={openOrganizationManagement}
             onOpenChangelog={() => setView('changelog')}
             onSignOut={signOut}
@@ -5162,9 +5165,8 @@ ${packageTimelineText}`
             </div>
             <div
               className={view === 'project' ? 'topbar-actions project-topbar-actions' : 'topbar-actions'}
-              id={view === 'organization'
-                ? 'organization-topbar-actions'
-                : view === 'weekly_report' ? 'weekly-report-topbar-actions' : undefined}
+              id={view === 'weekly_report' ? 'weekly-report-topbar-actions' : undefined}
+              ref={view === 'organization' ? setOrganizationTopbarHost : undefined}
             >
               {view === 'project' && projectDetailTab === 'packages' ? (
                 <>
@@ -5502,8 +5504,8 @@ ${packageTimelineText}`
             currentUser={authUser}
             initialOrganizations={organizations}
             initialSelectedOrganizationId={selectedOrganizationId}
-            onBack={closeOrganizationManagement}
             sidebarNavigationHost={organizationSidebarHost}
+            topbarActionHost={organizationTopbarHost}
             onSubprojectsChanged={() => {
               workspaceMutationEpochRef.current += 1
               void Promise.resolve(workspaceRefreshPromiseRef.current).then(() => refreshWorkspace())
@@ -5992,6 +5994,7 @@ function AccountMenu({
   themeMode,
   onSaveAccountSettings,
   onRoleChange,
+  onCloseOrganization,
   onOpenOrganization,
   onOpenChangelog,
   onSignOut,
@@ -6005,6 +6008,7 @@ function AccountMenu({
     displayName: string
   }) => Promise<void>
   onRoleChange: (role: SwitchableUserRole) => void
+  onCloseOrganization: () => void
   onOpenOrganization: () => void
   onOpenChangelog: () => void
   onSignOut: () => void
@@ -6074,11 +6078,13 @@ function AccountMenu({
           {canOpenOrganization ? (
             <DropdownMenuItem
               className="account-menu-item"
-              data-active={activeView === 'organization' ? 'true' : undefined}
-              aria-current={activeView === 'organization' ? 'page' : undefined}
-              onSelect={onOpenOrganization}
+              onSelect={activeView === 'organization' ? onCloseOrganization : onOpenOrganization}
             >
-              <Buildings /> 组织管理
+              {activeView === 'organization' ? (
+                <><ArrowLeft /> 返回工作区</>
+              ) : (
+                <><Buildings /> 组织管理</>
+              )}
             </DropdownMenuItem>
           ) : null}
           {user?.isSystemAdmin ? (
