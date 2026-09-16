@@ -4,7 +4,7 @@ import { fetchMyWork } from '../api'
 import type { Project } from '../types'
 import type { MyWorkData, MyWorkItem, MyWorkKind } from '../my-work-types'
 import type { OrganizationContext } from '../../shared/organization-context'
-import { startNotificationRefreshSchedule, workspaceRefreshIntervalMs } from '../notifications'
+import { startVisibleRefreshSchedule, workspaceRefreshIntervalMs } from '../refresh-schedule'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -125,7 +125,7 @@ export function MyWorkWorkbench({
   const [backgroundRefreshVersion, setBackgroundRefreshVersion] = useState(0)
   const [error, setError] = useState('')
 
-  useEffect(() => startNotificationRefreshSchedule({
+  useEffect(() => startVisibleRefreshSchedule({
     clearInterval: (handle) => window.clearInterval(handle),
     intervalMs: workspaceRefreshIntervalMs,
     isVisible: () => document.visibilityState === 'visible',

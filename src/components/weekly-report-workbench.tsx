@@ -52,7 +52,7 @@ import {
   submitPersonalWeeklyReport,
 } from '../api'
 import { ApiError } from '../api-error'
-import { startNotificationRefreshSchedule, workspaceRefreshIntervalMs } from '../notifications'
+import { startVisibleRefreshSchedule, workspaceRefreshIntervalMs } from '../refresh-schedule'
 import type {
   PersonalWeeklyReport,
   PersonalWeeklyReportList,
@@ -319,7 +319,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     return () => window.clearInterval(timer)
   }, [])
 
-  useEffect(() => startNotificationRefreshSchedule({
+  useEffect(() => startVisibleRefreshSchedule({
     clearInterval: (handle) => window.clearInterval(handle),
     intervalMs: workspaceRefreshIntervalMs,
     isVisible: () => document.visibilityState === 'visible',

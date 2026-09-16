@@ -37,13 +37,15 @@ The production image builds `src/` into `dist/`, copies `server/`, and starts
 
 - `src/App.tsx`, `src/components/`: UI state and user workflows. They must not hold
   database, OSS credential, or authorization decisions.
-- `src/notifications.ts`: visible-page refresh scheduling shared by notifications and the
+- `src/refresh-schedule.ts`: visible-page refresh scheduling shared by notifications and the
   workspace snapshot. Notification polling remains global, while workspace polling runs only
   on workspace-backed views and refreshes immediately when one becomes active. Independently
   loaded workbenches revalidate only their mounted data surface while retaining current content.
   The application-level organization directory revalidates separately so removed access cannot
   leave a stale organization context. Foreground focus and visibility events are coalesced, and
   a workspace refresh must not invalidate those workbenches.
+- `src/notifications.ts`: notification-center data transformations that do not own polling or
+  workspace refresh policy.
 - `src/ai-attachments.ts`: browser-side text attachment format checks, display sizing,
   and bounded serialization into a new AI turn. Attachments are
   not uploaded to object storage or assigned project identity here.

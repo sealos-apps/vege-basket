@@ -57,7 +57,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { JournalDatePicker } from '@/components/journal-date-picker'
-import { notificationRefreshIntervalMs } from '@/notifications'
+import { notificationRefreshIntervalMs } from '@/refresh-schedule'
 import {
   Dialog,
   DialogContent,

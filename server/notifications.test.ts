@@ -12,9 +12,11 @@ import {
 import {
   notificationRefreshIntervalMs,
   workspaceRefreshIntervalMs,
+  startVisibleRefreshSchedule,
+} from '../src/refresh-schedule.ts'
+import {
   removePackageEventNotification,
   removeTodoNotifications,
-  startNotificationRefreshSchedule,
 } from '../src/notifications.ts'
 import type { NotificationCenterData, TodoNotification } from '../src/types.ts'
 
@@ -664,7 +666,7 @@ test('refreshes notifications while visible and cleans up the live schedule', ()
   let removedFocus = false
   let removedVisibility = false
 
-  const stop = startNotificationRefreshSchedule({
+  const stop = startVisibleRefreshSchedule({
     clearInterval: (handle) => {
       clearedInterval = handle
     },
@@ -719,7 +721,7 @@ test('coalesces an in-flight refresh and backs off after a failed refresh', asyn
     resolveRefresh = resolve
   })
 
-  const stop = startNotificationRefreshSchedule({
+  const stop = startVisibleRefreshSchedule({
     clearInterval: () => undefined,
     isVisible: () => true,
     onFocus: () => () => undefined,
@@ -748,7 +750,7 @@ test('coalesces an in-flight refresh and backs off after a failed refresh', asyn
 
 test('supports a slower interval for heavier workspace refreshes', () => {
   let intervalDelay = 0
-  startNotificationRefreshSchedule({
+  startVisibleRefreshSchedule({
     clearInterval: () => undefined,
     isVisible: () => true,
     onFocus: () => () => undefined,
@@ -765,7 +767,7 @@ test('supports a slower interval for heavier workspace refreshes', () => {
 
 test('can refresh an active data surface immediately when its schedule starts', () => {
   let refreshCount = 0
-  startNotificationRefreshSchedule({
+  startVisibleRefreshSchedule({
     clearInterval: () => undefined,
     isVisible: () => true,
     onFocus: () => () => undefined,
@@ -785,7 +787,7 @@ test('coalesces focus and visibility refreshes fired by the same foreground tran
   let visibilityListener = () => {}
   let refreshCount = 0
 
-  const stop = startNotificationRefreshSchedule({
+  const stop = startVisibleRefreshSchedule({
     clearInterval: () => undefined,
     isVisible: () => true,
     minRefreshGapMs: 1_000,
