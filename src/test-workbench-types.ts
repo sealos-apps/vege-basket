@@ -134,6 +134,7 @@ export type TestCase = {
   canDelete: boolean
   caseType: TestCaseType
   createdAt: string
+  csvCaseId: string
   customTags: string[]
   expectedResult: string
   folderId?: number
@@ -347,6 +348,15 @@ export type TestWorkbenchModule = {
 export type TestWorkbenchProjectOption = Pick<Project, 'id' | 'name'>
 
 export type TestCaseImportPreview = {
+  createCount: number
+  invalidCount: number
+  items: Array<{
+    action: 'create' | 'update' | 'invalid'
+    message: string
+    rowNumber: number
+    sourceId: string
+    title: string
+  }>
   targetPath?: string
   newDirectoryCount?: number
   reusedDirectoryCount?: number
@@ -355,4 +365,6 @@ export type TestCaseImportPreview = {
   moduleCount: number
   rowCount: number
   sampleTitles: string[]
+  updateCount: number
+  validCount: number
 }

@@ -14,6 +14,7 @@ const testCase: TestCase = {
   canDelete: true,
   caseType: 'security',
   createdAt: '2026-09-16T00:00:00.000Z',
+  csvCaseId: 'CASE-2846',
   customTags: ['不进入新格式'],
   expectedResult: '保存成功',
   folderId: 2,
@@ -35,10 +36,10 @@ test('exports the strict ten-column CSV contract with a relative directory path'
   const records = parse(buildTestCaseCsv([testCase], folders, 1), { bom: true }) as string[][]
   assert.deepEqual(records[0], [...testCaseCsvHeaders])
   assert.deepEqual(records[1], [
-    'CASE-23',
+    'CASE-2846',
     '保存账户',
     '账户模块',
-    '子~1级',
+    '子/级',
     'P0',
     '安全',
     '已登录',

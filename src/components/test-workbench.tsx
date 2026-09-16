@@ -2,7 +2,7 @@ import { ConfirmActionDialog } from './confirm-action-dialog'
 import { useConfirmAction } from '../hooks/use-confirm-action'
 import { reconcileAction } from '../confirmed-action'
 import { useDirectoryTreeState } from '../use-case-directory-tree'
-import { buildTestCaseCsv, testCaseCsvHeaders } from '../test-case-csv'
+import { buildTestCaseCsv, testCaseCsvFieldGuidance, testCaseCsvHeaders } from '../test-case-csv'
 import { DirectoryPicker, DirectoryTree } from './test-case-directory-tree'
 import { countDirectoryCases, createDirectoryIndex } from '../../shared/test-case-directories'
 import {
@@ -80,6 +80,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { MentionTextarea, type MentionMember } from './mention-textarea'
 import {
   WeeklyReportWorkbench,
@@ -1939,6 +1940,7 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
   const [moveTarget, setMoveTarget] = useState<number | null>(null)
   const [moveError, setMoveError] = useState('')
   const [exportOpen, setExportOpen] = useState(false)
+  const [exportScope, setExportScope] = useState<'filtered' | 'selected'>('filtered')
   const selectedFolderId = folderFilter.startsWith('folder:') ? Number(folderFilter.slice(7)) : undefined
   const selectedSubjectId = folderFilter.startsWith('subject:')
     ? Number(folderFilter.slice(8))
@@ -2155,7 +2157,7 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
     <div className="test-module-view test-cases-module-view">
       <div className="test-module-toolbar">
         <div><span>用例库</span><h1>用例管理</h1></div>
-        <div><Button variant="outline" disabled={!filteredCases.length} onClick={() => setExportOpen(true)}><UploadSimple /> 导出用例 ({filteredCases.length})</Button>{!readOnly && <><Button variant="outline" disabled={!selectedSubjectId} onClick={() => selectedSubjectId && onImport(selectedSubjectId, activeFolderId)}><DownloadSimple /> 导入用例</Button><Button disabled={!selectedSubjectId} onClick={() => selectedSubjectId && onCreate(selectedSubjectId, activeFolderId)}><Plus /> 新建用例</Button></>}</div>
+        <div><Button variant="outline" disabled={!filteredCases.length && !selectedCaseIds.length} onClick={() => { setExportScope(selectedCaseIds.length ? 'selected' : 'filtered'); setExportOpen(true) }}><UploadSimple /> 导出用例</Button>{!readOnly && <><Button variant="outline" disabled={!selectedSubjectId} onClick={() => selectedSubjectId && onImport(selectedSubjectId, activeFolderId)}><DownloadSimple /> 导入用例</Button><Button disabled={!selectedSubjectId} onClick={() => selectedSubjectId && onCreate(selectedSubjectId, activeFolderId)}><Plus /> 新建用例</Button></>}</div>
       </div>
       <div
         ref={directoryWorkspaceRef}
@@ -2223,14 +2225,14 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
                   }}
         ><XCircle /> 清除</Button>
       </div>
-      {!readOnly && <div className="test-directory-batch"><Label><Checkbox aria-label="选择本页用例" checked={visibleCases.length > 0 && visibleCases.every(c => checkedIds.has(c.id))} onCheckedChange={checked => setCheckedIds(prev => { const next = new Set(prev); visibleCases.forEach(c => { if (checked) next.add(c.id); else next.delete(c.id) }); return next })} /> 本页</Label><span>已选 {selectedCaseIds.length} 条</span><Button size="sm" variant="outline" disabled={busy || !selectedSubjectId || !selectedCaseIds.length || selectedCaseIds.length > 1000} onClick={() => startMove(selectedCaseIds)}>迁移用例</Button><Button size="sm" variant="ghost" disabled={!selectedCaseIds.length} onClick={() => setCheckedIds(new Set())}>清空选择</Button><small>单次最多 1000 条</small></div>}
+      <div className="test-directory-batch"><Label><Checkbox aria-label="选择本页用例" checked={visibleCases.length > 0 && visibleCases.every(c => checkedIds.has(c.id))} onCheckedChange={checked => setCheckedIds(prev => { const next = new Set(prev); visibleCases.forEach(c => { if (checked) next.add(c.id); else next.delete(c.id) }); return next })} /> 本页</Label><span>已选 {selectedCaseIds.length} 条</span>{!readOnly ? <Button size="sm" variant="outline" disabled={busy || !selectedSubjectId || !selectedCaseIds.length || selectedCaseIds.length > 1000} onClick={() => startMove(selectedCaseIds)}>迁移用例</Button> : null}<Button size="sm" variant="ghost" disabled={!selectedCaseIds.length} onClick={() => setCheckedIds(new Set())}>清空选择</Button>{!readOnly ? <small>迁移单次最多 1000 条</small> : null}</div>
       <div className="test-split-view test-cases-split-view">
         <div ref={listPanelRef} className="test-record-list-panel">
           <div
             className="test-record-list test-case-record-list"
           >
             {filteredCases.length ? visibleCases.map((item) => (
-              <div key={item.id} className="test-directory-case-row">{!readOnly && <Checkbox aria-label={`选择 CASE-${item.id}`} checked={checkedIds.has(item.id)} onCheckedChange={value => setCheckedIds(prev => { const next = new Set(prev); if (value) next.add(item.id); else next.delete(item.id); return next })} />}<button className={item.id === selectedId ? 'active' : ''} onClick={() => onSelect(item.id)}>
+              <div key={item.id} className="test-directory-case-row"><Checkbox aria-label={`选择 CASE-${item.id}`} checked={checkedIds.has(item.id)} onCheckedChange={value => setCheckedIds(prev => { const next = new Set(prev); if (value) next.add(item.id); else next.delete(item.id); return next })} /><button className={item.id === selectedId ? 'active' : ''} onClick={() => onSelect(item.id)}>
                 <div><code>CASE-{item.id}</code><Badge variant="outline">{caseTypeLabel[item.caseType]}</Badge></div>
                 <strong>{item.title}</strong>
                 <small>{caseLevelLabel[item.priority]} · {[subjects.find((subject) => subject.id === item.testSubjectId)?.name, directoryIndex.path(item.folderId ?? null).map(f => f.name).join(' / ') || '未分类'].filter(Boolean).join(' / ')}{item.customTags.length ? ` · ${item.customTags.join('、')}` : ''}</small>
@@ -2277,7 +2279,7 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
       </div>
       </div></div>
       <Dialog open={Boolean(moveIds)} onOpenChange={open => { if (!open && !busy) setMoveIds(undefined) }}><DialogContent><DialogHeader><DialogTitle>迁移 {moveIds?.length ?? 0} 条用例</DialogTitle><DialogDescription>用例编号、内容与已有执行快照保持不变。用例只能在当前测试对象内迁移。</DialogDescription></DialogHeader><DirectoryPicker folders={subjectFolders} value={moveTarget} onChange={setMoveTarget} disabled={busy} />{moveError && <p role="alert">{moveError}</p>}<DialogFooter><Button variant="outline" disabled={busy} onClick={() => setMoveIds(undefined)}>取消</Button><Button disabled={busy || !selectedSubjectId} onClick={async () => { if (!moveIds || !selectedSubjectId) return; if (await onMove(selectedSubjectId, moveIds, moveTarget)) { setMoveIds(undefined); setCheckedIds(new Set()) } else setMoveError('迁移失败，请检查权限或刷新后重试。') }}>确认迁移</Button></DialogFooter></DialogContent></Dialog>
-      <Dialog open={exportOpen} onOpenChange={setExportOpen}><DialogContent><DialogHeader><DialogTitle>导出用例</DialogTitle><DialogDescription>导出“{scopeLabel}”中符合当前筛选的全部 {filteredCases.length} 条用例（包含所有分页）。{activeFolderId !== null ? includeChildren ? '包含下级目录。' : '仅直属用例。' : ''}</DialogDescription></DialogHeader><p>筛选：{searchQuery.trim() ? `搜索“${searchQuery.trim()}”` : "不限关键词"} · {typeFilter === "all" ? "全部类型" : caseTypeLabel[typeFilter as TestCaseType]} · {priorityFilter === "all" ? "全部等级" : caseLevelLabel[priorityFilter as Priority]}</p><p>CSV 保留相对于当前目录的目录路径。</p><DialogFooter><Button variant="outline" onClick={() => setExportOpen(false)}>取消</Button><Button disabled={!filteredCases.length} onClick={() => { onExport(filteredCases, activeFolderId); setExportOpen(false) }}>导出 {filteredCases.length} 条</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={exportOpen} onOpenChange={setExportOpen}><DialogContent><DialogHeader><DialogTitle>导出用例</DialogTitle><DialogDescription>选择导出当前筛选结果，或仅导出已经勾选的用例。</DialogDescription></DialogHeader><Tabs value={exportScope} onValueChange={value => setExportScope(value as 'filtered' | 'selected')}><TabsList aria-label="导出范围"><TabsTrigger value="filtered">筛选结果 ({filteredCases.length})</TabsTrigger><TabsTrigger value="selected" disabled={!selectedCaseIds.length}>已选择 ({selectedCaseIds.length})</TabsTrigger></TabsList></Tabs><p>{exportScope === 'filtered' ? `范围：“${scopeLabel}”中符合当前筛选的全部用例，包含所有分页。` : `范围：已勾选的 ${selectedCaseIds.length} 条用例。`}</p><p>CSV 使用 ~ 分隔相对于当前目录的目录层级。</p><DialogFooter><Button variant="outline" onClick={() => setExportOpen(false)}>取消</Button><Button disabled={exportScope === 'filtered' ? !filteredCases.length : !selectedCaseIds.length} onClick={() => { const items = exportScope === 'filtered' ? filteredCases : cases.filter(item => checkedIds.has(item.id)); onExport(items, exportScope === 'filtered' ? activeFolderId : null); setExportOpen(false) }}>导出 {exportScope === 'filtered' ? filteredCases.length : selectedCaseIds.length} 条</Button></DialogFooter></DialogContent></Dialog>
     </div>
   )
 }
@@ -4228,7 +4230,7 @@ export function ImportCasesDialog({ targetFolderId, folders, busy, onOpenChange,
   const [preview, setPreview] = useState<TestCaseImportPreview>()
   const [previewing, setPreviewing] = useState(false)
   const [error, setError] = useState('')
-  const [directoryMode, setDirectoryMode] = useState<'current' | 'tree'>('current')
+  const [directoryMode, setDirectoryMode] = useState<'current' | 'tree'>('tree')
   const generation = useRef(0)
   useEffect(() => () => { generation.current += 1 }, [])
   const targetIndex = createDirectoryIndex(folders)
@@ -4298,7 +4300,14 @@ export function ImportCasesDialog({ targetFolderId, folders, busy, onOpenChange,
           <DialogDescription>目标：{subject?.name} / {targetPath}。提交时会重新校验目录与权限。</DialogDescription>
         </DialogHeader>
         <Label>导入方式<Select disabled={busy} value={directoryMode} onValueChange={value => { reset(); setDirectoryMode(value as 'current' | 'tree') }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="current">全部导入当前目录</SelectItem><SelectItem value="tree">按相对目录路径导入</SelectItem></SelectContent></Select></Label>
-        <p>{directoryMode === 'current' ? '忽略文件中的用例目录列，全部用例放入当前目录。' : '用例目录以 / 分隔；名称中的 / 写为 ~1，~ 写为 ~0。空路径表示当前目录。旧版目录路径和所属模块列仍可兼容导入。'}</p>
+        <p>{directoryMode === 'current' ? '忽略文件中的用例目录列，全部用例放入当前目录。' : '用例目录以 ~ 分隔，名称中的 ~ 写为 \\~，反斜杠写为 \\\\。空路径表示当前目录，不存在的目录会自动创建。'}</p>
+        <details className="test-import-guidance">
+          <summary>填写说明与字段示例</summary>
+          <div className="test-import-guidance-table">
+            <div className="test-import-guidance-heading"><strong>字段</strong><strong>填写规则</strong><strong>示例</strong></div>
+            {testCaseCsvFieldGuidance.map((item) => <div key={item.field}><strong>{item.field}{item.required ? ' *' : ''}</strong><span>{item.rule}</span><code>{item.example}</code></div>)}
+          </div>
+        </details>
         <div className="test-import-picker">
           <input ref={fileInputRef} hidden accept=".csv,text/csv" type="file" onChange={(event) => void selectFile(event)} />
           <FileCsv size={28} weight="duotone" />
@@ -4314,20 +4323,21 @@ export function ImportCasesDialog({ targetFolderId, folders, busy, onOpenChange,
           <div className="test-import-preview">
             <div className="test-import-metrics">
               <span><strong>{preview.rowCount}</strong> 条用例</span>
-              <span><strong>{preview.newDirectoryCount ?? 0}</strong> 个新目录</span><span><strong>{preview.reusedDirectoryCount ?? 0}</strong> 个复用目录</span>
-              <span><strong>{preview.levelCounts.P0}</strong> P0</span>
-              <span><strong>{preview.levelCounts.P1}</strong> P1</span>
-              <span><strong>{preview.levelCounts.P2}</strong> P2</span>
+              <span><strong>{preview.createCount}</strong> 条新增</span>
+              <span><strong>{preview.updateCount}</strong> 条覆盖</span>
+              <span><strong>{preview.invalidCount}</strong> 条不满足</span>
+              <span><strong>{preview.newDirectoryCount ?? 0}</strong> 个新目录</span>
+              <span><strong>{preview.reusedDirectoryCount ?? 0}</strong> 个复用目录</span>
             </div>
-            <div className="test-import-samples">
-              <span>内容预览</span>{preview.samplePaths?.map((path, i) => <small key={`${path}-${i}`}>{path}</small>)}
-              {preview.sampleTitles.map((title, index) => <p key={`${title}-${index}`}><code>{index + 1}</code>{title}</p>)}
+            <div className="test-import-results">
+              <div className="test-import-results-heading"><strong>行</strong><strong>用例</strong><strong>预检测结果</strong></div>
+              {preview.items.map((item) => <div key={`${item.rowNumber}-${item.sourceId}-${item.title}`} data-action={item.action}><code>{item.rowNumber}</code><span><strong>{item.sourceId || '新用例'}</strong><small>{item.title || '未填写名称'}</small></span><span>{item.message}</span></div>)}
             </div>
           </div>
         ) : null}
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => changeOpen(false)}>取消</Button>
-          <Button type="button" disabled={busy || previewing || !preview || !targetExists} onClick={() => void confirmImport()}>{busy ? '导入中...' : preview ? `导入 ${preview.rowCount} 条用例` : '确认导入'}</Button>
+          <Button type="button" disabled={busy || previewing || !preview || preview.invalidCount > 0 || !targetExists} onClick={() => void confirmImport()}>{busy ? '导入中...' : preview ? `执行 ${preview.validCount} 条变更` : '确认导入'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

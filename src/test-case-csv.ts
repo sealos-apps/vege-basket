@@ -5,7 +5,7 @@ import {
 import { testCaseCsvHeaders, testCaseTypeLabels } from '../shared/test-case-csv.ts'
 import type { TestCase, TestCaseFolder } from './test-workbench-types.ts'
 
-export { testCaseCsvHeaders } from '../shared/test-case-csv.ts'
+export { testCaseCsvFieldGuidance, testCaseCsvHeaders } from '../shared/test-case-csv.ts'
 
 export function buildTestCaseCsv(
   cases: TestCase[],
@@ -20,7 +20,7 @@ export function buildTestCaseCsv(
     if (rootId !== null && !path.some((folder) => folder.id === rootId))
       throw new Error('导出用例不属于当前目录。')
     return [
-      `CASE-${item.id}`,
+      item.csvCaseId || `CASE-${item.id}`,
       item.title,
       item.moduleName || '',
       encodeDirectoryPath(

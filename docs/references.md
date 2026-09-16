@@ -369,10 +369,12 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   `POST /api/test-spaces/:spaceId/cases/import?testSubjectId=:id`; add `preview=true` for
   validation-only preview. The canonical header order is exactly `用例ID`, `用例名称`,
   `所属模块`, `用例目录`, `用例等级`, `用例类型`, `前置条件`, `步骤描述`, `预期结果`,
-  and `备注`; missing, extra, duplicate, or reordered fields are rejected. `用例ID` may be
-  empty or use `CASE-<positive integer>` and is a source reference only: imported cases
-  always receive new IDs. Levels map as P0/high, P1/medium, and P2/low. Types are `功能`,
-  `回归`, `冒烟`, `安全`, or `性能`. Files are limited to 2 MB and 1000 non-empty rows.
+  and `备注`; missing, extra, duplicate, or reordered fields are rejected. Legacy CSV headers
+  and path encodings are not accepted. `用例ID` may be empty or use `CASE-<positive integer>`.
+  Within a test subject, a matching ID updates the CSV-controlled fields; an empty or unknown ID
+  creates a case, and an unknown non-empty ID is retained as that case's stable CSV ID. Levels map
+  as P0/high, P1/medium, and P2/low. Types are `功能`, `回归`, `冒烟`, `安全`, or `性能`. Files are
+  limited to 2 MB and 1000 non-empty rows.
 - Test-plan status: `draft`, `in_progress`, `completed`, `aborted`.
 - Test plans are scoped to a test space and select cases from the space-level case library. Legacy subject IDs remain in snapshots for compatibility. A plan may optionally link to an accessible project through `projectId` and must select an environment assigned to the current space through `testEnvironmentId`;
   project access is checked when creating or updating the plan. A plan response includes
@@ -688,13 +690,15 @@ Folder DTOs include `parentId: number | null`. Under `/api/test-spaces/:spaceId`
   Response is `{ movedCount, workbench }`; unchanged assignments produce no notification.
 - `POST /cases/import?testSubjectId=…&directoryMode=current|tree&targetFolderId=…`:
   UTF-8 CSV, at most 2 MiB / 1000 cases. `preview=true` validates without writes and
-  returns `preview` with `targetPath`, `newDirectoryCount`, `reusedDirectoryCount`,
-  `samplePaths` and the existing row/priority summaries. Submission revalidates.
+  returns `preview` with per-row create/update/invalid results, `targetPath`,
+  `newDirectoryCount`, `reusedDirectoryCount`, and row/priority summaries. Any invalid row
+  disables the whole import. Submission revalidates under the same subject lock before writing.
 
 `current` ignores the `用例目录` value and places all cases directly in the target.
-`tree` uses relative `用例目录`: `/` separates segments, `~1` escapes a literal slash,
-`~0` escapes a tilde, and an empty value means the selected target. New exports use the
-strict canonical header order above, emit the organization module name in `所属模块`, and
-emit a reversible path in `用例目录`. The previous `模块` plus `目录路径` format and the older
-single-directory `所属模块` format remain accepted as compatibility inputs; their absent
-type defaults to `功能`. Canonical exports intentionally omit custom tags.
+`tree` uses relative `用例目录`: `~` separates segments, `\~` escapes a literal tilde, `\\`
+escapes a literal backslash, and an empty value means the selected target. Missing path segments
+are created atomically and existing sibling directories are reused. New exports use the strict
+canonical header order above, emit the organization module name in `所属模块`, and emit this
+reversible path in `用例目录`. Canonical exports intentionally omit custom tags. The case list can
+export either every case in the active directory/search/type/priority filter or the explicitly
+selected cases across pages.

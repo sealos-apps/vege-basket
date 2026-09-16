@@ -119,10 +119,13 @@ test('name and ID validation rejects ambiguous and invalid values', () => {
 
 test('paths preserve literal slash/tilde and distinguish uncategorized from a named directory', () => {
   const names = ['A/B', '~1', '未分类', 'a,b"c']
-  assert.deepEqual(decodeDirectoryPath(encodeDirectoryPath(names)), names)
+  const encoded = encodeDirectoryPath(names)
+  assert.equal(encoded, 'A/B~\\~1~未分类~a,b"c')
+  assert.deepEqual(decodeDirectoryPath(encoded), names)
   assert.deepEqual(decodeDirectoryPath(''), [])
-  for (const value of ['/A', 'A/', 'A//B', '~2', '~'])
+  for (const value of ['~A', 'A~', 'A\\', 'A\\x'])
     assert.throws(() => decodeDirectoryPath(value))
+  assert.deepEqual(decodeDirectoryPath('父级~子/级'), ['父级', '子/级'])
   assert.deepEqual([...createDirectoryIndex(folders).descendants(1)], [1, 2, 3])
   const counts = countDirectoryCases(folders, [
     { folderId: 1 },
@@ -165,6 +168,7 @@ test('scoped CSV round trip retains hierarchy, multiline content and all supplie
     canDelete: true,
     caseType: 'functional' as const,
     createdAt: '',
+    csvCaseId: `CASE-${i + 1}`,
     id: i + 1,
     folderId: i % 2 ? 3 : 1,
     title: `用例,"${i}"`,
@@ -196,12 +200,8 @@ test('scoped CSV round trip retains hierarchy, multiline content and all supplie
   )
   const legacy =
     '用例名称,所属模块,前置条件,步骤描述,预期结果,备注,用例等级\n旧用例,/原样/保留,,,结果,,P1'
-  assert.deepEqual(parseTestCaseCsv(legacy).rows[0].directorySegments, [
-    '/原样/保留',
-  ])
-  assert.deepEqual(parseTestCaseCsv(legacy, 'tree').rows[0].directorySegments, [
-    '/原样/保留',
-  ])
+  assert.throws(() => parseTestCaseCsv(legacy), /严格使用指定字段/u)
+  assert.throws(() => parseTestCaseCsv(legacy, 'tree'), /严格使用指定字段/u)
 })
 
 test('scope lock rejects revoked/viewer access before locking resources', async () => {

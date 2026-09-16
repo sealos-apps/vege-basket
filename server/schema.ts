@@ -1833,6 +1833,44 @@ alter table test_cases
 alter table test_cases
   add column if not exists custom_tags text not null default '';
 
+alter table test_cases
+  add column if not exists csv_case_id text;
+update test_cases
+set csv_case_id = 'CASE-' || id::text
+where csv_case_id is null;
+alter table test_cases
+  alter column csv_case_id set not null;
+do $$ begin
+  alter table test_cases add constraint test_cases_csv_case_id_format
+    check (csv_case_id ~ '^CASE-[1-9][0-9]*$');
+exception when duplicate_object then null; end $$;
+create unique index if not exists idx_test_cases_subject_csv_case_id
+  on test_cases(test_space_id, test_subject_id, csv_case_id);
+
+create or replace function assign_test_case_csv_id() returns trigger as $$
+declare
+  candidate text;
+begin
+  if new.csv_case_id is null or btrim(new.csv_case_id) = '' then
+    candidate := 'CASE-' || new.id::text;
+    while exists (
+      select 1 from test_cases existing
+      where existing.test_space_id = new.test_space_id
+        and existing.test_subject_id = new.test_subject_id
+        and existing.csv_case_id = candidate
+    ) loop
+      candidate := 'CASE-9' || substring(candidate from 6);
+    end loop;
+    new.csv_case_id := candidate;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+drop trigger if exists test_cases_assign_csv_id on test_cases;
+create trigger test_cases_assign_csv_id
+before insert on test_cases
+for each row execute function assign_test_case_csv_id();
+
 alter table test_cases drop constraint if exists test_cases_case_kind_check;
 alter table test_cases drop column if exists case_kind;
 

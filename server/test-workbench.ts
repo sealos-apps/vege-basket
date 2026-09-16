@@ -26,8 +26,12 @@ import {
   resolveBugShareMentionUserIds,
   revokeBugShareLink,
 } from './bug-share.ts'
-import { parseTestCaseCsv } from './test-case-import.ts'
-import { TestCaseImportError } from './test-case-import.ts'
+import {
+  parseTestCaseCsv,
+  TestCaseImportError,
+  type TestCaseImportIssue,
+  type TestCaseImportRow,
+} from './test-case-import.ts'
 import { createDirectoryIndex, directoryName, nullableDirectoryId, parseCaseMoveIds, planDirectoryImport, TestCaseDirectoryError } from '../shared/test-case-directories.ts'
 import { caseFolderSubject, createCaseDirectory, deleteEmptyCaseDirectory, insertCaseDirectory, lockTestCaseScope, lockTestCaseSpace, moveCaseDirectories, readCaseDirectories, resolveCaseDirectory, updateCaseDirectory } from './test-case-directories.ts'
 import {
@@ -704,22 +708,6 @@ async function resolveTestWorkbenchModule(
   )
   if (!result.rows[0]) throw new TestCaseDirectoryError('模块不存在、已停用或不属于当前测试空间。', 400)
   return parsed
-}
-
-async function resolveTestWorkbenchModuleName(client: PoolClient, spaceId: number, name: string) {
-  const normalized = name.trim()
-  if (!normalized) return null
-  const result = await client.query<{ enabled: boolean; id: string; name: string }>(
-    `select module.id, module.name, module.enabled
-       from organization_project_modules module
-       join test_spaces space on space.organization_id = module.organization_id
-      where space.id = $1
-      order by module.id`,
-    [spaceId],
-  )
-  const row = result.rows.find((item) => decryptText(item.name) === normalized)
-  if (!row || !row.enabled) throw new TestCaseDirectoryError(`模块“${normalized}”不存在、已停用或不属于当前测试空间。`)
-  return Number(row.id)
 }
 
 function environmentSnapshot(name: string, accessUrl: string) {
@@ -1720,6 +1708,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       case_type: string
           created_at: Date
       created_by_user_id: string | null
+      csv_case_id: string
       custom_tags: string
       expected_result: string
       folder_id: string | null
@@ -2256,6 +2245,7 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       canDelete: canDeleteTestCase(row.created_by_user_id ? Number(row.created_by_user_id) : null, userId),
       caseType: row.case_type,
       createdAt: row.created_at.toISOString(),
+      csvCaseId: row.csv_case_id,
       customTags: decryptJson<string[]>(row.custom_tags, []),
       expectedResult: decryptText(row.expected_result),
       folderId: row.folder_id ? Number(row.folder_id) : undefined,
@@ -3444,6 +3434,121 @@ async function saveTestCaseRequest(request: express.Request, response: express.R
 
 router.post('/test-spaces/:spaceId/cases', asyncRoute((request, response) => saveTestCaseRequest(request, response, false)))
 
+type PreparedCaseImportRow = {
+  existingCaseId: number | null
+  moduleId: number | null
+  row: TestCaseImportRow
+}
+
+type TestCaseImportPreviewItem = {
+  action: 'create' | 'update' | 'invalid'
+  message: string
+  rowNumber: number
+  sourceId: string
+  title: string
+}
+
+async function inspectTestCaseImport(
+  client: PoolClient,
+  spaceId: number,
+  subjectId: number,
+  targetFolderId: number | null,
+  parsed: ReturnType<typeof parseTestCaseCsv>,
+) {
+  const directories = await readCaseDirectories(client, spaceId, subjectId)
+  const targetDepth = createDirectoryIndex(directories).path(targetFolderId).length
+  const moduleRows = await client.query<{ enabled: boolean; id: string; name: string }>(
+    `select module.id, module.name, module.enabled
+       from organization_project_modules module
+       join test_spaces space on space.organization_id = module.organization_id
+      where space.id = $1
+      order by module.id
+      for share of module, space`,
+    [spaceId],
+  )
+  const modulesByName = new Map(
+    moduleRows.rows.map((module) => [decryptText(module.name), module]),
+  )
+  const existingCases = await client.query<{ csv_case_id: string; id: string }>(
+    `select id, csv_case_id
+       from test_cases
+      where test_space_id = $1 and test_subject_id = $2
+      order by id
+      for update`,
+    [spaceId, subjectId],
+  )
+  const existingByCsvId = new Map(
+    existingCases.rows.map((item) => [item.csv_case_id, Number(item.id)]),
+  )
+  const issues: TestCaseImportIssue[] = [...parsed.preview.issues]
+  const preparedRows: PreparedCaseImportRow[] = []
+  for (const row of parsed.rows) {
+    if (targetDepth + row.directorySegments.length > 32) {
+      issues.push({
+        message: '导入后的目录超过 32 层。',
+        rowNumber: row.rowNumber,
+        sourceId: row.sourceId,
+        title: row.title,
+      })
+      continue
+    }
+    const module = row.moduleName ? modulesByName.get(row.moduleName) : undefined
+    if (row.moduleName && (!module || !module.enabled)) {
+      issues.push({
+        message: `模块“${row.moduleName}”不存在、已停用或不属于当前测试空间。`,
+        rowNumber: row.rowNumber,
+        sourceId: row.sourceId,
+        title: row.title,
+      })
+      continue
+    }
+    preparedRows.push({
+      existingCaseId: row.sourceId ? existingByCsvId.get(row.sourceId) ?? null : null,
+      moduleId: module ? Number(module.id) : null,
+      row,
+    })
+  }
+  const directoryPlan = planDirectoryImport(
+    directories,
+    targetFolderId,
+    preparedRows.map((item) => item.row.directorySegments),
+  )
+  const issueItems: TestCaseImportPreviewItem[] = issues.map((issue) => ({
+    action: 'invalid',
+    message: issue.message,
+    rowNumber: issue.rowNumber,
+    sourceId: issue.sourceId,
+    title: issue.title,
+  }))
+  const validItems: TestCaseImportPreviewItem[] = preparedRows.map((item) => ({
+    action: item.existingCaseId === null ? 'create' : 'update',
+    message: item.existingCaseId === null ? '将新增用例' : `将覆盖 CASE-${item.existingCaseId}`,
+    rowNumber: item.row.rowNumber,
+    sourceId: item.row.sourceId,
+    title: item.row.title,
+  }))
+  const items = [...issueItems, ...validItems].sort((left, right) => left.rowNumber - right.rowNumber)
+  const createCount = preparedRows.filter((item) => item.existingCaseId === null).length
+  const updateCount = preparedRows.length - createCount
+  return {
+    directoryPlan,
+    preparedRows,
+    preview: {
+      ...parsed.preview,
+      createCount,
+      invalidCount: issues.length,
+      issues,
+      items,
+      newDirectoryCount: directoryPlan.created.length,
+      reusedDirectoryCount: directoryPlan.reusedCount,
+      samplePaths: preparedRows.slice(0, 5).map((item) => item.row.directorySegments.join(' / ') || '当前目录'),
+      targetPath: directoryPlan.targetPath.join(' / ') || '根目录',
+      updateCount,
+      validCount: preparedRows.length,
+    },
+  }
+}
+
 router.post(
   '/test-spaces/:spaceId/cases/import',
   express.text({ limit: '2mb', type: ['text/csv', 'text/plain'] }),
@@ -3454,49 +3559,60 @@ router.post(
     if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
     const subjectId = positiveId(request.query.testSubjectId)
     if (!subjectId) throw new TestCaseDirectoryError('测试对象 ID 无效。')
-    const mode = request.query.directoryMode ?? 'legacy'
-    if (mode !== 'current' && mode !== 'tree' && mode !== 'legacy') throw new TestCaseDirectoryError('导入目录方式无效。')
+    const mode = request.query.directoryMode ?? 'tree'
+    if (mode !== 'current' && mode !== 'tree') throw new TestCaseDirectoryError('导入目录方式无效。')
     const targetFolderId = request.query.targetFolderId === undefined ? null : nullableDirectoryId(request.query.targetFolderId)
-    if (mode === 'legacy' && targetFolderId !== null) throw new TestCaseDirectoryError('旧版导入只能使用测试对象根目录。')
     const parsed = parseTestCaseCsv(typeof request.body === 'string' ? request.body : '', mode)
     const preview = await transaction(async (client) => {
       await lockTestCaseScope(client, spaceId!, subjectId, session.userId)
-      const directories = await readCaseDirectories(client, spaceId!, subjectId)
-      const plan = planDirectoryImport(directories, targetFolderId, parsed.rows.map((row) => row.directorySegments))
-      const result = {
-        ...parsed.preview,
-        targetPath: plan.targetPath.join(' / ') || '根目录',
-        newDirectoryCount: plan.created.length,
-        reusedDirectoryCount: plan.reusedCount,
-        samplePaths: parsed.rows.slice(0, 5).map((row) => row.directorySegments.join(' / ') || '当前目录'),
+      const inspection = await inspectTestCaseImport(client, spaceId!, subjectId, targetFolderId, parsed)
+      if (request.query.preview === 'true') return inspection.preview
+      if (inspection.preview.invalidCount > 0) {
+        throw new TestCaseImportError(`CSV 中有 ${inspection.preview.invalidCount} 条用例不满足导入条件，请重新预检测。`)
       }
-      if (request.query.preview === 'true') return result
       // The complete input and every target path are validated before the first write.
       const insertedIds = new Map<number, number>()
-      for (const directory of plan.created) {
+      for (const directory of inspection.directoryPlan.created) {
         const parentId = directory.parentId !== null && directory.parentId < 0 ? insertedIds.get(directory.parentId)! : directory.parentId
         insertedIds.set(directory.id, await insertCaseDirectory(client, spaceId!, subjectId, directory.name, parentId))
       }
-      for (const [index, row] of parsed.rows.entries()) {
-        const plannedId = plan.folderIds[index]
+      for (const [index, item] of inspection.preparedRows.entries()) {
+        const { row } = item
+        const plannedId = inspection.directoryPlan.folderIds[index]
         const folderId = plannedId !== null && plannedId < 0 ? insertedIds.get(plannedId)! : plannedId
-        const moduleId = await resolveTestWorkbenchModuleName(client, spaceId!, row.moduleName)
-        await client.query(
-          `insert into test_cases
-            (test_space_id, test_subject_id, folder_id, organization_module_id, title, preconditions, steps,
-             expected_result, remarks, priority, case_type, custom_tags, status, created_by_user_id)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', $13)`,
-          [spaceId, subjectId, folderId, moduleId, encryptText(row.title), encryptText(row.preconditions), encryptText(row.steps),
-            encryptText(row.expectedResult), encryptText(row.remarks), row.priority, row.caseType, encryptJson(row.customTags), session.userId],
-        )
+        const values = [folderId, item.moduleId, encryptText(row.title), encryptText(row.preconditions), encryptText(row.steps),
+          encryptText(row.expectedResult), encryptText(row.remarks), row.priority, row.caseType]
+        if (item.existingCaseId !== null) {
+          await client.query(
+            `update test_cases
+                set folder_id = $1, organization_module_id = $2, title = $3, preconditions = $4,
+                    steps = $5, expected_result = $6, remarks = $7, priority = $8, case_type = $9,
+                    updated_at = now()
+              where id = $10 and test_space_id = $11 and test_subject_id = $12`,
+            [...values, item.existingCaseId, spaceId, subjectId],
+          )
+        } else {
+          await client.query(
+            `insert into test_cases
+              (test_space_id, test_subject_id, folder_id, organization_module_id, title, preconditions, steps,
+               expected_result, remarks, priority, case_type, custom_tags, status, created_by_user_id, csv_case_id)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', $13, $14)`,
+            [spaceId, subjectId, ...values, encryptJson(row.customTags), session.userId, row.sourceId || null],
+          )
+        }
       }
-      return result
+      return inspection.preview
     })
     if (request.query.preview === 'true') {
       response.json({ preview })
       return
     }
-    response.status(201).json({ importedCount: parsed.rows.length, workbench: await getTestWorkbench(session.userId) })
+    response.status(201).json({
+      createdCount: preview.createCount,
+      importedCount: preview.validCount,
+      updatedCount: preview.updateCount,
+      workbench: await getTestWorkbench(session.userId),
+    })
   }),
 )
 

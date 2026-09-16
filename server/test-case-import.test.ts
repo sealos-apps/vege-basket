@@ -5,13 +5,15 @@ import { testCaseCsvHeaders } from '../shared/test-case-csv.ts'
 import { parseTestCaseCsv, TestCaseImportError } from './test-case-import.ts'
 
 const testWorkbenchSource = readFileSync(new URL('./test-workbench.ts', import.meta.url), 'utf8')
+const schemaSource = readFileSync(new URL('./schema.ts', import.meta.url), 'utf8')
+const testWorkbenchClientSource = readFileSync(new URL('../src/components/test-workbench.tsx', import.meta.url), 'utf8')
 
 function canonicalCsv(row: string) {
   return `\uFEFF${testCaseCsvHeaders.join(',')}\r\n${row}`
 }
 
 test('parses the strict Chinese CSV contract including ids, types and directory paths', () => {
-  const csv = canonicalCsv('CASE-17,"创建,并启动",账户模块,DevBox/业务/创建,P0,冒烟,已登录,"[1] 点击创建\n[2] 点击启动",运行成功,覆盖AC-001')
+  const csv = canonicalCsv('CASE-17,"创建,并启动",账户模块,DevBox~业务~创建,P0,冒烟,已登录,"[1] 点击创建\n[2] 点击启动",运行成功,覆盖AC-001')
   const result = parseTestCaseCsv(csv, 'tree')
 
   assert.equal(result.rows.length, 1)
@@ -48,31 +50,46 @@ test('rejects missing, extra, reordered and invalid strict CSV fields', () => {
     () => parseTestCaseCsv(`${reorderedHeaders}\n用例A,,,目录A,P1,功能,,,结果,`, 'tree'),
     (error) => error instanceof TestCaseImportError && error.message.includes('表头顺序'),
   )
-  assert.throws(
-    () => parseTestCaseCsv(canonicalCsv('17,用例A,,目录A,P1,功能,,,结果,'), 'tree'),
-    (error) => error instanceof TestCaseImportError && error.message.includes('CASE-数字'),
-  )
-  assert.throws(
-    () => parseTestCaseCsv(canonicalCsv(',用例A,,目录A,P3,功能,,,结果,'), 'tree'),
-    (error) => error instanceof TestCaseImportError && error.message.includes('P0、P1 或 P2'),
-  )
-  assert.throws(
-    () => parseTestCaseCsv(canonicalCsv(',用例A,,目录A,P1,兼容性,,,结果,'), 'tree'),
-    (error) => error instanceof TestCaseImportError && error.message.includes('功能、回归、冒烟、安全或性能'),
-  )
+  const invalid = parseTestCaseCsv(`${testCaseCsvHeaders.join(',')}\n17,用例A,,目录A,P1,功能,,,结果,\n,用例B,,目录A,P3,功能,,,结果,\n,用例C,,目录A,P1,兼容性,,,结果,`, 'tree')
+  assert.equal(invalid.rows.length, 0)
+  assert.equal(invalid.preview.issues.length, 3)
+  assert.match(invalid.preview.issues[0].message, /CASE-数字/u)
+  assert.match(invalid.preview.issues[1].message, /P0、P1 或 P2/u)
+  assert.match(invalid.preview.issues[2].message, /功能、回归、冒烟、安全或性能/u)
 })
 
-test('keeps the previous module and directory CSV format importable', () => {
+test('rejects the previous module and directory CSV format', () => {
   const csv = `\uFEFF用例名称,模块,所属模块,前置条件,步骤描述,预期结果,备注,用例等级,自定义标签,目录路径\r\n旧用例,账户模块,旧目录,前置,步骤,结果,备注,P2,核心,父级/子级`
-  const result = parseTestCaseCsv(csv, 'tree')
-  assert.equal(result.rows[0].sourceId, '')
-  assert.equal(result.rows[0].moduleName, '账户模块')
-  assert.equal(result.rows[0].caseType, 'functional')
-  assert.deepEqual(result.rows[0].customTags, ['核心'])
-  assert.deepEqual(result.rows[0].directorySegments, ['父级', '子级'])
+  assert.throws(
+    () => parseTestCaseCsv(csv, 'tree'),
+    (error) => error instanceof TestCaseImportError && error.message.includes('严格使用指定字段'),
+  )
 })
 
-test('case import persists the validated priority and type in their matching columns', () => {
-  assert.match(testWorkbenchSource, /remarks, priority, case_type, custom_tags, status, created_by_user_id\)\s*values \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, 'active', \$13\)/u)
-  assert.match(testWorkbenchSource, /row\.priority, row\.caseType, encryptJson\(row\.customTags\), session\.userId/u)
+test('marks every occurrence of a repeated case ID as invalid', () => {
+  const result = parseTestCaseCsv(`${testCaseCsvHeaders.join(',')}\nCASE-8,用例A,,目录A,P1,功能,,,结果,\nCASE-8,用例B,,目录B,P2,回归,,,结果,`, 'tree')
+  assert.equal(result.rows.length, 0)
+  assert.equal(result.preview.issues.length, 2)
+  assert.ok(result.preview.issues.every((issue) => issue.message.includes('重复')))
+})
+
+test('case import preflights create, update and invalid rows before writing', () => {
+  assert.match(testWorkbenchSource, /existingCaseId: row\.sourceId \? existingByCsvId\.get\(row\.sourceId\) \?\? null : null/u)
+  assert.match(testWorkbenchSource, /if \(inspection\.preview\.invalidCount > 0\)/u)
+  assert.match(testWorkbenchSource, /update test_cases[\s\S]*folder_id = \$1[\s\S]*case_type = \$9/u)
+  assert.match(testWorkbenchSource, /created_by_user_id, csv_case_id/u)
+})
+
+test('database keeps stable CSV IDs unique and assigns collision-safe IDs to ordinary cases', () => {
+  assert.match(schemaSource, /add column if not exists csv_case_id text/u)
+  assert.match(schemaSource, /idx_test_cases_subject_csv_case_id[\s\S]*test_space_id, test_subject_id, csv_case_id/u)
+  assert.match(schemaSource, /while exists \([\s\S]*existing\.csv_case_id = candidate[\s\S]*candidate := 'CASE-9'/u)
+})
+
+test('import and export dialogs expose preflight details, field examples and selected-case export', () => {
+  assert.match(testWorkbenchClientSource, /填写说明与字段示例/u)
+  assert.match(testWorkbenchClientSource, /preview\.items\.map/u)
+  assert.match(testWorkbenchClientSource, /preview\.invalidCount > 0/u)
+  assert.match(testWorkbenchClientSource, /TabsTrigger value="filtered"/u)
+  assert.match(testWorkbenchClientSource, /TabsTrigger value="selected"/u)
 })

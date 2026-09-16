@@ -544,8 +544,11 @@ Atomicity rules:
   partial project-derived text.
 - Disconnecting Feishu disables the user's daily digest subscription in the same
   transaction that clears the bound identity.
-- CSV test-case imports validate the complete file before the first write, then create or
-  reuse case directories and insert every encrypted case in one transaction.
+- Strict CSV test-case imports use `~`-separated relative directory paths and reject legacy
+  headers and path encodings. Preflight classifies every row as create, update, or invalid.
+  Submission revalidates before the first write, then creates or reuses case directories and
+  inserts or updates every encrypted case in one transaction. Stable CSV case IDs are unique
+  within a test subject; unknown or empty IDs create cases and matching IDs update CSV fields.
 - Concurrency safety must be enforced by database constraints plus conflict-safe SQL,
   not by a standalone select-before-insert check.
 
