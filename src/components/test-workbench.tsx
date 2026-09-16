@@ -4298,7 +4298,7 @@ export function ImportCasesDialog({ targetFolderId, folders, busy, onOpenChange,
           <DialogDescription>目标：{subject?.name} / {targetPath}。提交时会重新校验目录与权限。</DialogDescription>
         </DialogHeader>
         <Label>导入方式<Select disabled={busy} value={directoryMode} onValueChange={value => { reset(); setDirectoryMode(value as 'current' | 'tree') }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="current">全部导入当前目录</SelectItem><SelectItem value="tree">按相对目录路径导入</SelectItem></SelectContent></Select></Label>
-        <p>{directoryMode === 'current' ? '忽略文件中的目录列，全部用例放入当前目录。' : '目录路径以 / 分隔；名称中的 / 写为 ~1，~ 写为 ~0。空路径表示当前目录。旧所属模块列作为单个子目录名称。'}</p>
+        <p>{directoryMode === 'current' ? '忽略文件中的用例目录列，全部用例放入当前目录。' : '用例目录以 / 分隔；名称中的 / 写为 ~1，~ 写为 ~0。空路径表示当前目录。旧版目录路径和所属模块列仍可兼容导入。'}</p>
         <div className="test-import-picker">
           <input ref={fileInputRef} hidden accept=".csv,text/csv" type="file" onChange={(event) => void selectFile(event)} />
           <FileCsv size={28} weight="duotone" />

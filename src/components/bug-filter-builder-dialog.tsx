@@ -71,7 +71,7 @@ const priorityOptions: BugFilterOption[] = [
 ]
 
 function optionsForField(field: BugFilterField, options: BugFilterOptions) {
-  if (field === 'caseLink') return [{ label: '待补关联', value: 'unlinked' }, { label: '已关联', value: 'linked' }]
+  if (field === 'caseLink') return [{ label: '已关联', value: 'linked' }, { label: '未关联', value: 'unlinked' }]
   if (field === 'testSpace') return options.spaces
   if (field === 'module') return options.modules
   if (field === 'testPlan') return options.plans

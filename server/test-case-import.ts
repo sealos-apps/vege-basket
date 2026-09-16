@@ -1,7 +1,12 @@
 import { parse } from 'csv-parse/sync'
 import { decodeDirectoryPath, directoryName, type TestCaseDirectoryMode } from '../shared/test-case-directories.ts'
+import {
+  testCaseCsvHeaders,
+  testCaseTypeByLabel,
+  type TestCaseCsvType,
+} from '../shared/test-case-csv.ts'
 
-const requiredHeaders = [
+const legacyRequiredHeaders = [
   '用例名称',
   '模块',
   '前置条件',
@@ -18,6 +23,7 @@ const priorityByLevel = {
 } as const
 
 export type TestCaseImportRow = {
+  caseType: TestCaseCsvType
   customTags: string[]
   expectedResult: string
   level: keyof typeof priorityByLevel
@@ -27,6 +33,7 @@ export type TestCaseImportRow = {
   preconditions: string
   priority: (typeof priorityByLevel)[keyof typeof priorityByLevel]
   remarks: string
+  sourceId: string
   steps: string
   title: string
 }
@@ -89,11 +96,27 @@ export function parseTestCaseCsv(csvText: string, directoryMode: TestCaseDirecto
   if (new Set(headers).size !== headers.length) {
     importError('CSV 表头存在重复字段。')
   }
-  const hasLegacyModuleHeader = headers.includes('所属模块') && !headers.includes('模块')
-  const missingHeaders = requiredHeaders.filter((header) => header !== '模块' ? !headers.includes(header) : !headers.includes(header) && !hasLegacyModuleHeader)
-  if (directoryMode === 'tree' && !headers.includes('目录路径') && !headers.includes('所属模块')) importError('CSV 缺少字段：目录路径或所属模块。')
-  if (missingHeaders.length > 0) {
-    importError(`CSV 缺少字段：${missingHeaders.join('、')}。`)
+  const canonicalFormat = headers.some((header) => header === '用例ID' || header === '用例目录' || header === '用例类型')
+  if (canonicalFormat) {
+    const missingHeaders = testCaseCsvHeaders.filter((header) => !headers.includes(header))
+    const unknownHeaders = headers.filter((header) => !testCaseCsvHeaders.includes(header as (typeof testCaseCsvHeaders)[number]))
+    if (missingHeaders.length || unknownHeaders.length) {
+      const details = [
+        missingHeaders.length ? `缺少：${missingHeaders.join('、')}` : '',
+        unknownHeaders.length ? `多余：${unknownHeaders.join('、')}` : '',
+      ].filter(Boolean).join('；')
+      importError(`CSV 表头必须严格使用指定字段（${details}）。`)
+    }
+    if (headers.some((header, index) => header !== testCaseCsvHeaders[index])) {
+      importError(`CSV 表头顺序必须为：${testCaseCsvHeaders.join('、')}。`)
+    }
+  } else {
+    const hasLegacyModuleHeader = headers.includes('所属模块') && !headers.includes('模块')
+    const missingHeaders = legacyRequiredHeaders.filter((header) => header !== '模块' ? !headers.includes(header) : !headers.includes(header) && !hasLegacyModuleHeader)
+    if (directoryMode === 'tree' && !headers.includes('目录路径') && !headers.includes('所属模块')) importError('CSV 缺少字段：目录路径或所属模块。')
+    if (missingHeaders.length > 0) {
+      importError(`CSV 缺少字段：${missingHeaders.join('、')}。`)
+    }
   }
   const records = parsedRecords.filter((record) =>
     headers.some((header) => String(record[header] ?? '').trim()),
@@ -103,22 +126,30 @@ export function parseTestCaseCsv(csvText: string, directoryMode: TestCaseDirecto
 
   const rows = records.map((record, index): TestCaseImportRow => {
     const rowNumber = index + 2
+    const sourceId = canonicalFormat ? limited(record['用例ID'], 40, rowNumber, '用例ID') : ''
     const title = limited(record['用例名称'], 160, rowNumber, '用例名称')
-    const moduleName = limited(record['模块'] ?? '', 160, rowNumber, '模块')
-    const legacyPath = limited(record['所属模块'], directoryMode === 'legacy' ? 240 : 16000, rowNumber, '所属模块')
+    const moduleName = limited(canonicalFormat ? record['所属模块'] : record['模块'], 160, rowNumber, '所属模块')
+    const legacyPath = canonicalFormat ? '' : limited(record['所属模块'], directoryMode === 'legacy' ? 240 : 16000, rowNumber, '所属模块')
     const level = limited(record['用例等级'], 2, rowNumber, '用例等级').toUpperCase()
+    const caseTypeLabel = canonicalFormat ? limited(record['用例类型'], 10, rowNumber, '用例类型') : '功能'
+    const caseType = testCaseTypeByLabel[caseTypeLabel as keyof typeof testCaseTypeByLabel]
+    if (sourceId && !/^CASE-[1-9]\d*$/u.test(sourceId)) importError(`第 ${rowNumber} 行“用例ID”必须留空或使用 CASE-数字 格式。`)
     if (!title) importError(`第 ${rowNumber} 行“用例名称”不能为空。`)
-    if (directoryMode === 'legacy' && !legacyPath) importError(`第 ${rowNumber} 行“所属模块”不能为空。`)
+    if (!canonicalFormat && directoryMode === 'legacy' && !legacyPath) importError(`第 ${rowNumber} 行“所属模块”不能为空。`)
     const directorySegments = directoryMode === 'current' ? []
+      : canonicalFormat
+        ? decodeDirectoryPath(limited(record['用例目录'], 16000, rowNumber, '用例目录'))
       : directoryMode === 'tree' && headers.includes('目录路径')
         ? decodeDirectoryPath(limited(record['目录路径'], 16000, rowNumber, '目录路径'))
         : legacyPath ? [directoryName(legacyPath)] : []
     if (!(level in priorityByLevel)) {
       importError(`第 ${rowNumber} 行“用例等级”必须是 P0、P1 或 P2。`)
     }
+    if (!caseType) importError('第 ' + rowNumber + ' 行“用例类型”必须是功能、回归、冒烟、安全或性能。')
     const normalizedLevel = level as keyof typeof priorityByLevel
     return {
-      customTags: parseTags(record['自定义标签'] ?? record['标签'], rowNumber),
+      caseType,
+      customTags: canonicalFormat ? [] : parseTags(record['自定义标签'] ?? record['标签'], rowNumber),
       expectedResult: limited(record['预期结果'], 10000, rowNumber, '预期结果'),
       level: normalizedLevel,
       modulePath: legacyPath,
@@ -127,6 +158,7 @@ export function parseTestCaseCsv(csvText: string, directoryMode: TestCaseDirecto
       preconditions: limited(record['前置条件'], 5000, rowNumber, '前置条件'),
       priority: priorityByLevel[normalizedLevel],
       remarks: limited(record['备注'], 5000, rowNumber, '备注'),
+      sourceId,
       steps: limited(record['步骤描述'], 10000, rowNumber, '步骤描述'),
       title,
     }

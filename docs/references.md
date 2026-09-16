@@ -367,9 +367,12 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   execution snapshots remain and their nullable `test_case_id` is cleared.
 - Test-case CSV import accepts UTF-8 `text/csv` at
   `POST /api/test-spaces/:spaceId/cases/import?testSubjectId=:id`; add `preview=true` for
-  validation-only preview. Required headers are `用例名称`, `模块`, `前置条件`,
-  `步骤描述`, `预期结果`, `备注`, and `用例等级`. Levels map as P0/high,
-  P1/medium, and P2/low. Files are limited to 2 MB and 1000 non-empty rows.
+  validation-only preview. The canonical header order is exactly `用例ID`, `用例名称`,
+  `所属模块`, `用例目录`, `用例等级`, `用例类型`, `前置条件`, `步骤描述`, `预期结果`,
+  and `备注`; missing, extra, duplicate, or reordered fields are rejected. `用例ID` may be
+  empty or use `CASE-<positive integer>` and is a source reference only: imported cases
+  always receive new IDs. Levels map as P0/high, P1/medium, and P2/low. Types are `功能`,
+  `回归`, `冒烟`, `安全`, or `性能`. Files are limited to 2 MB and 1000 non-empty rows.
 - Test-plan status: `draft`, `in_progress`, `completed`, `aborted`.
 - Test plans are scoped to a test space and select cases from the space-level case library. Legacy subject IDs remain in snapshots for compatibility. A plan may optionally link to an accessible project through `projectId` and must select an environment assigned to the current space through `testEnvironmentId`;
   project access is checked when creating or updating the plan. A plan response includes
@@ -688,10 +691,10 @@ Folder DTOs include `parentId: number | null`. Under `/api/test-spaces/:spaceId`
   returns `preview` with `targetPath`, `newDirectoryCount`, `reusedDirectoryCount`,
   `samplePaths` and the existing row/priority summaries. Submission revalidates.
 
-`current` ignores directory columns and places all cases directly in the target.
-`tree` uses relative `目录路径`: `/` separates segments, `~1` escapes a literal slash,
-`~0` escapes a tilde, and an empty value means the selected target. If the path column
-is absent, legacy `所属模块` is treated as one literal child name. Omitting `directoryMode`
-retains legacy root-module import behavior. Other required Chinese CSV fields and
-priority mappings remain unchanged. Exports include `模块`, a readable legacy `所属模块`,
-and the reversible relative `目录路径`; uncategorized exports use an empty path.
+`current` ignores the `用例目录` value and places all cases directly in the target.
+`tree` uses relative `用例目录`: `/` separates segments, `~1` escapes a literal slash,
+`~0` escapes a tilde, and an empty value means the selected target. New exports use the
+strict canonical header order above, emit the organization module name in `所属模块`, and
+emit a reversible path in `用例目录`. The previous `模块` plus `目录路径` format and the older
+single-directory `所属模块` format remain accepted as compatibility inputs; their absent
+type defaults to `功能`. Canonical exports intentionally omit custom tags.

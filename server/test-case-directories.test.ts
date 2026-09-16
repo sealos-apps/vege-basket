@@ -162,6 +162,9 @@ test('scoped CSV round trip retains hierarchy, multiline content and all supplie
     createdAt: '',
   })) satisfies TestCaseFolder[]
   const cases = Array.from({ length: 35 }, (_, i) => ({
+    canDelete: true,
+    caseType: 'functional' as const,
+    createdAt: '',
     id: i + 1,
     folderId: i % 2 ? 3 : 1,
     title: `用例,"${i}"`,
@@ -171,7 +174,11 @@ test('scoped CSV round trip retains hierarchy, multiline content and all supplie
     remarks: '',
     priority: 'high',
     customTags: ['核心'],
-  })) as TestCase[]
+    status: 'active' as const,
+    testSpaceId: 1,
+    testSubjectId: 1,
+    updatedAt: '',
+  })) satisfies TestCase[]
   const csv = buildTestCaseCsv(cases, typedFolders, 1)
   const parsed = parseTestCaseCsv(csv, 'tree')
   assert.equal(parsed.rows.length, 35)

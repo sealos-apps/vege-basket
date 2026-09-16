@@ -3485,9 +3485,9 @@ router.post(
           `insert into test_cases
             (test_space_id, test_subject_id, folder_id, organization_module_id, title, preconditions, steps,
              expected_result, remarks, priority, case_type, custom_tags, status, created_by_user_id)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'functional', $10, 'active', $11, $12)`,
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', $13)`,
           [spaceId, subjectId, folderId, moduleId, encryptText(row.title), encryptText(row.preconditions), encryptText(row.steps),
-            encryptText(row.expectedResult), encryptText(row.remarks), row.priority, encryptJson(row.customTags), session.userId],
+            encryptText(row.expectedResult), encryptText(row.remarks), row.priority, row.caseType, encryptJson(row.customTags), session.userId],
         )
       }
       return result

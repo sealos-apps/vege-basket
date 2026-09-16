@@ -545,7 +545,7 @@ Atomicity rules:
 - Disconnecting Feishu disables the user's daily digest subscription in the same
   transaction that clears the bound identity.
 - CSV test-case imports validate the complete file before the first write, then create or
-  reuse module folders and insert every encrypted case in one transaction.
+  reuse case directories and insert every encrypted case in one transaction.
 - Concurrency safety must be enforced by database constraints plus conflict-safe SQL,
   not by a standalone select-before-insert check.
 

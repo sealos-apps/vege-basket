@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import {
+  bugFilterFieldLabels,
+  bugFilterFields,
   createDefaultBugFilterConditions,
   getDefaultBugFilterValue,
   matchesBugFilterConditions,
@@ -65,6 +67,16 @@ test('linked directory and case filters are one atomic group under OR', () => {
   assert.equal(matchesBugFilterConditions(baseBug, [{ ...scope, value: 'all', folderId: 'all' }, condition('status', 'equals', 'closed')], 'or'), false)
   assert.equal(matchesBugFilterConditions({ ...baseBug, testCaseId: undefined }, [condition('caseLink', 'equals', 'unlinked')], 'and'), true)
   assert.equal(matchesBugFilterConditions(baseBug, [condition('caseLink', 'equals', 'unlinked')], 'and'), false)
+})
+
+test('Bug filters expose the case association status without restoring case selectors', () => {
+  assert.ok(bugFilterFields.includes('caseLink'))
+  assert.equal(bugFilterFieldLabels.caseLink, '关联状态')
+  assert.ok(!bugFilterFields.includes('testCase'))
+  assert.ok(!bugFilterFields.includes('caseFolder'))
+  assert.ok(!bugFilterFields.includes('caseScope'))
+  assert.match(filterDialogSource, /\{ label: '已关联', value: 'linked' \}/u)
+  assert.match(filterDialogSource, /\{ label: '未关联', value: 'unlinked' \}/u)
 })
 
 test('bug filters match linked test fields and people by stable ids', () => {
