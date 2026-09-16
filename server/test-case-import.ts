@@ -1,5 +1,5 @@
 import { parse } from 'csv-parse/sync'
-import { decodeDirectoryPath, type TestCaseDirectoryMode } from '../shared/test-case-directories.ts'
+import { decodeRootDirectoryPath } from '../shared/test-case-directories.ts'
 import {
   testCaseCsvHeaders,
   testCaseTypeByLabel,
@@ -63,7 +63,7 @@ function limited(value: unknown, maxLength: number, rowNumber: number, field: st
   return normalized
 }
 
-export function parseTestCaseCsv(csvText: string, directoryMode: TestCaseDirectoryMode = 'tree') {
+export function parseTestCaseCsv(csvText: string) {
   if (!csvText.trim()) importError('CSV 文件为空。')
 
   let headers: string[] = []
@@ -118,9 +118,7 @@ export function parseTestCaseCsv(csvText: string, directoryMode: TestCaseDirecto
       const caseType = testCaseTypeByLabel[caseTypeLabel as keyof typeof testCaseTypeByLabel]
       if (sourceId && !/^CASE-[1-9]\d*$/u.test(sourceId)) importError(`第 ${rowNumber} 行“用例ID”必须留空或使用 CASE-数字 格式。`)
       if (!title) importError(`第 ${rowNumber} 行“用例名称”不能为空。`)
-      const directorySegments = directoryMode === 'current'
-        ? []
-        : decodeDirectoryPath(limited(record['用例目录'], 16000, rowNumber, '用例目录'))
+      const directorySegments = decodeRootDirectoryPath(limited(record['用例目录'], 16000, rowNumber, '用例目录'))
       if (!(level in priorityByLevel)) {
         importError(`第 ${rowNumber} 行“用例等级”必须是 P0、P1 或 P2。`)
       }

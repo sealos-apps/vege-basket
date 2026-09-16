@@ -85,7 +85,7 @@ function formatTesterSource(params: GenerationSourceParams) {
   const plans = params.testerPlans.length
     ? params.testerPlans.map((plan) => [
       `### 计划：${clip(plan.planName, 160)}`,
-      `- 测试对象：${clip(plan.testTarget, 160)}`,
+      `- 一级目录：${clip(plan.testTarget, 160)}`,
       `- 本周执行：${plan.executed} 条`,
       `- 通过：${plan.passed} 条，失败：${plan.failed} 条，阻塞：${plan.blocked} 条，跳过：${plan.skipped} 条`,
     ].join('\n')).join('\n')
@@ -93,7 +93,7 @@ function formatTesterSource(params: GenerationSourceParams) {
   return [
     `周报对象：${clip(params.organizationName, 100)} / ${clip(params.userName, 80)}`,
     `周期：${formatChinesePeriod(params.weekStart)}`,
-    '请输出可直接编辑的中文 Markdown 周报。测试工程师没有项目日记，只总结测试计划和用例执行情况，并将事实分别整理到固定的四个章节；必须写清每个测试计划的具体标题和测试对象，不要补写项目待办或交付事件明细。',
+    '请输出可直接编辑的中文 Markdown 周报。测试工程师没有项目日记，只总结测试计划和用例执行情况，并将事实分别整理到固定的四个章节；必须写清每个测试计划的具体标题和一级目录，不要补写项目待办或交付事件明细。',
     WEEKLY_REPORT_AI_STRUCTURE_INSTRUCTION,
     '输入事实：测试计划与用例执行',
     plans,

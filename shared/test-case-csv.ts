@@ -24,8 +24,8 @@ export type TestCaseCsvType = keyof typeof testCaseTypeLabels
 export const testCaseCsvFieldGuidance = [
   { field: '用例ID', required: false, rule: '留空或填写 CASE-数字；已存在则覆盖，未找到则新增', example: 'CASE-2846' },
   { field: '用例名称', required: true, rule: '最多 160 个字符', example: '扩容超限提示' },
-  { field: '所属模块', required: false, rule: '必须与组织中已启用的模块同名；留空表示无模块', example: 'License' },
-  { field: '用例目录', required: false, rule: '使用 ~ 分隔层级；目录名中的 ~ 写为 \\~，反斜杠写为 \\\\；不存在的目录自动创建', example: 'License~业务~资源扩容配额控制' },
+  { field: '所属模块', required: false, rule: '必须与当前测试空间所属组织中已启用的模块同名；留空表示无模块', example: '以当前可用模块为准' },
+  { field: '用例目录', required: false, rule: '填写以 ~ 开头的完整根路径，并使用 ~ 分隔层级；目录名中的 ~ 写为 \\~，反斜杠写为 \\\\；留空表示根目录，不存在的目录自动创建', example: '~License~业务~资源扩容配额控制' },
   { field: '用例等级', required: true, rule: '只能填写 P0、P1 或 P2', example: 'P0' },
   { field: '用例类型', required: true, rule: '功能、回归、冒烟、安全或性能', example: '功能' },
   { field: '前置条件', required: false, rule: '最多 5000 个字符', example: '用户已登录' },

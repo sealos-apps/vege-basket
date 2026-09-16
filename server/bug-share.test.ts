@@ -42,7 +42,7 @@ test('Bug shares retain the space version and module for Bugs without a test cas
   assert.match(bugShareSource, /space\.version_label as test_space_version_label/u)
   assert.match(bugShareSource, /organization_module\.name as organization_module_name/u)
   assert.match(bugShareSource, /left join test_subjects subject on subject\.id = b\.test_subject_id/u)
-  assert.match(bugShareSource, /testSubjectName: bug\.test_subject_name \? decryptText\(bug\.test_subject_name\) : '未关联测试对象'/u)
+  assert.match(bugShareSource, /testSubjectName: bug\.test_subject_name \? decryptText\(bug\.test_subject_name\) : '未关联一级目录'/u)
   assert.match(bugShareSource, /testSpaceVersionLabel: bug\.test_space_version_label \? decryptText\(bug\.test_space_version_label\)/u)
   assert.match(bugShareSource, /moduleName: bug\.organization_module_name \? decryptText\(bug\.organization_module_name\)/u)
   assert.match(bugShareViewSource, /formatTestSpaceReference\(data\.testSpaceName, data\.testSpaceVersionLabel\)/u)

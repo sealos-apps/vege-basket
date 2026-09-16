@@ -449,6 +449,24 @@ rolling back only the container image is not safe. Restore a compatible database
 snapshot and encryption key ring as part of a coordinated rollback, or roll forward.
 Do not attempt to recreate the old global uniqueness constraint on a populated tree.
 
+## Root-based CSV case paths
+
+`server/migrations/20260916_test_case_csv_root_paths.sql` adds one optional system-root
+marker per test space, makes stable CSV case IDs unique across the whole test space, and
+makes the Bug/case scope foreign key deferrable so a linked case can move between
+first-level directories atomically with its Bugs. Normal startup applies the same DDL.
+Take a database snapshot and retain the full encryption key ring before starting the
+new API. The migration aborts before replacing the old CSV-ID index if duplicate IDs
+already exist within a test space; inventory and resolve those conflicts explicitly
+rather than renaming IDs automatically.
+
+Application rollback does not remove the additive root marker or restore subject-scoped
+CSV-ID uniqueness. Old code can read ordinary rows, but it cannot safely reproduce the
+new full-path import behavior. Prefer a forward fix or restore the approved snapshot.
+In an authorized rehearsal database, verify empty-path root cases, multi-root imports,
+leading-`~` complete paths, ID-based moves with linked Bugs, concurrent directory creation, and complete-path
+export/import round trips before production rollout.
+
 Acceptance in an authorized isolated PostgreSQL environment must exercise concurrent
 create/move/import/delete requests (including permission revocation while waiting),
 nonempty deletion rejection, wrong-subject parents/cases, and whole-batch rollback.

@@ -224,7 +224,7 @@ async function readView(token: string, userId?: number | null) {
     testPlanName: bug.test_plan_name ? decryptText(bug.test_plan_name) : null,
     testSpaceName: decryptText(bug.test_space_name),
     testSpaceVersionLabel: bug.test_space_version_label ? decryptText(bug.test_space_version_label) : undefined,
-    testSubjectName: bug.test_subject_name ? decryptText(bug.test_subject_name) : '未关联测试对象',
+    testSubjectName: bug.test_subject_name ? decryptText(bug.test_subject_name) : '未关联一级目录',
     moduleId: bug.organization_module_id ? Number(bug.organization_module_id) : undefined,
     moduleName: bug.organization_module_name ? decryptText(bug.organization_module_name) : undefined,
     testCaseId: bug.test_case_id ? Number(bug.test_case_id) : undefined,

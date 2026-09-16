@@ -7,7 +7,6 @@ export type TestCaseDirectory = {
   name: string
   parentId: number | null
 }
-export type TestCaseDirectoryMode = 'current' | 'tree'
 
 export class TestCaseDirectoryError extends Error {
   status: number
@@ -73,7 +72,7 @@ export function createDirectoryIndex<T extends TestCaseDirectory>(
       const node = byId.get(cursor)
       if (!node)
         throw new TestCaseDirectoryError(
-          '目录不存在或不属于当前测试对象。',
+          '目录不存在或不属于当前一级目录。',
           404,
         )
       seen.add(cursor)
@@ -141,6 +140,10 @@ export function encodeDirectoryPath(segments: readonly string[]) {
     .join('~')
 }
 
+export function encodeRootDirectoryPath(segments: readonly string[]) {
+  return segments.length ? `~${encodeDirectoryPath(segments)}` : ''
+}
+
 export function decodeDirectoryPath(value: string) {
   if (!value) return []
   const segments: string[] = []
@@ -165,6 +168,14 @@ export function decodeDirectoryPath(value: string) {
   if (segments.length > maxTestCaseDirectoryDepth)
     throw new TestCaseDirectoryError('目录路径超过 32 层。')
   return segments
+}
+
+export function decodeRootDirectoryPath(value: string) {
+  if (!value) return []
+  if (!value.startsWith('~') || value.length === 1) {
+    throw new TestCaseDirectoryError('非空目录路径必须以 ~ 开头。')
+  }
+  return decodeDirectoryPath(value.slice(1))
 }
 
 export function parseCaseMoveIds(value: unknown) {

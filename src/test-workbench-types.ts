@@ -116,6 +116,7 @@ export type TestSubject = {
   canEdit: boolean
   createdAt: string
   description: string
+  directoryRoot: boolean
   id: number
   name: string
   testSpaceId: number
@@ -359,6 +360,7 @@ export type TestCaseImportPreview = {
   }>
   targetPath?: string
   newDirectoryCount?: number
+  newTopLevelDirectoryCount?: number
   reusedDirectoryCount?: number
   samplePaths?: string[]
   levelCounts: Record<'P0' | 'P1' | 'P2', number>

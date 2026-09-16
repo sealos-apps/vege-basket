@@ -66,7 +66,7 @@ test('tester weekly report source names identity, period, plans, and targets wit
   assert.match(source, /周期：2026年7月27日 至 2026年8月2日/)
   assert.doesNotMatch(source, /角色：/)
   assert.match(source, /回归测试计划/)
-  assert.match(source, /测试对象：支付服务/)
+  assert.match(source, /一级目录：支付服务/)
   assert.match(source, /本周执行：12 条/)
   assert.doesNotMatch(source, /项目日记（总结主体）/)
   assert.match(source, /## 事项一：<事项名称>[\s\S]+- 本周进展：[\s\S]+- 风险问题：[\s\S]+- 下周计划：/u)

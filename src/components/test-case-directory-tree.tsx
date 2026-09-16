@@ -259,6 +259,8 @@ export function DirectoryTree({
     )
       event.preventDefault()
   }
+  const selectedRoot = selected === 'all'
+    || subjects.find((subject) => `subject:${subject.id}` === selected)?.directoryRoot
   return (
     <aside className="test-directory-panel" aria-label="用例目录">
       <div className="test-directory-heading">
@@ -307,11 +309,11 @@ export function DirectoryTree({
           <Button
             size="icon"
             variant="ghost"
-            aria-label={selected === 'all' ? '新增一级目录' : '新增子目录'}
-            title={selected === 'all' ? '新增一级目录' : '新增子目录'}
+            aria-label={selectedRoot ? '新增一级目录' : '新增子目录'}
+            title={selectedRoot ? '新增一级目录' : '新增子目录'}
             disabled={busy}
             onClick={() => {
-              if (selected === 'all') {
+              if (selectedRoot) {
                 onCreateRoot()
                 return
               }
@@ -369,7 +371,7 @@ export function DirectoryTree({
             <button type="button" tabIndex={-1} className="test-directory-chevron" aria-label={`${open ? '收起' : '展开'} ${subject.name}`} onClick={(event) => { event.stopPropagation(); setExpandedSubjects((previous) => { const next = new Set(previous); if (next.has(subject.id)) next.delete(subject.id); else next.add(subject.id); return next }) }}>
               {open ? <CaretDown /> : <CaretRight />}
             </button>
-            <Stack />
+            {subject.directoryRoot ? <FolderOpen /> : <Stack />}
             <span>{subject.name}</span>
             <small>{subjectCases.length}</small>
             {!readOnly && (subject.canEdit || subject.canDelete) && (

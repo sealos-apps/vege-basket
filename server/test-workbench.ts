@@ -33,7 +33,7 @@ import {
   type TestCaseImportRow,
 } from './test-case-import.ts'
 import { createDirectoryIndex, directoryName, nullableDirectoryId, parseCaseMoveIds, planDirectoryImport, TestCaseDirectoryError } from '../shared/test-case-directories.ts'
-import { caseFolderSubject, createCaseDirectory, deleteEmptyCaseDirectory, insertCaseDirectory, lockTestCaseScope, lockTestCaseSpace, moveCaseDirectories, readCaseDirectories, resolveCaseDirectory, updateCaseDirectory } from './test-case-directories.ts'
+import { caseFolderSubject, createCaseDirectory, deleteEmptyCaseDirectory, insertCaseDirectory, lockTestCaseScope, lockTestCaseSpace, lockTestCaseSpaceAccess, moveCaseDirectories, readCaseDirectories, resolveCaseDirectory, updateCaseDirectory } from './test-case-directories.ts'
 import {
   ensurePackageMarketRuleAllowed,
   getOrganizationPackageMarketPolicy,
@@ -510,7 +510,7 @@ async function lockCreatorCaseScope(client: PoolClient, spaceId: number, subject
   await getDirectSpaceAccess(spaceId, userId, client)
   if (!(await getSpaceAccess(spaceId, userId, client))) throw new TestCaseDirectoryError('测试空间访问权限已失效。', 403)
   const subject = await client.query('select id from test_subjects where id = $1 and test_space_id = $2 for update', [subjectId, spaceId])
-  if (!subject.rows.length) throw new TestCaseDirectoryError('测试对象不存在。', 404)
+  if (!subject.rows.length) throw new TestCaseDirectoryError('一级目录不存在。', 404)
 }
 
 async function userCanBeAssignedInSpace(
@@ -929,6 +929,7 @@ type ImportSubjectRow = {
   description: string
   environment: string
   id: string
+  is_directory_root: boolean
   name: string
   name_lookup: string | null
   project_id: string | null
@@ -1223,7 +1224,7 @@ async function importTestSpaceData(
         selectedSubjects.add(Number(testCase.test_subject_id))
       }
       for (const subjectId of selectedSubjects) {
-        if (!subjects.has(subjectId)) throw importFailure('来源测试对象不存在')
+        if (!subjects.has(subjectId)) throw importFailure('来源一级目录不存在')
       }
       copiedCaseIds.set(source.spaceId, selectedCases)
       copiedPlanIds.set(source.spaceId, selectedPlans)
@@ -1254,20 +1255,24 @@ async function importTestSpaceData(
       const existingMap = subjectMap.get(key)
       if (existingMap) return existingMap
       const sourceSubject = sourceSubjects.get(sourceSpaceId)?.get(sourceSubjectId)
-      if (!sourceSubject) throw importFailure('来源测试对象不存在')
+      if (!sourceSubject) throw importFailure('来源一级目录不存在')
       const existing = await client.query<{ id: string }>(
-        'select id from test_subjects where test_space_id = $1 and name_lookup = $2 limit 1',
-        [targetSpaceId, sourceSubject.name_lookup],
+        sourceSubject.is_directory_root
+          ? 'select id from test_subjects where test_space_id = $1 and is_directory_root limit 1'
+          : 'select id from test_subjects where test_space_id = $1 and name_lookup = $2 limit 1',
+        sourceSubject.is_directory_root
+          ? [targetSpaceId]
+          : [targetSpaceId, sourceSubject.name_lookup],
       )
       const inserted = existing.rows[0] ?? (await client.query<{ id: string }>(
         `
         insert into test_subjects
-          (test_space_id, project_id, created_by_user_id, name, name_lookup, description, version_label, environment)
-        values ($1, $2, $3, $4, $5, $6, $7, $8)
+          (test_space_id, project_id, created_by_user_id, name, name_lookup, description, version_label, environment, is_directory_root)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         returning id
         `,
         [targetSpaceId, sourceSubject.project_id, userId, sourceSubject.name, sourceSubject.name_lookup,
-          sourceSubject.description, sourceSubject.version_label, sourceSubject.environment],
+          sourceSubject.description, sourceSubject.version_label, sourceSubject.environment, sourceSubject.is_directory_root],
       )).rows[0]
       const targetId = Number(inserted.id)
       subjectMap.set(key, targetId)
@@ -1294,7 +1299,7 @@ async function importTestSpaceData(
       if (copyingFolders.has(key)) throw importFailure('来源目录结构存在循环', 409)
       copyingFolders.add(key)
       const parent = sourceFolder.parent_id ? sourceFolders.get(sourceSpaceId)?.get(Number(sourceFolder.parent_id)) : undefined
-      if (sourceFolder.parent_id && (!parent || parent.test_subject_id !== sourceFolder.test_subject_id)) throw importFailure('来源父目录不属于相同测试对象', 409)
+      if (sourceFolder.parent_id && (!parent || parent.test_subject_id !== sourceFolder.test_subject_id)) throw importFailure('来源父目录不属于相同一级目录', 409)
       const targetParentId = parent ? await copyFolder(sourceSpaceId, Number(parent.id), targetSubjectId) : null
       const targetId = await resolveCaseDirectory(client, targetSpaceId, targetSubjectId, decryptText(sourceFolder.name), targetParentId)
       copyingFolders.delete(key)
@@ -1678,11 +1683,13 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
       created_by_user_id: string | null
       description: string
       id: string
+      is_directory_root: boolean
       name: string
       test_space_id: string
     }>(
       `
-      select s.id, s.test_space_id, s.created_by_user_id, s.name, s.description, s.created_at
+      select s.id, s.test_space_id, s.created_by_user_id, s.name, s.description, s.created_at,
+        s.is_directory_root
       from test_subjects s
       join test_spaces space on space.id = s.test_space_id
       left join test_space_memberships m
@@ -2346,12 +2353,13 @@ async function getTestWorkbench(userId: number, scope?: { spaceId?: number; subj
     })),
     testEnvironments: Array.from(testEnvironmentsById.values()),
     subjects: subjects.rows.map((row) => ({
-      canDelete: canDeleteTestSubject(row.created_by_user_id ? Number(row.created_by_user_id) : null, userId),
-      canEdit: canEditTestSubject(row.created_by_user_id ? Number(row.created_by_user_id) : null, userId),
+      canDelete: !row.is_directory_root && canDeleteTestSubject(row.created_by_user_id ? Number(row.created_by_user_id) : null, userId),
+      canEdit: !row.is_directory_root && canEditTestSubject(row.created_by_user_id ? Number(row.created_by_user_id) : null, userId),
       createdAt: row.created_at.toISOString(),
       description: decryptText(row.description),
+      directoryRoot: row.is_directory_root,
       id: Number(row.id),
-      name: decryptText(row.name),
+      name: row.is_directory_root ? '根目录' : decryptText(row.name),
       testSpaceId: Number(row.test_space_id),
     })),
     users: users.rows.map((row) => ({
@@ -3165,7 +3173,7 @@ router.post('/test-spaces/:spaceId/subjects', asyncRoute(async (request, respons
   if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
   const name = text(request.body.name, 100)
   if (!name) {
-    response.status(400).json({ error: 'Test subject name is required' })
+    response.status(400).json({ error: '一级目录名称不能为空' })
     return
   }
   await query(
@@ -3191,28 +3199,32 @@ router.patch('/test-spaces/:spaceId/subjects/:subjectId', asyncRoute(async (requ
   const spaceId = positiveId(request.params.spaceId)
   const subjectId = positiveId(request.params.subjectId)
   if (!subjectId) {
-    response.status(400).json({ error: 'Valid test subject is required' })
+    response.status(400).json({ error: '一级目录无效' })
     return
   }
   if (!(await requireSpaceAccess(response, spaceId, session.userId))) return
   const name = text(request.body.name, 100)
   if (!name) {
-    response.status(400).json({ error: 'Test subject name is required' })
+    response.status(400).json({ error: '一级目录名称不能为空' })
     return
   }
-  const subject = await query<{ created_by_user_id: string | null }>(
-    'select created_by_user_id from test_subjects where id = $1 and test_space_id = $2',
+  const subject = await query<{ created_by_user_id: string | null; is_directory_root: boolean }>(
+    'select created_by_user_id, is_directory_root from test_subjects where id = $1 and test_space_id = $2',
     [subjectId, spaceId],
   )
   if (!subject.rows[0]) {
-    response.status(404).json({ error: 'Test subject not found' })
+    response.status(404).json({ error: '一级目录不存在' })
+    return
+  }
+  if (subject.rows[0].is_directory_root) {
+    response.status(409).json({ error: '用例目录根节点不能重命名' })
     return
   }
   const createdByUserId = subject.rows[0].created_by_user_id
     ? Number(subject.rows[0].created_by_user_id)
     : null
   if (!canEditTestSubject(createdByUserId, session.userId)) {
-    response.status(403).json({ error: 'Only the test subject creator can edit it' })
+    response.status(403).json({ error: '只有一级目录创建者可以编辑' })
     return
   }
   try {
@@ -3236,12 +3248,12 @@ router.patch('/test-spaces/:spaceId/subjects/:subjectId', asyncRoute(async (requ
       ],
     )
     if (!updated.rows[0]) {
-      response.status(409).json({ error: 'Test subject ownership changed; refresh and try again' })
+      response.status(409).json({ error: '一级目录归属已变化，请刷新后重试' })
       return
     }
   } catch (error) {
     if (error instanceof Error && 'code' in error && (error as { code?: string }).code === '23505') {
-      response.status(409).json({ error: 'Test subject name already exists in this test space' })
+      response.status(409).json({ error: '当前测试空间已存在同名一级目录' })
       return
     }
     throw error
@@ -3255,23 +3267,27 @@ router.delete('/test-spaces/:spaceId/subjects/:subjectId', asyncRoute(async (req
   const spaceId = positiveId(request.params.spaceId)
   const subjectId = positiveId(request.params.subjectId)
   if (!subjectId) {
-    response.status(400).json({ error: 'Valid test subject is required' })
+    response.status(400).json({ error: '一级目录无效' })
     return
   }
   if (!(await requireSpaceAccess(response, spaceId, session.userId))) return
-  const subject = await query<{ created_by_user_id: string | null }>(
-    'select created_by_user_id from test_subjects where id = $1 and test_space_id = $2',
+  const subject = await query<{ created_by_user_id: string | null; is_directory_root: boolean }>(
+    'select created_by_user_id, is_directory_root from test_subjects where id = $1 and test_space_id = $2',
     [subjectId, spaceId],
   )
   if (!subject.rows[0]) {
-    response.status(404).json({ error: 'Test subject not found' })
+    response.status(404).json({ error: '一级目录不存在' })
+    return
+  }
+  if (subject.rows[0].is_directory_root) {
+    response.status(409).json({ error: '用例目录根节点不能删除' })
     return
   }
   const createdByUserId = subject.rows[0].created_by_user_id
     ? Number(subject.rows[0].created_by_user_id)
     : null
   if (!canDeleteTestSubject(createdByUserId, session.userId)) {
-    response.status(403).json({ error: 'Only the test subject creator can delete it' })
+    response.status(403).json({ error: '只有一级目录创建者可以删除' })
     return
   }
   const deleted = await transaction(async (client) => {
@@ -3282,14 +3298,14 @@ router.delete('/test-spaces/:spaceId/subjects/:subjectId', asyncRoute(async (req
     )
   }).catch((error: unknown) => {
     if (error && typeof error === 'object' && 'code' in error && error.code === '23503') {
-      response.status(409).json({ error: '该测试对象下仍有关联 Bug，请先处理 Bug 后再删除' })
+      response.status(409).json({ error: '该一级目录下仍有关联 Bug，请先处理 Bug 后再删除' })
       return null
     }
     throw error
   })
   if (!deleted) return
   if (!deleted.rows[0]) {
-    response.status(409).json({ error: 'Test subject ownership changed; refresh and try again' })
+    response.status(409).json({ error: '一级目录归属已变化，请刷新后重试' })
     return
   }
   response.json(await getTestWorkbench(session.userId))
@@ -3301,7 +3317,7 @@ router.post('/test-spaces/:spaceId/folders', asyncRoute(async (request, response
   const spaceId = positiveId(request.params.spaceId)
   if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
   const subjectId = positiveId(request.body.testSubjectId)
-  if (!subjectId) throw new TestCaseDirectoryError('测试对象 ID 无效。')
+  if (!subjectId) throw new TestCaseDirectoryError('一级目录 ID 无效。')
   const name = directoryName(request.body.name)
   const parentId = request.body.parentId === undefined ? null : nullableDirectoryId(request.body.parentId)
   await transaction(async (client) => {
@@ -3352,7 +3368,7 @@ router.post('/test-spaces/:spaceId/cases/move', asyncRoute(async (request, respo
   const spaceId = positiveId(request.params.spaceId)
   if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
   const subjectId = positiveId(request.body.testSubjectId)
-  if (!subjectId) throw new TestCaseDirectoryError('测试对象 ID 无效。')
+  if (!subjectId) throw new TestCaseDirectoryError('一级目录 ID 无效。')
   const caseIds = parseCaseMoveIds(request.body.caseIds)
   const targetFolderId = nullableDirectoryId(request.body.targetFolderId)
   const moved = await transaction(async (client) => {
@@ -3387,7 +3403,7 @@ async function saveTestCaseRequest(request: express.Request, response: express.R
     }>('select * from test_cases where id = $1 and test_space_id = $2', [caseId, spaceId])).rows[0] : undefined
     if (caseId && !current) throw new TestCaseDirectoryError('用例不存在。', 404)
     const subjectId = current ? Number(current.test_subject_id) : positiveId(request.body.testSubjectId)
-    if (!subjectId) throw new TestCaseDirectoryError('测试对象 ID 无效。')
+    if (!subjectId) throw new TestCaseDirectoryError('一级目录 ID 无效。')
     await lockTestCaseScope(client, spaceId!, subjectId, session.userId)
     const title = request.body.title === undefined && current ? decryptText(current.title) : text(request.body.title, 160)
     if (!title) throw new TestCaseDirectoryError('用例名称不能为空。')
@@ -3436,8 +3452,18 @@ router.post('/test-spaces/:spaceId/cases', asyncRoute((request, response) => sav
 
 type PreparedCaseImportRow = {
   existingCaseId: number | null
+  folderRef: number | null
   moduleId: number | null
   row: TestCaseImportRow
+  subjectRef: number
+}
+
+type PlannedCaseImportSubject = {
+  created: boolean
+  directoryPlan: ReturnType<typeof planDirectoryImport>
+  directoryRoot: boolean
+  name: string
+  ref: number
 }
 
 type TestCaseImportPreviewItem = {
@@ -3451,12 +3477,31 @@ type TestCaseImportPreviewItem = {
 async function inspectTestCaseImport(
   client: PoolClient,
   spaceId: number,
-  subjectId: number,
-  targetFolderId: number | null,
   parsed: ReturnType<typeof parseTestCaseCsv>,
 ) {
-  const directories = await readCaseDirectories(client, spaceId, subjectId)
-  const targetDepth = createDirectoryIndex(directories).path(targetFolderId).length
+  const subjectRows = await client.query<{
+    id: string
+    is_directory_root: boolean
+    name: string
+  }>(
+    `select id, name, is_directory_root
+       from test_subjects
+      where test_space_id = $1
+      order by id`,
+    [spaceId],
+  )
+  const directoryRows = await client.query<{
+    id: string
+    name: string
+    parent_id: string | null
+    test_subject_id: string
+  }>(
+    `select id, test_subject_id, parent_id, name
+       from test_case_folders
+      where test_space_id = $1
+      order by id`,
+    [spaceId],
+  )
   const moduleRows = await client.query<{ enabled: boolean; id: string; name: string }>(
     `select module.id, module.name, module.enabled
        from organization_project_modules module
@@ -3472,26 +3517,48 @@ async function inspectTestCaseImport(
   const existingCases = await client.query<{ csv_case_id: string; id: string }>(
     `select id, csv_case_id
        from test_cases
-      where test_space_id = $1 and test_subject_id = $2
+      where test_space_id = $1
       order by id
       for update`,
-    [spaceId, subjectId],
+    [spaceId],
   )
   const existingByCsvId = new Map(
-    existingCases.rows.map((item) => [item.csv_case_id, Number(item.id)]),
+    existingCases.rows.map((item) => [item.csv_case_id, item]),
   )
-  const issues: TestCaseImportIssue[] = [...parsed.preview.issues]
-  const preparedRows: PreparedCaseImportRow[] = []
-  for (const row of parsed.rows) {
-    if (targetDepth + row.directorySegments.length > 32) {
-      issues.push({
-        message: '导入后的目录超过 32 层。',
-        rowNumber: row.rowNumber,
-        sourceId: row.sourceId,
-        title: row.title,
-      })
-      continue
+  const existingSubjects = subjectRows.rows.map((subject) => ({
+    directoryRoot: subject.is_directory_root,
+    name: subject.is_directory_root ? '' : decryptText(subject.name),
+    ref: Number(subject.id),
+  }))
+  const subjectsByName = new Map(
+    existingSubjects
+      .filter((subject) => !subject.directoryRoot)
+      .map((subject) => [subject.name.trim().toLocaleLowerCase('zh-CN'), subject]),
+  )
+  let rootSubject = existingSubjects.find((subject) => subject.directoryRoot)
+  let nextSubjectRef = -1
+  const plannedSubjects: Array<{ directoryRoot: boolean; name: string; ref: number }> = []
+  function resolveSubject(row: TestCaseImportRow) {
+    if (row.directorySegments.length === 0) {
+      if (!rootSubject) {
+        rootSubject = { directoryRoot: true, name: '', ref: nextSubjectRef-- }
+        plannedSubjects.push(rootSubject)
+      }
+      return { folderSegments: [] as string[], subject: rootSubject }
     }
+    const [name, ...folderSegments] = row.directorySegments
+    const key = name.trim().toLocaleLowerCase('zh-CN')
+    let subject = subjectsByName.get(key)
+    if (!subject) {
+      subject = { directoryRoot: false, name, ref: nextSubjectRef-- }
+      subjectsByName.set(key, subject)
+      plannedSubjects.push(subject)
+    }
+    return { folderSegments, subject }
+  }
+  const issues: TestCaseImportIssue[] = [...parsed.preview.issues]
+  const stagedRows: Array<Omit<PreparedCaseImportRow, 'folderRef'> & { folderSegments: string[] }> = []
+  for (const row of parsed.rows) {
     const module = row.moduleName ? modulesByName.get(row.moduleName) : undefined
     if (row.moduleName && (!module || !module.enabled)) {
       issues.push({
@@ -3502,17 +3569,53 @@ async function inspectTestCaseImport(
       })
       continue
     }
-    preparedRows.push({
-      existingCaseId: row.sourceId ? existingByCsvId.get(row.sourceId) ?? null : null,
+    const existing = row.sourceId ? existingByCsvId.get(row.sourceId) : undefined
+    const { folderSegments, subject } = resolveSubject(row)
+    stagedRows.push({
+      existingCaseId: existing ? Number(existing.id) : null,
+      folderSegments,
       moduleId: module ? Number(module.id) : null,
       row,
+      subjectRef: subject.ref,
     })
   }
-  const directoryPlan = planDirectoryImport(
-    directories,
-    targetFolderId,
-    preparedRows.map((item) => item.row.directorySegments),
-  )
+  const subjectPlans: PlannedCaseImportSubject[] = []
+  const preparedRows: PreparedCaseImportRow[] = []
+  let reusedDirectoryCount = 0
+  let newNestedDirectoryCount = 0
+  for (const subject of [...existingSubjects, ...plannedSubjects]) {
+    const rows = stagedRows.filter((item) => item.subjectRef === subject.ref)
+    if (!rows.length) continue
+    const directories = directoryRows.rows
+      .filter((directory) => Number(directory.test_subject_id) === subject.ref)
+      .map((directory) => ({
+        id: Number(directory.id),
+        name: decryptText(directory.name),
+        parentId: directory.parent_id ? Number(directory.parent_id) : null,
+      }))
+    const directoryPlan = planDirectoryImport(
+      directories,
+      null,
+      rows.map((item) => item.folderSegments),
+    )
+    subjectPlans.push({
+      ...subject,
+      created: subject.ref < 0,
+      directoryPlan,
+    })
+    reusedDirectoryCount += directoryPlan.reusedCount
+    newNestedDirectoryCount += directoryPlan.created.length
+    rows.forEach((item, index) => {
+      preparedRows.push({
+        existingCaseId: item.existingCaseId,
+        folderRef: directoryPlan.folderIds[index],
+        moduleId: item.moduleId,
+        row: item.row,
+        subjectRef: item.subjectRef,
+      })
+    })
+  }
+  preparedRows.sort((left, right) => left.row.rowNumber - right.row.rowNumber)
   const issueItems: TestCaseImportPreviewItem[] = issues.map((issue) => ({
     action: 'invalid',
     message: issue.message,
@@ -3530,19 +3633,21 @@ async function inspectTestCaseImport(
   const items = [...issueItems, ...validItems].sort((left, right) => left.rowNumber - right.rowNumber)
   const createCount = preparedRows.filter((item) => item.existingCaseId === null).length
   const updateCount = preparedRows.length - createCount
+  const newTopLevelDirectoryCount = plannedSubjects.filter((subject) => !subject.directoryRoot).length
   return {
-    directoryPlan,
     preparedRows,
+    subjectPlans,
     preview: {
       ...parsed.preview,
       createCount,
       invalidCount: issues.length,
       issues,
       items,
-      newDirectoryCount: directoryPlan.created.length,
-      reusedDirectoryCount: directoryPlan.reusedCount,
-      samplePaths: preparedRows.slice(0, 5).map((item) => item.row.directorySegments.join(' / ') || '当前目录'),
-      targetPath: directoryPlan.targetPath.join(' / ') || '根目录',
+      newDirectoryCount: newTopLevelDirectoryCount + newNestedDirectoryCount,
+      newTopLevelDirectoryCount,
+      reusedDirectoryCount,
+      samplePaths: preparedRows.slice(0, 5).map((item) => item.row.directorySegments.join(' / ') || '根目录'),
+      targetPath: '用例目录根目录',
       updateCount,
       validCount: preparedRows.length,
     },
@@ -3557,39 +3662,82 @@ router.post(
     if (!session) return
     const spaceId = positiveId(request.params.spaceId)
     if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
-    const subjectId = positiveId(request.query.testSubjectId)
-    if (!subjectId) throw new TestCaseDirectoryError('测试对象 ID 无效。')
-    const mode = request.query.directoryMode ?? 'tree'
-    if (mode !== 'current' && mode !== 'tree') throw new TestCaseDirectoryError('导入目录方式无效。')
-    const targetFolderId = request.query.targetFolderId === undefined ? null : nullableDirectoryId(request.query.targetFolderId)
-    const parsed = parseTestCaseCsv(typeof request.body === 'string' ? request.body : '', mode)
+    const parsed = parseTestCaseCsv(typeof request.body === 'string' ? request.body : '')
     const preview = await transaction(async (client) => {
-      await lockTestCaseScope(client, spaceId!, subjectId, session.userId)
-      const inspection = await inspectTestCaseImport(client, spaceId!, subjectId, targetFolderId, parsed)
+      await lockTestCaseSpaceAccess(client, spaceId!, session.userId)
+      await client.query(
+        'select id from test_subjects where test_space_id = $1 order by id for update',
+        [spaceId],
+      )
+      const inspection = await inspectTestCaseImport(client, spaceId!, parsed)
       if (request.query.preview === 'true') return inspection.preview
       if (inspection.preview.invalidCount > 0) {
         throw new TestCaseImportError(`CSV 中有 ${inspection.preview.invalidCount} 条用例不满足导入条件，请重新预检测。`)
       }
       // The complete input and every target path are validated before the first write.
-      const insertedIds = new Map<number, number>()
-      for (const directory of inspection.directoryPlan.created) {
-        const parentId = directory.parentId !== null && directory.parentId < 0 ? insertedIds.get(directory.parentId)! : directory.parentId
-        insertedIds.set(directory.id, await insertCaseDirectory(client, spaceId!, subjectId, directory.name, parentId))
+      const subjectIds = new Map<number, number>()
+      for (const subject of inspection.subjectPlans) {
+        if (!subject.created) {
+          subjectIds.set(subject.ref, subject.ref)
+          continue
+        }
+        const inserted = subject.directoryRoot
+          ? await client.query<{ id: string }>(
+            `insert into test_subjects
+              (test_space_id, created_by_user_id, name, name_lookup, description, is_directory_root)
+             values ($1, $2, $3, null, $4, true)
+             on conflict (test_space_id) where is_directory_root
+             do update set is_directory_root = excluded.is_directory_root
+             returning id`,
+            [spaceId, session.userId, encryptText('用例目录根目录'), encryptText('')],
+          )
+          : await client.query<{ id: string }>(
+            `insert into test_subjects
+              (test_space_id, created_by_user_id, name, name_lookup, description)
+             values ($1, $2, $3, $4, $5)
+             on conflict (test_space_id, name_lookup) where name_lookup is not null
+             do update set name_lookup = excluded.name_lookup
+             returning id`,
+            [spaceId, session.userId, encryptText(subject.name), blindIndex(subject.name), encryptText('')],
+          )
+        subjectIds.set(subject.ref, Number(inserted.rows[0].id))
       }
-      for (const [index, item] of inspection.preparedRows.entries()) {
+      const folderIds = new Map<string, number>()
+      for (const subject of inspection.subjectPlans) {
+        const subjectId = subjectIds.get(subject.ref)!
+        for (const directory of subject.directoryPlan.created) {
+          const parentId = directory.parentId !== null && directory.parentId < 0
+            ? folderIds.get(`${subject.ref}:${directory.parentId}`)!
+            : directory.parentId
+          folderIds.set(
+            `${subject.ref}:${directory.id}`,
+            await insertCaseDirectory(client, spaceId!, subjectId, directory.name, parentId),
+          )
+        }
+      }
+      await client.query('set constraints test_bugs_case_scope_fkey deferred')
+      for (const item of inspection.preparedRows) {
         const { row } = item
-        const plannedId = inspection.directoryPlan.folderIds[index]
-        const folderId = plannedId !== null && plannedId < 0 ? insertedIds.get(plannedId)! : plannedId
-        const values = [folderId, item.moduleId, encryptText(row.title), encryptText(row.preconditions), encryptText(row.steps),
+        const subjectId = subjectIds.get(item.subjectRef)!
+        const folderId = item.folderRef !== null && item.folderRef < 0
+          ? folderIds.get(`${item.subjectRef}:${item.folderRef}`)!
+          : item.folderRef
+        const values = [subjectId, folderId, item.moduleId, encryptText(row.title), encryptText(row.preconditions), encryptText(row.steps),
           encryptText(row.expectedResult), encryptText(row.remarks), row.priority, row.caseType]
         if (item.existingCaseId !== null) {
           await client.query(
             `update test_cases
-                set folder_id = $1, organization_module_id = $2, title = $3, preconditions = $4,
-                    steps = $5, expected_result = $6, remarks = $7, priority = $8, case_type = $9,
+                set test_subject_id = $1, folder_id = $2, organization_module_id = $3, title = $4, preconditions = $5,
+                    steps = $6, expected_result = $7, remarks = $8, priority = $9, case_type = $10,
                     updated_at = now()
-              where id = $10 and test_space_id = $11 and test_subject_id = $12`,
-            [...values, item.existingCaseId, spaceId, subjectId],
+              where id = $11 and test_space_id = $12`,
+            [...values, item.existingCaseId, spaceId],
+          )
+          await client.query(
+            `update test_bugs
+                set test_subject_id = $1, organization_module_id = $2, updated_at = now()
+              where test_case_id = $3 and test_space_id = $4`,
+            [subjectId, item.moduleId, item.existingCaseId, spaceId],
           )
         } else {
           await client.query(
@@ -3597,7 +3745,7 @@ router.post(
               (test_space_id, test_subject_id, folder_id, organization_module_id, title, preconditions, steps,
                expected_result, remarks, priority, case_type, custom_tags, status, created_by_user_id, csv_case_id)
              values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', $13, $14)`,
-            [spaceId, subjectId, ...values, encryptJson(row.customTags), session.userId, row.sourceId || null],
+            [spaceId, ...values, encryptJson(row.customTags), session.userId, row.sourceId || null],
           )
         }
       }
@@ -3685,7 +3833,7 @@ router.post('/test-spaces/:spaceId/plans', asyncRoute(async (request, response) 
   const endsOn = optionalDate(request.body.endsOn)
   const projectId = positiveId(request.body.projectId)
   if (subjectIds.length === 0 || !name || caseIds.length === 0 || (startsOn && endsOn && startsOn > endsOn)) {
-    response.status(400).json({ error: 'Plan name, test subjects, valid dates, and at least one case are required' })
+    response.status(400).json({ error: '计划名称、一级目录、有效日期和至少一条用例不能为空' })
     return
   }
   if (!(await requireProjectAccessForLinking(response, projectId, session.userId))) return
@@ -3694,7 +3842,7 @@ router.post('/test-spaces/:spaceId/plans', asyncRoute(async (request, response) 
     [spaceId, subjectIds],
   )
   if (selectedSubjects.rows.length !== subjectIds.length) {
-    response.status(400).json({ error: 'Every selected test subject must belong to the test space' })
+    response.status(400).json({ error: '所选一级目录必须属于当前测试空间' })
     return
   }
   const ownerUserId = positiveId(request.body.ownerUserId)
@@ -3723,7 +3871,7 @@ router.post('/test-spaces/:spaceId/plans', asyncRoute(async (request, response) 
     [spaceId, subjectIds, caseIds],
   )
   if (selectedCases.rows.length !== caseIds.length) {
-    response.status(400).json({ error: 'Every selected case must be active and belong to the selected test subjects' })
+    response.status(400).json({ error: '所选用例必须有效且属于已选一级目录' })
     return
   }
   const client = await pool.connect()
@@ -3864,7 +4012,7 @@ router.patch('/test-spaces/:spaceId/plans/:planId/details', asyncRoute(async (re
     return
   }
   if (subjectIds.length === 0) {
-    response.status(400).json({ error: 'At least one test subject is required' })
+    response.status(400).json({ error: '至少选择一个一级目录' })
     return
   }
   if (!(await requireProjectAccessForLinking(response, projectId, session.userId))) return
@@ -3873,7 +4021,7 @@ router.patch('/test-spaces/:spaceId/plans/:planId/details', asyncRoute(async (re
     [spaceId, subjectIds],
   )
   if (selectedSubjects.rows.length !== subjectIds.length) {
-    response.status(400).json({ error: 'Every selected test subject must belong to the test space' })
+    response.status(400).json({ error: '所选一级目录必须属于当前测试空间' })
     return
   }
   const ownerUserId = positiveId(request.body.ownerUserId)
@@ -3902,7 +4050,7 @@ router.patch('/test-spaces/:spaceId/plans/:planId/details', asyncRoute(async (re
     [spaceId, subjectIds, caseIds],
   ) : { rows: [] }
   if (selectedCases.rows.length !== caseIds.length) {
-    response.status(400).json({ error: 'Every appended case must be active and belong to the selected test subjects' })
+    response.status(400).json({ error: '追加用例必须有效且属于已选一级目录' })
     return
   }
   const client = await pool.connect()
@@ -4203,7 +4351,7 @@ router.post('/test-spaces/:spaceId/bugs', asyncRoute(async (request, response) =
         planId = Number(execution.rows[0].test_plan_id)
       }
       if (planId && !planCaseId) {
-        if (!subjectId) throw importFailure('测试计划关联需要测试对象', 400)
+        if (!subjectId) throw importFailure('测试计划关联需要一级目录', 400)
         const plan = await client.query<{ id: string }>(
           `
           select p.id
