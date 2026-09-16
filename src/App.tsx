@@ -148,6 +148,7 @@ import {
   fetchProjectPackageItemDownloadUrl,
   fetchProjectPackageTimeline,
   fetchWorkspace,
+  searchWorkspaceProjects,
   fetchAiStatus,
   fetchAiConversations,
   fetchAiConversationTurns,
@@ -155,6 +156,7 @@ import {
   fetchOrganization,
   fetchOrganizations,
   fetchTodoProposalBatch,
+  fetchTodoWorkspace,
   fetchCurrentUser,
   fetchNotifications,
   ApiError,
@@ -214,6 +216,12 @@ import {
   type UserRole,
   type WorkspaceData,
 } from './api'
+import {
+  mergeWorkspaceMemberships,
+  mergeWorkspaceProjects,
+  mergeWorkspaceTodos,
+  workspaceIncludesSection,
+} from './workspace-cache'
 import type { OrganizationListItem, OrganizationMember } from './organization-types'
 import type {
   InboxItem,
@@ -1018,7 +1026,7 @@ function getPreviousDateStamp(dateStamp = getTodayStamp()) {
 }
 
 function getProjectJournalSortKey(project: Project) {
-  return project.journals[0]?.createdAt ?? project.updatedAt ?? project.createdAt
+  return project.journals[0]?.createdAt ?? project.latestJournalAt ?? project.updatedAt ?? project.createdAt
 }
 
 function useAdaptivePageSize({
@@ -1830,6 +1838,7 @@ function App() {
   const [isProjectModulesDialogOpen, setIsProjectModulesDialogOpen] = useState(false)
   const [projectModuleDraft, setProjectModuleDraft] = useState('')
   const [search, setSearch] = useState('')
+  const [searchProjectIds, setSearchProjectIds] = useState<number[] | null>(null)
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'all'>('all')
   const [tagFilter, setTagFilter] = useState('全部')
   const [aiHistory, dispatchAiHistory] = useReducer(
@@ -1854,6 +1863,9 @@ function App() {
   const notificationRefreshPromiseRef = useRef<Promise<NotificationCenterData | false> | null>(null)
   const workspaceRefreshRequestIdRef = useRef(0)
   const workspaceRefreshPromiseRef = useRef<Promise<boolean> | null>(null)
+  const workspaceRefreshScopeKeyRef = useRef('')
+  const workspaceInitializedRef = useRef(false)
+  const [todoDeepLinkReadyId, setTodoDeepLinkReadyId] = useState<number | null>(null)
   const organizationContextReadyRef = useRef(false)
   const workspaceMutationEpochRef = useRef(0)
   const aiRequestIdRef = useRef(0)
@@ -2066,29 +2078,35 @@ function App() {
   }, [canShowDeveloperAssignedBugs, loggedIn, selectedOrganizationId, updateAssignedBugCount])
 
   const applyWorkspace = useCallback((data: WorkspaceData) => {
-    setProjects(data.projects)
-    setTodos(data.todos)
-    setMemberships(data.memberships)
-    setDepartedUserIds(data.departedUserIds)
-    setInbox(data.inbox)
-    setSummaries(data.summaries)
-    setProjectPackageTimelines((current) => {
-      const next: Record<number, ProjectPackageTimeline> = {}
-      for (const project of data.projects) {
-        if (current[project.id]) next[project.id] = current[project.id]
-      }
-      return next
-    })
-    setSelectedProjectId((current) => {
-      const preferredProjectId = current ?? loadStoredSelectedProjectId()
-      if (
-        preferredProjectId != null &&
-        data.projects.some((project) => project.id === preferredProjectId)
-      ) {
-        return preferredProjectId
-      }
-      return data.projects[0]?.id ?? null
-    })
+    const initial = !workspaceInitializedRef.current
+    workspaceInitializedRef.current = true
+    setProjects((current) => initial ? data.projects : mergeWorkspaceProjects(current, data))
+    setTodos((current) => initial ? data.todos : mergeWorkspaceTodos(current, data))
+    setMemberships((current) => initial ? data.memberships : mergeWorkspaceMemberships(current, data))
+    if (initial || workspaceIncludesSection(data, 'todos')) {
+      setDepartedUserIds(data.departedUserIds)
+    }
+    if (initial || workspaceIncludesSection(data, 'inbox')) setInbox(data.inbox)
+    if (initial || workspaceIncludesSection(data, 'summaries')) setSummaries(data.summaries)
+    if (initial || workspaceIncludesSection(data, 'catalog')) {
+      setProjectPackageTimelines((current) => {
+        const next: Record<number, ProjectPackageTimeline> = {}
+        for (const project of data.projects) {
+          if (current[project.id]) next[project.id] = current[project.id]
+        }
+        return next
+      })
+      setSelectedProjectId((current) => {
+        const preferredProjectId = current ?? loadStoredSelectedProjectId()
+        if (
+          preferredProjectId != null &&
+          data.projects.some((project) => project.id === preferredProjectId)
+        ) {
+          return preferredProjectId
+        }
+        return data.projects[0]?.id ?? null
+      })
+    }
   }, [])
 
   const applyAiRunOutcome = useCallback(async (outcome: AiTurnRunResponse['outcome']) => {
@@ -2098,7 +2116,7 @@ function App() {
     ) return
     const sessionGeneration = authSessionGenerationRef.current
     try {
-      const workspace = await fetchWorkspace()
+      const workspace = await fetchWorkspace({ sections: ['summaries'] })
       if (authSessionGenerationRef.current !== sessionGeneration) return
       applyWorkspace(workspace)
     } catch {
@@ -2155,24 +2173,39 @@ function App() {
   }, [])
 
   const refreshWorkspace = useCallback(async () => {
+    const scopeKey = `${view}:${selectedProjectId ?? ''}`
     const existing = workspaceRefreshPromiseRef.current
-    if (existing) return existing
+    if (existing && workspaceRefreshScopeKeyRef.current === scopeKey) return existing
 
     const requestId = workspaceRefreshRequestIdRef.current + 1
     workspaceRefreshRequestIdRef.current = requestId
+    workspaceRefreshScopeKeyRef.current = scopeKey
     const sessionGeneration = authSessionGenerationRef.current
     const mutationEpoch = workspaceMutationEpochRef.current
     const promise = (async () => {
       try {
-        const data = await fetchWorkspace()
+        const requests = [fetchWorkspace({ sections: ['catalog'] })]
+        if (view === 'project' && selectedProjectId != null) {
+          requests.push(fetchWorkspace({
+            projectId: selectedProjectId,
+            sections: ['memberships', 'project', 'todos'],
+          }))
+        } else if (view === 'inbox') {
+          requests.push(fetchWorkspace({ sections: ['inbox', 'memberships'] }))
+        } else if (view === 'ai') {
+          requests.push(fetchWorkspace({ sections: ['memberships', 'summaries'] }))
+        }
+        const results = await Promise.allSettled(requests)
         if (
           authSessionGenerationRef.current !== sessionGeneration ||
           workspaceRefreshRequestIdRef.current !== requestId ||
           workspaceMutationEpochRef.current !== mutationEpoch
         ) return false
-        applyWorkspace(data)
+        const snapshots = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
+        if (snapshots.length === 0) return false
+        snapshots.forEach(applyWorkspace)
         setWorkspaceRefreshVersion((current) => current + 1)
-        return true
+        return results.every((result) => result.status === 'fulfilled')
       } catch {
         // Background refresh is best-effort; the existing view remains usable.
         return false
@@ -2183,16 +2216,18 @@ function App() {
       () => {
         if (workspaceRefreshPromiseRef.current === promise) {
           workspaceRefreshPromiseRef.current = null
+          workspaceRefreshScopeKeyRef.current = ''
         }
       },
       () => {
         if (workspaceRefreshPromiseRef.current === promise) {
           workspaceRefreshPromiseRef.current = null
+          workspaceRefreshScopeKeyRef.current = ''
         }
       },
     )
     return promise
-  }, [applyWorkspace])
+  }, [applyWorkspace, selectedProjectId, view])
 
   useEffect(() => {
     if (!loggedIn) return
@@ -2481,6 +2516,11 @@ function App() {
     })
   }, [loggedIn, refreshWorkspace])
 
+  useEffect(() => {
+    if (!loggedIn || !workspaceLoaded) return
+    void refreshWorkspace()
+  }, [loggedIn, refreshWorkspace, workspaceLoaded])
+
   const activePackageMarketOrganization = selectedOrganizationId == null
     ? null
     : organizations.find(
@@ -2600,6 +2640,7 @@ function App() {
   )
   const selectedProject =
     scopedProjects.find((project) => project.id === selectedProjectId) ?? scopedProjects[0]
+  const selectedPackageProjectId = selectedProject?.id
   const selectedOrganizationName = selectedOrganizationId == null
     ? '个人项目'
     : organizations.find((organization) => organization.id === selectedOrganizationId)?.name ?? '组织项目'
@@ -2716,19 +2757,19 @@ function App() {
   ])
 
   useEffect(() => {
-    if (!loggedIn || !selectedProject || projectDetailTab !== 'packages') return
+    if (!loggedIn || selectedPackageProjectId == null || projectDetailTab !== 'packages') return
 
-    fetchProjectPackageTimeline(selectedProject.id)
+    fetchProjectPackageTimeline(selectedPackageProjectId)
       .then((timeline) => {
         setProjectPackageTimelines((current) => ({
           ...current,
-          [selectedProject.id]: timeline,
+          [selectedPackageProjectId]: timeline,
         }))
       })
       .catch(() => {
         setWorkspaceError('安装升级时间线读取失败，请确认后端服务和 OSS 配置正常。')
       })
-  }, [loggedIn, projectDetailTab, selectedProject?.id, workspaceRefreshVersion])
+  }, [loggedIn, projectDetailTab, selectedPackageProjectId, workspaceRefreshVersion])
 
   useEffect(() => {
     if (!loggedIn || !workspaceLoaded || !authUser || !inviteToken) return
@@ -2786,10 +2827,37 @@ function App() {
     if (
       !loggedIn ||
       !workspaceLoaded ||
+      pendingTodoDeepLinkId == null ||
+      todoDeepLinkReadyId === pendingTodoDeepLinkId
+    ) return
+    const controller = new AbortController()
+    const todoId = pendingTodoDeepLinkId
+    void fetchTodoWorkspace(todoId, { signal: controller.signal })
+      .then((workspace) => {
+        applyWorkspace(workspace)
+        setTodoDeepLinkReadyId(todoId)
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return
+        if (error instanceof ApiError && error.status === 404) {
+          setTodos((current) => current.filter((todo) => todo.id !== todoId))
+          setTodoDeepLinkReadyId(todoId)
+          return
+        }
+        setWorkspaceError('待办链接加载失败，请稍后重试。')
+      })
+    return () => controller.abort()
+  }, [applyWorkspace, loggedIn, pendingTodoDeepLinkId, todoDeepLinkReadyId, workspaceLoaded])
+
+  useEffect(() => {
+    if (
+      !loggedIn ||
+      !workspaceLoaded ||
       !authUser ||
       !organizationContextReady ||
       shouldDeferTodoDeepLinkForInvite(inviteToken, settledInviteToken) ||
-      pendingTodoDeepLinkId == null
+      pendingTodoDeepLinkId == null ||
+      todoDeepLinkReadyId !== pendingTodoDeepLinkId
     ) return
 
     const todo = resolveTodoDeepLinkTarget({
@@ -2834,6 +2902,7 @@ function App() {
     settledInviteToken,
     todos,
     workspaceLoaded,
+    todoDeepLinkReadyId,
   ])
 
   const toggleThemeMode = useCallback(() => {
@@ -2845,8 +2914,30 @@ function App() {
     : []
   const allTags = ['全部', ...Array.from(new Set(scopedProjects.flatMap((p) => p.tags)))]
 
+  useEffect(() => {
+    const query = search.trim()
+    if (view !== 'search' || !query) {
+      setSearchProjectIds(null)
+      return
+    }
+    setSearchProjectIds(null)
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => {
+      void searchWorkspaceProjects(selectedOrganizationId, query, { signal: controller.signal })
+        .then((result) => setSearchProjectIds(result.projectIds))
+        .catch(() => {
+          if (!controller.signal.aborted) setSearchProjectIds([])
+        })
+    }, 300)
+    return () => {
+      window.clearTimeout(timeout)
+      controller.abort()
+    }
+  }, [search, selectedOrganizationId, view])
+
   const filteredResults = useMemo(() => {
     const query = search.trim().toLowerCase()
+    const contentMatches = new Set(searchProjectIds ?? [])
     return scopedProjects
       .filter((project) => {
         const matchesStatus = statusFilter === 'all' || project.status === statusFilter
@@ -2855,19 +2946,10 @@ function App() {
           project.name,
           project.description,
           project.tags.join(' '),
-          project.journals.map((entry) => entry.content).join(' '),
-          todos
-            .filter((todo) => todo.projectId === project.id)
-            .map((todo) => todo.title)
-            .join(' '),
-          summaries
-            .filter((summary) => summary.projectId === project.id)
-            .map((summary) => summary.content)
-            .join(' '),
         ]
           .join(' ')
           .toLowerCase()
-        const matchesQuery = !query || projectText.includes(query)
+        const matchesQuery = !query || projectText.includes(query) || contentMatches.has(project.id)
         return matchesStatus && matchesTag && matchesQuery
       })
       .sort((left, right) => {
@@ -2877,7 +2959,7 @@ function App() {
         if (journalDiff !== 0) return journalDiff
         return right.id - left.id
       })
-  }, [scopedProjects, search, statusFilter, summaries, tagFilter, todos])
+  }, [scopedProjects, search, searchProjectIds, statusFilter, tagFilter])
 
   const openNotificationCount = useMemo(
     () =>
@@ -3019,6 +3101,7 @@ function App() {
     workspaceRefreshRequestIdRef.current += 1
     notificationRefreshPromiseRef.current = null
     workspaceRefreshPromiseRef.current = null
+    workspaceRefreshScopeKeyRef.current = ''
     workspaceMutationEpochRef.current += 1
     aiRequestIdRef.current += 1
     aiHistoryRequestIdRef.current += 1
@@ -3035,6 +3118,9 @@ function App() {
     setDisplayNameOnboardingError('')
     setWorkspaceError('')
     setWorkspaceLoaded(false)
+    workspaceInitializedRef.current = false
+    setTodoDeepLinkReadyId(null)
+    setSearchProjectIds(null)
     setNotifications(emptyNotifications)
     dispatchAiHistory({ type: 'session/reset' })
     setAiTurns([])
@@ -3166,11 +3252,12 @@ function App() {
   async function runConfirmedMutation(
     operation: () => Promise<WorkspaceData>,
     matches: (data: WorkspaceData) => boolean = () => false,
+    reconcile: () => Promise<WorkspaceData> = () => fetchWorkspace({ sections: ['catalog'] }),
   ) {
     const scope = confirmationScope
     workspaceMutationEpochRef.current += 1
     setWorkspaceError('')
-    const data = await reconcileAction(operation, fetchWorkspace, matches)
+    const data = await reconcileAction(operation, reconcile, matches)
     if (confirmationScopeRef.current !== scope) return false
     applyWorkspace(data)
     setWorkspaceRefreshVersion((current) => current + 1)
@@ -3398,7 +3485,8 @@ function App() {
 
   async function deleteJournalEntry(projectId: number, entryId: number) {
     return runConfirmedMutation(() => removeJournalEntry(projectId, entryId),
-      (data) => data.projects.some((item) => item.id === projectId && !item.journals.some((entry) => entry.id === entryId)))
+      (data) => data.projects.some((item) => item.id === projectId && !item.journals.some((entry) => entry.id === entryId)),
+      () => fetchWorkspace({ projectId, sections: ['project'] }))
   }
 
   async function editJournalEntry(projectId: number, entryId: number, content: string) {
@@ -3428,7 +3516,8 @@ function App() {
       description: `「${project?.name}」的日记「${entry?.content.slice(0, 80) ?? entryId}」将退出当前风险列表，原日记仍保留。`,
       confirmLabel: '取消风险标记', variant: 'default',
     }, () => runConfirmedMutation(() => resolveRiskFromJournal(projectId, entryId),
-      (data) => data.projects.some((item) => item.id === projectId && !item.riskJournalEntryIds.includes(entryId))))
+      (data) => data.projects.some((item) => item.id === projectId && !item.riskJournalEntryIds.includes(entryId)),
+      () => fetchWorkspace({ projectId, sections: ['project'] })))
   }
 
   async function addInboxItem() {
@@ -3454,7 +3543,7 @@ function App() {
       const member = organization.members.find((item) => item.username.toLowerCase() === username.trim().toLowerCase())
       if (!member) throw new Error('请先将该账号加入项目所属组织。')
       await addOrganizationProjectMember(project.organizationId, projectId, member.id)
-      return fetchWorkspace()
+      return fetchWorkspace({ projectId, sections: ['memberships'] })
     }))
   }
 
@@ -3466,7 +3555,8 @@ function App() {
       description: `「${member.memberName || member.invitedUsername}」${member.status === 'pending' ? '的待接受邀请将被撤回' : '将失去当前项目的成员权限，相关待办负责人、验收人、关注关系和交付指派将按项目规则清理'}。当前项目的旧邀请链接也会失效。`,
       confirmLabel: member.status === 'pending' ? '撤回邀请' : '移除成员',
     }, () => runConfirmedMutation(() => removeProjectMember(projectId, membershipId),
-      (data) => !data.memberships.some((item) => item.id === membershipId)))
+      (data) => !data.memberships.some((item) => item.id === membershipId),
+      () => fetchWorkspace({ projectId, sections: ['memberships'] })))
   }
 
   async function saveProjectFeishuSettings(projectId: number, payload: {
@@ -3524,7 +3614,8 @@ function App() {
 
   async function deleteProjectModule(projectId: number, moduleId: number) {
     const saved = await runConfirmedMutation(() => removeProjectModule(projectId, moduleId),
-      (data) => data.projects.some((item) => item.id === projectId && !item.modules.some((module) => module.id === moduleId)))
+      (data) => data.projects.some((item) => item.id === projectId && !item.modules.some((module) => module.id === moduleId)),
+      () => fetchWorkspace({ projectId, sections: ['project'] }))
     if (!saved) return false
     if (todoModuleId === moduleId) {
       setTodoModuleId(null)
@@ -3541,12 +3632,14 @@ function App() {
       description: `「${item.content.slice(0, 100)}」将移入「${project.name}」的${item.itemType === 'todo' ? '待办' : '日记'}，并退出草稿箱。`,
       confirmLabel: item.itemType === 'todo' ? '确认创建待办' : '确认归档', variant: 'default',
     }, () => runConfirmedMutation(() => archiveDraft(item.id, projectId),
-      (data) => !data.inbox.some((draft) => draft.id === item.id)))
+      (data) => !data.inbox.some((draft) => draft.id === item.id),
+      () => fetchWorkspace({ projectId, sections: ['inbox', 'project', 'todos'] })))
   }
 
   async function deleteInboxItem(itemId: number) {
     return runConfirmedMutation(() => removeDraft(itemId),
-      (data) => !data.inbox.some((item) => item.id === itemId))
+      (data) => !data.inbox.some((item) => item.id === itemId),
+      () => fetchWorkspace({ sections: ['inbox'] }))
   }
 
   async function addTodo(projectId?: number) {
@@ -3603,7 +3696,8 @@ function App() {
     if (payload.done === true || (payload.confirmationStatus !== undefined && payload.confirmationStatus !== 'confirmed')) {
       return runConfirmedMutation(() => updateTodo(todoId, payload), (data) => data.todos.some((todo) =>
         todo.id === todoId && !payload.acceptanceNote && !payload.rejectionReason && (payload.done === undefined || todo.done === payload.done) &&
-        (payload.confirmationStatus === undefined || todo.confirmationStatus === payload.confirmationStatus)))
+        (payload.confirmationStatus === undefined || todo.confirmationStatus === payload.confirmationStatus)),
+      () => fetchTodoWorkspace(todoId))
     }
     return Boolean(await runMutation(() => updateTodo(todoId, payload)))
   }
@@ -3637,7 +3731,7 @@ function App() {
       confirmLabel: '忽略邀请',
     }, async () => {
       const result = await reconcileAction(() => declineProjectInvitation(membershipId),
-        async () => ({ workspace: await fetchWorkspace(), ...await fetchNotifications() }),
+        async () => ({ workspace: await fetchWorkspace({ sections: ['memberships'] }), ...await fetchNotifications() }),
         (data) => !data.notifications.invites.some((item) => item.id === membershipId))
       if (confirmationScopeRef.current !== confirmationScope) return false
       applyWorkspace(result.workspace)
@@ -3660,8 +3754,11 @@ function App() {
   }
 
   async function deleteTodo(todoId: number) {
+    const projectId = todos.find((todo) => todo.id === todoId)?.projectId
+    if (projectId == null) return false
     return runConfirmedMutation(() => removeTodo(todoId),
-      (data) => !data.todos.some((item) => item.id === todoId))
+      (data) => !data.todos.some((item) => item.id === todoId),
+      () => fetchWorkspace({ projectId, sections: ['todos'] }))
   }
 
   async function generateSummary(projectId: number, type: SummaryPeriodType) {
@@ -3710,7 +3807,7 @@ function App() {
     if (confirmationScopeRef.current !== confirmationScope) return false
     setProjectPackageTimelines((current) => ({ ...current, [selectedProject.id]: timeline }))
     // The mutation is committed; refresh errors must not invite another write.
-    try { const data = await fetchWorkspace(); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
+    try { const data = await fetchWorkspace({ projectId: selectedProject.id, sections: ['project', 'todos'] }); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
     void refreshNotifications()
     return true
   }
@@ -3758,7 +3855,7 @@ function App() {
     if (confirmationScopeRef.current !== confirmationScope) return false
     setProjectPackageTimelines((current) => ({ ...current, [selectedProject.id]: timeline }))
     // The mutation is committed; refresh errors must not invite another write.
-    try { const data = await fetchWorkspace(); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
+    try { const data = await fetchWorkspace({ projectId: selectedProject.id, sections: ['project', 'todos'] }); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
     void refreshNotifications()
     return true
   }
@@ -3774,7 +3871,7 @@ function App() {
     if (confirmationScopeRef.current !== confirmationScope) return false
     setProjectPackageTimelines((current) => ({ ...current, [selectedProject.id]: timeline }))
     // The mutation is committed; refresh errors must not invite another write.
-    try { const data = await fetchWorkspace(); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
+    try { const data = await fetchWorkspace({ projectId: selectedProject.id, sections: ['project', 'todos'] }); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
     void refreshNotifications()
     return true
   }
@@ -3802,7 +3899,7 @@ function App() {
     if (confirmationScopeRef.current !== confirmationScope) return false
     setProjectPackageTimelines((current) => ({ ...current, [selectedProject.id]: timeline }))
     // The mutation is committed; refresh errors must not invite another write.
-    try { const data = await fetchWorkspace(); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
+    try { const data = await fetchWorkspace({ projectId: selectedProject.id, sections: ['project', 'todos'] }); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
     void refreshNotifications()
     return true
   }
@@ -3828,7 +3925,7 @@ function App() {
       }))
       setWorkspaceError('')
       try {
-        const workspace = await fetchWorkspace()
+        const workspace = await fetchWorkspace({ projectId: selectedProject.id, sections: ['project', 'todos'] })
         applyWorkspace(workspace)
       } catch {
         // The install record has already been persisted, so a follow-up
@@ -3873,7 +3970,7 @@ function App() {
       }))
       setWorkspaceError('')
       try {
-        const workspace = await fetchWorkspace()
+        const workspace = await fetchWorkspace({ projectId: selectedProject.id, sections: ['project', 'todos'] })
         applyWorkspace(workspace)
       } catch {
         // Keep the successful mutation result on screen even if the
@@ -3901,7 +3998,7 @@ function App() {
     if (confirmationScopeRef.current !== confirmationScope) return false
     setProjectPackageTimelines((current) => ({ ...current, [selectedProject.id]: timeline }))
     // The mutation is committed; refresh errors must not invite another write.
-    try { const data = await fetchWorkspace(); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
+    try { const data = await fetchWorkspace({ projectId: selectedProject.id, sections: ['project', 'todos'] }); if (confirmationScopeRef.current === confirmationScope) applyWorkspace(data) } catch { /* Keep the canonical timeline. */ }
     void refreshNotifications()
     return true
   }
@@ -4658,16 +4755,29 @@ function App() {
     const targets = projectId
       ? scopedProjects.filter((project) => project.id === projectId)
       : scopedProjects.filter((project) => project.accessRole === 'owner')
+    const summarySnapshot = await fetchWorkspace({ sections: ['summaries'] })
+    const projectSnapshots: WorkspaceData[] = []
+    for (let offset = 0; offset < targets.length; offset += 4) {
+      const batch = targets.slice(offset, offset + 4)
+      projectSnapshots.push(...await Promise.all(batch.map((project) => fetchWorkspace({
+        projectId: project.id,
+        sections: ['project', 'todos'],
+      }))))
+    }
+    applyWorkspace(summarySnapshot)
+    projectSnapshots.forEach(applyWorkspace)
     const sections = await Promise.all(
-      targets.map(async (project) => {
-        const projectTodosText = todos
+      targets.map(async (catalogProject, index) => {
+        const snapshot = projectSnapshots[index]
+        const project = snapshot.projects.find((item) => item.id === catalogProject.id) ?? catalogProject
+        const projectTodosText = snapshot.todos
           .filter((todo) => todo.projectId === project.id)
           .map((todo) => `- [${todo.done ? 'x' : ' '}] ${todo.title}`)
           .join('\n')
         const journalsText = project.journals
           .map((entry) => `### ${entry.speakerName} · ${entry.createdAt} · ${entry.visibility === 'public' ? '公开' : '私有'}\n\n${entry.content}`)
           .join('\n\n')
-        const summariesText = summaries
+        const summariesText = summarySnapshot.summaries
           .filter((summary) => summary.projectId === project.id)
           .map((summary) => `### ${summary.title}\n\n${summary.content}`)
           .join('\n\n')

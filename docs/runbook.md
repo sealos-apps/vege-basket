@@ -76,6 +76,18 @@ milliseconds and `total`, `idle`, and `waiting` pool counts. They intentionally 
 parameters. A sustained nonzero `waiting` count should first be addressed by reducing duplicate or
 over-broad reads before increasing the connection budget.
 
+HTTP diagnostics emit one JSON warning only when a request takes at least 500 ms or its declared
+response body is at least 256 KiB. The event type is `http.performance` and includes method,
+normalized Express route, status, elapsed milliseconds, and bytes; it never records the raw URL,
+query string, request body, credentials, or response content. Use these events with the database
+slow-query diagnostics to distinguish query latency from serialization or oversized contracts.
+
+`server/migrations/20260916_workspace_read_indexes.sql` adds only idempotent composite indexes for
+project journals/todos/notes and user drafts/summaries. It does not rewrite application rows, but
+building indexes can still consume database I/O and locks. Apply it only in an approved maintenance
+window after a snapshot; normal API startup mirrors the same indexes through `server/schema.ts` and
+therefore is also a database write.
+
 ## Organization Resource Management Verification
 
 After explicitly authorizing an external development PostgreSQL instance, run:

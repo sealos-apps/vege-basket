@@ -19,7 +19,8 @@ import {
   keyedDigest,
   verifyKeyedDigest,
 } from './crypto.ts'
-import { pool, query } from './db.ts'
+import { createLimitedQuery, pool, query } from './db.ts'
+import { reportHttpPerformance } from './http-performance.ts'
 import {
   AiProviderError,
   isAiProviderConfigured,
@@ -378,6 +379,7 @@ function encryptTags(tags: string[]) {
 
 const app = express()
 app.set('trust proxy', true)
+app.use(reportHttpPerformance())
 const port = Number(process.env.PORT ?? 8787)
 const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const clientDistPath = path.resolve(serverDir, '../dist')
@@ -400,6 +402,15 @@ const aiIntentRequestRateLimiter = createAiRateLimiter({
 })
 const aiIntentConcurrencyLimiter = createAiConcurrencyLimiter({
   globalLimit: 10,
+  perUserLimit: 2,
+})
+const workspaceSearchRateLimiter = createAiRateLimiter({
+  globalLimit: 600,
+  perUserLimit: 60,
+  windowMs: 60_000,
+})
+const workspaceSearchConcurrencyLimiter = createAiConcurrencyLimiter({
+  globalLimit: 12,
   perUserLimit: 2,
 })
 const aiTurnExecutionConcurrencyLimiter = createAiConcurrencyLimiter({
@@ -2024,7 +2035,10 @@ async function buildAiTodoProposalCatalog(
   projectId?: number,
   purpose: 'generation' | 'confirmation' = 'generation',
 ): Promise<AiTodoProposalCatalog> {
-  const workspace = await getWorkspace(userId)
+  const workspace = await getWorkspace(userId, {
+    projectId,
+    sections: new Set<WorkspaceSection>(['memberships', 'project']),
+  })
   return {
     projects: workspace.projects
       .filter((project) => projectId === undefined || project.id === projectId)
@@ -2050,6 +2064,98 @@ async function buildAiTodoProposalCatalog(
         }
       }),
   }
+}
+
+async function searchWorkspaceProjectIds(
+  userId: number,
+  organizationId: number | null,
+  search: string,
+) {
+  const currentUser = await query<UserRow>(
+    'select id, email, display_name from users where id = $1',
+    [userId],
+  )
+  const systemAdmin = isSystemAdmin(currentUser.rows[0]?.email ?? '')
+  const systemAdminOrganizationScopeSql = (alias: string) =>
+    systemAdmin ? `${alias}.organization_id is not null` : 'false'
+  const organizationScope = organizationId === null
+    ? 'p.organization_id is null'
+    : 'p.organization_id = $2'
+  const params = organizationId === null ? [userId] : [userId, organizationId]
+  const searchQuery = createLimitedQuery()
+  const [journals, todos, summaries] = await Promise.all([
+    searchQuery<{ content: string; project_id: string }>(
+      `select je.project_id, je.content
+       from journal_entries je
+       join projects p on p.id = je.project_id
+       left join project_memberships membership
+         on membership.project_id = p.id
+        and membership.status = 'active'
+        and membership.invited_user_id = $1
+       where ${organizationScope}
+         and (
+           p.user_id = $1
+           or membership.id is not null
+           or ${managedOrganizationReadScopeSql('p.organization_id')}
+           or ${systemAdminOrganizationScopeSql('p')}
+         )
+         and (
+           je.author_user_id = $1
+           or je.visibility = 'public'
+           or (je.author_user_id is null and p.user_id = $1)
+           or ${managedOrganizationReadScopeSql('p.organization_id')}
+           or ${systemAdminOrganizationScopeSql('p')}
+         )`,
+      params,
+    ),
+    searchQuery<{ project_id: string; title: string }>(
+      `select t.project_id, t.title
+       from todos t
+       join projects p on p.id = t.project_id
+       left join project_memberships membership
+         on membership.project_id = p.id
+        and membership.status = 'active'
+        and membership.invited_user_id = $1
+       where ${organizationScope}
+         and (
+           p.user_id = $1
+           or membership.id is not null
+           or ${managedOrganizationReadScopeSql('p.organization_id')}
+           or ${systemAdminOrganizationScopeSql('p')}
+         )`,
+      params,
+    ),
+    searchQuery<{ content: string; project_id: string }>(
+      `select summary.project_id, summary.content
+       from summaries summary
+       join projects p on p.id = summary.project_id
+       where ${organizationScope}
+         and (
+           summary.user_id = $1
+           or (
+             summary.type <> 'reply'
+             and (
+               p.user_id = $1
+               or ${managedOrganizationReadScopeSql('p.organization_id')}
+               or ${systemAdminOrganizationScopeSql('p')}
+             )
+           )
+         )`,
+      params,
+    ),
+  ])
+  const normalized = search.toLocaleLowerCase('zh-CN')
+  return [...new Set([
+    ...journals.rows
+      .filter((row) => decryptText(row.content).toLocaleLowerCase('zh-CN').includes(normalized))
+      .map((row) => Number(row.project_id)),
+    ...todos.rows
+      .filter((row) => decryptText(row.title).toLocaleLowerCase('zh-CN').includes(normalized))
+      .map((row) => Number(row.project_id)),
+    ...summaries.rows
+      .filter((row) => decryptText(row.content).toLocaleLowerCase('zh-CN').includes(normalized))
+      .map((row) => Number(row.project_id)),
+  ])]
 }
 
 async function lockAiTodoProposalTarget(
@@ -4215,7 +4321,42 @@ async function writeTodoMentions(
   return newMentionIds
 }
 
-async function getWorkspace(userId: number) {
+type WorkspaceSection =
+  | 'catalog'
+  | 'inbox'
+  | 'memberships'
+  | 'project'
+  | 'summaries'
+  | 'todos'
+
+const workspaceSections = new Set<WorkspaceSection>([
+  'catalog',
+  'inbox',
+  'memberships',
+  'project',
+  'summaries',
+  'todos',
+])
+
+function parseWorkspaceSections(value: unknown) {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !value.trim()) return null
+  const sections = new Set(value.split(',').map((section) => section.trim()))
+  if ([...sections].some((section) => !workspaceSections.has(section as WorkspaceSection))) {
+    return null
+  }
+  return sections as Set<WorkspaceSection>
+}
+
+async function getWorkspace(
+  userId: number,
+  options: { projectId?: number; sections?: Set<WorkspaceSection> } = {},
+) {
+  const workspaceQuery = createLimitedQuery()
+  const includes = (section: WorkspaceSection) => !options.sections || options.sections.has(section)
+  const scopedParams = options.projectId ? [userId, options.projectId] : [userId]
+  const projectScope = options.projectId ? ' and p.id = $2' : ''
+  const includeProjects = includes('catalog') || includes('project')
   const currentUser = await query<UserRow>(
     'select id, email, display_name from users where id = $1',
     [userId],
@@ -4236,7 +4377,7 @@ async function getWorkspace(userId: number) {
     summariesResult,
     membershipsResult,
   ] = await Promise.all([
-    query<{
+    includeProjects ? workspaceQuery<{
       id: string
       owner_user_id: string
       organization_id: string | null
@@ -4252,8 +4393,9 @@ async function getWorkspace(userId: number) {
 	      tags: string[]
 	      tags_encrypted: string | null
 	      feishu_chat_id: string | null
-	      feishu_chat_enabled: boolean | null
-	      created_at: Date
+      feishu_chat_enabled: boolean | null
+      latest_journal_at: Date | null
+      created_at: Date
 	      updated_at: Date
 	    }>(
       `
@@ -4273,6 +4415,18 @@ async function getWorkspace(userId: number) {
 	             p.tags_encrypted,
 	             pi.target_id as feishu_chat_id,
 	             pi.enabled as feishu_chat_enabled,
+	             (
+	               select max(entry.created_at)
+	               from journal_entries entry
+	               where entry.project_id = p.id
+	                 and (
+	                   entry.author_user_id = $1
+	                   or entry.visibility = 'public'
+	                   or (entry.author_user_id is null and p.user_id = $1)
+	                   or ${managedOrganizationReadScopeSql('p.organization_id')}
+	                   or ${systemAdminOrganizationScopeSql('p')}
+	                 )
+	             ) as latest_journal_at,
 	             p.created_at,
 	             p.updated_at
 	      from projects p
@@ -4285,15 +4439,17 @@ async function getWorkspace(userId: number) {
         on pm.project_id = p.id
        and pm.status = 'active'
        and pm.invited_user_id = $1
-      where p.user_id = $1
-         or pm.id is not null
-         or ${managedOrganizationReadScopeSql('p.organization_id')}
-         or ${systemAdminOrganizationScopeSql('p')}
+      where (
+        p.user_id = $1
+        or pm.id is not null
+        or ${managedOrganizationReadScopeSql('p.organization_id')}
+        or ${systemAdminOrganizationScopeSql('p')}
+      )${includes('catalog') ? '' : projectScope}
       order by updated_at desc, id desc
       `,
-      [userId],
-    ),
-    query<ProjectModuleRow>(
+      includes('catalog') ? [userId] : scopedParams,
+    ) : Promise.resolve({ rows: [] }),
+    includes('project') ? workspaceQuery<ProjectModuleRow>(
       `
       select pm.id,
              pm.project_id,
@@ -4309,23 +4465,25 @@ async function getWorkspace(userId: number) {
         on membership.project_id = p.id
        and membership.status = 'active'
        and membership.invited_user_id = $1
-      where p.user_id = $1
-         or membership.id is not null
-         or ${managedOrganizationReadScopeSql('p.organization_id')}
-         or ${systemAdminOrganizationScopeSql('p')}
+      where (
+        p.user_id = $1
+        or membership.id is not null
+        or ${managedOrganizationReadScopeSql('p.organization_id')}
+        or ${systemAdminOrganizationScopeSql('p')}
+      )${projectScope}
       order by pm.created_at asc, pm.id asc
       `,
-      [userId],
-    ),
-    query<{ id: string; project_id: string; name: string; created_at: Date; updated_at: Date; task_count: string }>(
+      scopedParams,
+    ) : Promise.resolve({ rows: [] }),
+    includes('project') ? workspaceQuery<{ id: string; project_id: string; name: string; created_at: Date; updated_at: Date; task_count: string }>(
       `select s.id, s.project_id, s.name, s.created_at, s.updated_at, count(t.id)::text as task_count
          from project_subprojects s join projects p on p.id = s.project_id
          left join todos t on t.subproject_id = s.id
-        where p.user_id = $1 or ${managedOrganizationReadScopeSql('p.organization_id')} or exists (
-          select 1 from project_memberships m where m.project_id = p.id and m.status = 'active' and m.invited_user_id = $1)
-        group by s.id order by s.created_at, s.id`, [userId],
-    ),
-    query<{
+        where (p.user_id = $1 or ${managedOrganizationReadScopeSql('p.organization_id')} or exists (
+          select 1 from project_memberships m where m.project_id = p.id and m.status = 'active' and m.invited_user_id = $1))${projectScope}
+        group by s.id order by s.created_at, s.id`, scopedParams,
+    ) : Promise.resolve({ rows: [] }),
+    includes('project') ? workspaceQuery<{
       id: string
       project_id: string
       content: string
@@ -4363,12 +4521,12 @@ async function getWorkspace(userId: number) {
           or (je.author_user_id is null and p.user_id = $1)
           or ${managedOrganizationReadScopeSql('p.organization_id')}
           or ${systemAdminOrganizationScopeSql('p')}
-        )
+        )${projectScope}
       order by je.created_at desc, je.id desc
       `,
-      [userId],
-    ),
-    query<{ project_id: string; content: string; journal_entry_id: string | null }>(
+      scopedParams,
+    ) : Promise.resolve({ rows: [] }),
+    includes('project') ? workspaceQuery<{ project_id: string; content: string; journal_entry_id: string | null }>(
       `
       select r.project_id, r.content, r.journal_entry_id
       from risks r
@@ -4377,15 +4535,17 @@ async function getWorkspace(userId: number) {
         on pm.project_id = p.id
        and pm.status = 'active'
        and pm.invited_user_id = $1
-      where p.user_id = $1
-         or pm.id is not null
-         or ${managedOrganizationReadScopeSql('p.organization_id')}
-         or ${systemAdminOrganizationScopeSql('p')}
+      where (
+        p.user_id = $1
+        or pm.id is not null
+        or ${managedOrganizationReadScopeSql('p.organization_id')}
+        or ${systemAdminOrganizationScopeSql('p')}
+      )${projectScope}
       order by r.created_at desc, r.id desc
       `,
-      [userId],
-    ),
-    query<{
+      scopedParams,
+    ) : Promise.resolve({ rows: [] }),
+    includes('todos') ? workspaceQuery<{
       id: string
       project_id: string
       title: string
@@ -4504,15 +4664,17 @@ async function getWorkspace(userId: number) {
       left join users assigner on assigner.id = t.assigned_by_user_id
       left join project_modules module on module.id = t.project_module_id
       left join project_subprojects subproject on subproject.id = t.subproject_id
-      where p.user_id = $1
-         or membership.id is not null
-         or ${managedOrganizationReadScopeSql('p.organization_id')}
-         or ${systemAdminOrganizationScopeSql('p')}
+      where (
+        p.user_id = $1
+        or membership.id is not null
+        or ${managedOrganizationReadScopeSql('p.organization_id')}
+        or ${systemAdminOrganizationScopeSql('p')}
+      )${projectScope}
       order by t.created_at desc, t.id desc
       `,
-      [userId],
-    ),
-      query<TodoNoteRow>(
+      scopedParams,
+    ) : Promise.resolve({ rows: [] }),
+    includes('todos') ? workspaceQuery<TodoNoteRow>(
       `
       select n.id,
              n.todo_id,
@@ -4532,15 +4694,17 @@ async function getWorkspace(userId: number) {
        and pm.status = 'active'
        and pm.invited_user_id = $1
       left join users author on author.id = n.author_user_id
-      where p.user_id = $1
-         or pm.id is not null
-         or ${managedOrganizationReadScopeSql('p.organization_id')}
-         or ${systemAdminOrganizationScopeSql('p')}
+      where (
+        p.user_id = $1
+        or pm.id is not null
+        or ${managedOrganizationReadScopeSql('p.organization_id')}
+        or ${systemAdminOrganizationScopeSql('p')}
+      )${projectScope}
       order by n.created_at asc, n.id asc
       `,
-      [userId],
-    ),
-    query<{
+      scopedParams,
+    ) : Promise.resolve({ rows: [] }),
+    includes('inbox') ? workspaceQuery<{
       id: string
       source: 'manual' | 'feishu'
       item_type: 'journal' | 'todo'
@@ -4568,8 +4732,8 @@ async function getWorkspace(userId: number) {
       order by processed asc, created_at desc, id desc
       `,
       [userId],
-    ),
-    query<{
+    ) : Promise.resolve({ rows: [] }),
+    includes('summaries') ? workspaceQuery<{
       id: string
       project_id: string | null
       source_turn_id: string | null
@@ -4599,8 +4763,8 @@ async function getWorkspace(userId: number) {
       order by created_at desc, id desc
       `,
       [userId],
-    ),
-    query<ProjectMembershipRow>(
+    ) : Promise.resolve({ rows: [] }),
+    includes('memberships') ? workspaceQuery<ProjectMembershipRow>(
       `
       with accessible_projects as (
         select p.id,
@@ -4616,10 +4780,12 @@ async function getWorkspace(userId: number) {
           on access_pm.project_id = p.id
          and access_pm.status = 'active'
          and access_pm.invited_user_id = $1
-        where p.user_id = $1
-           or access_pm.id is not null
-           or ${managedOrganizationReadScopeSql('p.organization_id')}
-           or ${systemAdminOrganizationScopeSql('p')}
+        where (
+          p.user_id = $1
+          or access_pm.id is not null
+          or ${managedOrganizationReadScopeSql('p.organization_id')}
+          or ${systemAdminOrganizationScopeSql('p')}
+        )${projectScope}
       ),
       visible_memberships as (
         select pm.*
@@ -4631,7 +4797,7 @@ async function getWorkspace(userId: number) {
         union
         select pm.*
         from project_memberships pm
-        where pm.invited_user_id = $1
+        where pm.invited_user_id = $1${options.projectId ? ' and pm.project_id = $2' : ''}
       )
       select pm.id,
              pm.project_id,
@@ -4646,10 +4812,12 @@ async function getWorkspace(userId: number) {
       left join users u on u.id = pm.invited_user_id
       order by pm.created_at desc, pm.id desc
       `,
-      [userId],
-    ),
+      scopedParams,
+    ) : Promise.resolve({ rows: [] }),
   ])
-  const departedUserIds = await getDepartedUserIds()
+  const departedUserIds = includes('todos')
+    ? await getDepartedUserIds()
+    : []
 
   const journalsByProject = new Map<
     number,
@@ -4766,6 +4934,8 @@ async function getWorkspace(userId: number) {
 
   return {
     departedUserIds,
+    loadedSections: options.sections ? [...options.sections] : undefined,
+    projectId: options.projectId,
     projects: projectsResult.rows.map((project) => ({
       id: Number(project.id),
       accessRole: project.access_role,
@@ -4787,6 +4957,9 @@ async function getWorkspace(userId: number) {
       ownerUserId: Number(project.owner_user_id),
       status: project.status,
       createdAt: formatUpdatedAt(project.created_at),
+	      latestJournalAt: project.latest_journal_at
+	        ? formatDateTime(project.latest_journal_at)
+	        : undefined,
 	      updatedAt: formatUpdatedAt(project.updated_at),
 	      tags: decryptTags(project.tags_encrypted, project.tags ?? []),
 	      feishuChatEnabled: Boolean(project.feishu_chat_enabled && project.feishu_chat_id),
@@ -4914,6 +5087,41 @@ async function getWorkspace(userId: number) {
   }
 }
 
+function supportsSectionedWorkspace(request: express.Request) {
+  return request.get('X-Veges-Workspace-Contract') === 'sections-v1'
+}
+
+function getWorkspaceCatalog(userId: number, request?: express.Request) {
+  return request && !supportsSectionedWorkspace(request)
+    ? getWorkspace(userId)
+    : getWorkspace(userId, { sections: new Set<WorkspaceSection>(['catalog']) })
+}
+
+function getInitialWorkspace(request: express.Request, userId: number) {
+  return getWorkspaceCatalog(userId, request)
+}
+
+function getProjectWorkspace(
+  userId: number,
+  projectId: number,
+  sections: WorkspaceSection[] = ['memberships', 'project', 'todos'],
+  request?: express.Request,
+) {
+  return request && !supportsSectionedWorkspace(request)
+    ? getWorkspace(userId)
+    : getWorkspace(userId, { projectId, sections: new Set(sections) })
+}
+
+function getWorkspaceSections(
+  userId: number,
+  sections: WorkspaceSection[],
+  request?: express.Request,
+) {
+  return request && !supportsSectionedWorkspace(request)
+    ? getWorkspace(userId)
+    : getWorkspace(userId, { sections: new Set(sections) })
+}
+
 function asyncHandler(
   handler: (request: express.Request, response: express.Response) => Promise<void>,
 ) {
@@ -4960,7 +5168,7 @@ app.post('/api/auth/register', asyncHandler(async (request, response) => {
     isNewUser: true,
     token,
     user: await serializeUserWithRoleContext(registration.user, token),
-    workspace: await getWorkspace(registration.userId),
+    workspace: await getInitialWorkspace(request, registration.userId),
   })
 }))
 
@@ -4986,7 +5194,7 @@ app.post('/api/auth/login', asyncHandler(async (request, response) => {
   response.json({
     token,
     user: await serializeUserWithRoleContext(row, token),
-    workspace: await getWorkspace(userId),
+    workspace: await getInitialWorkspace(request, userId),
   })
 }))
 
@@ -5000,7 +5208,7 @@ app.get('/api/auth/me', asyncHandler(async (request, response) => {
   )
   response.json({
     user: await serializeUserWithRoleContext(user.rows[0], getTokenFromRequest(request)),
-    workspace: await getWorkspace(userId),
+    workspace: await getInitialWorkspace(request, userId),
   })
 }))
 
@@ -5213,7 +5421,77 @@ app.get('/api/ai/status', asyncHandler(async (request, response) => {
 app.get('/api/workspace', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
-  response.json(await getWorkspace(userId))
+  const sections = parseWorkspaceSections(request.query.sections)
+  const projectId = request.query.projectId === undefined
+    ? undefined
+    : parseProjectSubprojectId(request.query.projectId)
+  if (
+    sections === null ||
+    (request.query.projectId !== undefined && projectId === null) ||
+    (projectId === undefined && (sections?.has('project') || sections?.has('todos')))
+  ) {
+    response.status(400).json({ error: 'Invalid workspace scope' })
+    return
+  }
+  response.json(await getWorkspace(userId, {
+    projectId: projectId ?? undefined,
+    sections,
+  }))
+}))
+
+app.get('/api/workspace/search', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  const organizationId = parseOrganizationContext(request.query.organizationId)
+  const search = String(request.query.q ?? '').trim().slice(0, 200)
+  if (organizationId === undefined || !search) {
+    response.status(400).json({ error: 'Search and a valid organization context are required' })
+    return
+  }
+  if (!workspaceSearchRateLimiter.allow(userId)) {
+    response.status(429).json({ error: 'Workspace search rate limit exceeded' })
+    return
+  }
+  const releaseConcurrency = workspaceSearchConcurrencyLimiter.acquire(userId)
+  if (!releaseConcurrency) {
+    response.status(429).json({ error: 'Workspace search concurrency limit exceeded' })
+    return
+  }
+  try {
+    response.json({
+      projectIds: await searchWorkspaceProjectIds(userId, organizationId, search),
+    })
+  } finally {
+    releaseConcurrency()
+  }
+}))
+
+app.get('/api/todos/:todoId/workspace', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  const todoId = parseProjectSubprojectId(request.params.todoId)
+  if (todoId === null) {
+    response.status(404).json({ error: 'Todo not found' })
+    return
+  }
+  const todoResult = await query<{ project_id: string }>(
+    'select project_id from todos where id = $1',
+    [todoId],
+  )
+  const projectId = todoResult.rows[0] ? Number(todoResult.rows[0].project_id) : null
+  if (!projectId) {
+    response.status(404).json({ error: 'Todo not found' })
+    return
+  }
+  const workspace = await getProjectWorkspace(userId, projectId)
+  if (
+    !workspace.projects.some((project) => project.id === projectId) ||
+    !workspace.todos.some((todo) => todo.id === todoId)
+  ) {
+    response.status(404).json({ error: 'Todo not found' })
+    return
+  }
+  response.json(workspace)
 }))
 
 app.get('/api/projects/:projectId/todo-activity', asyncHandler(async (request, response) => {
@@ -9407,7 +9685,7 @@ app.post('/api/invitations/:membershipId/accept', asyncHandler(async (request, r
   }
   response.json({
     notifications: await getNotifications(userId),
-    workspace: await getWorkspace(userId),
+    workspace: await getWorkspaceSections(userId, ['catalog', 'memberships'], request),
   })
 }))
 
@@ -9443,7 +9721,7 @@ app.post('/api/invitations/:membershipId/decline', asyncHandler(async (request, 
   )
   response.json({
     notifications: await getNotifications(userId),
-    workspace: await getWorkspace(userId),
+    workspace: await getWorkspaceSections(userId, ['memberships'], request),
   })
 }))
 
@@ -9521,7 +9799,7 @@ app.post('/api/project-invite-links/:token/accept', asyncHandler(async (request,
     return
   }
 
-  response.json({ workspace: await getWorkspace(userId) })
+  response.json({ workspace: await getWorkspaceSections(userId, ['catalog', 'memberships'], request) })
 }))
 
 app.post('/api/projects', asyncHandler(async (request, response) => {
@@ -9576,7 +9854,7 @@ app.post('/api/projects', asyncHandler(async (request, response) => {
   } finally {
     client.release()
   }
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspaceCatalog(userId, request))
 }))
 
 app.patch('/api/projects/:projectId', asyncHandler(async (request, response) => {
@@ -9625,7 +9903,7 @@ app.patch('/api/projects/:projectId', asyncHandler(async (request, response) => 
       values,
     )
   })) return
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspaceCatalog(userId, request))
 }))
 
 app.patch('/api/projects/:projectId/feishu', asyncHandler(async (request, response) => {
@@ -9655,7 +9933,7 @@ app.patch('/api/projects/:projectId/feishu', asyncHandler(async (request, respon
 	    `,
 	    [projectId, chatId, enabled],
 	  )
-		  response.json(await getWorkspace(userId))
+		  response.json(await getWorkspaceCatalog(userId, request))
 		}))
 
 app.post('/api/projects/:projectId/transfer', asyncHandler(async (request, response) => {
@@ -10030,7 +10308,7 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
 
   response.json({
     notifications: await getNotifications(userId),
-    workspace: await getWorkspace(userId),
+    workspace: await getWorkspaceSections(userId, ['catalog', 'memberships'], request),
   })
 }))
 
@@ -10048,7 +10326,7 @@ app.delete('/api/projects/:projectId', asyncHandler(async (request, response) =>
   } finally {
     client.release()
   }
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspaceCatalog(userId, request))
 }))
 
 app.post('/api/projects/:projectId/journals', asyncHandler(async (request, response) => {
@@ -10086,7 +10364,7 @@ app.post('/api/projects/:projectId/journals', asyncHandler(async (request, respo
     [projectId, encryptText(content), userId, createdAt],
   )
   await query('update projects set updated_at = now() where id = $1', [projectId])
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getProjectWorkspace(userId, projectId, ['project'], request))
 }))
 
 app.patch('/api/projects/:projectId/journals/:entryId', asyncHandler(async (request, response) => {
@@ -10150,7 +10428,7 @@ app.patch('/api/projects/:projectId/journals/:entryId', asyncHandler(async (requ
     values,
   )
   await query('update projects set updated_at = now() where id = $1', [projectId])
-  response.json(await getWorkspace(userId))
+  response.json(await getProjectWorkspace(userId, projectId, ['project'], request))
 }))
 
 app.delete('/api/projects/:projectId/journals/:entryId', asyncHandler(async (request, response) => {
@@ -10185,7 +10463,7 @@ app.delete('/api/projects/:projectId/journals/:entryId', asyncHandler(async (req
     [entryId, projectId],
   )
   await query('update projects set updated_at = now() where id = $1', [projectId])
-  response.json(await getWorkspace(userId))
+  response.json(await getProjectWorkspace(userId, projectId, ['project'], request))
 }))
 
 app.post('/api/projects/:projectId/risks', asyncHandler(async (request, response) => {
@@ -10242,7 +10520,7 @@ app.post('/api/projects/:projectId/risks', asyncHandler(async (request, response
     )
   }
   await query('update projects set updated_at = now() where id = $1', [projectId])
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getProjectWorkspace(userId, projectId, ['project'], request))
 }))
 
 app.post('/api/projects/:projectId/invitations', asyncHandler(async (request, response) => {
@@ -10327,7 +10605,7 @@ app.post('/api/projects/:projectId/invitations', asyncHandler(async (request, re
       )
     }
   })) return
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getProjectWorkspace(userId, projectId, ['memberships'], request))
 }))
 
 app.post('/api/projects/:projectId/invite-link', asyncHandler(async (request, response) => {
@@ -10520,7 +10798,7 @@ app.delete('/api/projects/:projectId/invitations/:membershipId', asyncHandler(as
       [membershipId, projectId, access.ownerUserId],
     )
   })) return
-  response.json(await getWorkspace(userId))
+  response.json(await getProjectWorkspace(userId, projectId, ['memberships'], request))
 }))
 
 app.post('/api/projects/:projectId/modules', asyncHandler(async (request, response) => {
@@ -10546,7 +10824,7 @@ app.post('/api/projects/:projectId/modules', asyncHandler(async (request, respon
   } finally {
     client.release()
   }
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getProjectWorkspace(userId, projectId, ['project'], request))
 }))
 
 app.delete('/api/projects/:projectId/modules/:moduleId', asyncHandler(async (request, response) => {
@@ -10572,7 +10850,7 @@ app.delete('/api/projects/:projectId/modules/:moduleId', asyncHandler(async (req
   } finally {
     client.release()
   }
-  response.json(await getWorkspace(userId))
+  response.json(await getProjectWorkspace(userId, projectId, ['project'], request))
 }))
 
 app.get('/api/projects/:projectId/subprojects', asyncHandler(async (request, response) => {
@@ -10594,7 +10872,7 @@ app.get('/api/projects/:projectId/todos', asyncHandler(async (request, response)
   }
   const filter = request.query.subprojectId
   if (filter === 'all') {
-    response.json((await getWorkspace(userId)).todos.filter(todo => todo.projectId === projectId))
+    response.json((await getProjectWorkspace(userId, projectId, ['todos'])).todos)
     return
   }
   const unassigned = filter === 'none'
@@ -10604,7 +10882,7 @@ app.get('/api/projects/:projectId/todos', asyncHandler(async (request, response)
     try { await resolveProjectSubprojectId(client, projectId, subprojectId) }
     finally { client.release() }
   }
-  const workspace = await getWorkspace(userId)
+  const workspace = await getProjectWorkspace(userId, projectId, ['todos'])
   response.json(workspace.todos.filter(todo => todo.projectId === projectId && (
     unassigned ? todo.subprojectId == null : subprojectId === null || todo.subprojectId === subprojectId
   )))
@@ -10622,7 +10900,7 @@ app.post('/api/projects/:projectId/subprojects', asyncHandler(async (request, re
     await requireProjectSubprojectManager(client, projectId, userId)
     await createProjectSubproject(client, projectId, name); await client.query('commit')
   } catch (error) { await client.query('rollback'); throw error } finally { client.release() }
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getProjectWorkspace(userId, projectId, ['project'], request))
 }))
 
 app.patch('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(async (request, response) => {
@@ -10637,7 +10915,7 @@ app.patch('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(asy
     if (!exists.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_NOT_FOUND', '项目子项目不存在。', 404)
     await client.query('update project_subprojects set name = $1, name_lookup = $2, updated_at = now() where id = $3 and project_id = $4', [encryptText(name), await projectSubprojectNameLookup(client, name), subprojectId, projectId]); await client.query('commit')
   } catch (error) { await client.query('rollback'); throw error } finally { client.release() }
-  response.json(await getWorkspace(userId))
+  response.json(await getProjectWorkspace(userId, projectId, ['project'], request))
 }))
 
 app.delete('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(async (request, response) => {
@@ -10652,7 +10930,7 @@ app.delete('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(as
     if (!result.rowCount) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_NOT_FOUND', '项目子项目不存在。', 404)
     await client.query('commit')
   } catch (error) { await client.query('rollback'); throw error } finally { client.release() }
-  response.json(await getWorkspace(userId))
+  response.json(await getProjectWorkspace(userId, projectId, ['project'], request))
 }))
 
 app.delete('/api/projects/:projectId/risks', asyncHandler(async (request, response) => {
@@ -10723,7 +11001,7 @@ app.delete('/api/projects/:projectId/risks', asyncHandler(async (request, respon
     }
   }
   await query('update projects set updated_at = now() where id = $1', [projectId])
-  response.json(await getWorkspace(userId))
+  response.json(await getProjectWorkspace(userId, projectId, ['project'], request))
 }))
 
 app.post('/api/todos', asyncHandler(async (request, response) => {
@@ -10880,7 +11158,7 @@ app.post('/api/todos', asyncHandler(async (request, response) => {
   if (createdTodoMentionIds.length > 0) {
     enqueueTodoMentionDeliveries(createdTodoMentionIds)
   }
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getProjectWorkspace(userId, projectId, ['project', 'todos'], request))
 }))
 
 app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
@@ -11425,7 +11703,7 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
       todoId,
     })
   }
-  response.json(await getWorkspace(userId))
+  response.json(await getProjectWorkspace(userId, projectId, ['project', 'todos'], request))
 }))
 
 app.delete('/api/todos/:todoId', asyncHandler(async (request, response) => {
@@ -11471,7 +11749,7 @@ app.delete('/api/todos/:todoId', asyncHandler(async (request, response) => {
     `,
     [Number(request.params.todoId)],
   )
-  response.json(await getWorkspace(userId))
+  response.json(await getProjectWorkspace(userId, Number(todo.project_id), ['project', 'todos'], request))
 }))
 
 app.post('/api/todos/:todoId/notes', asyncHandler(async (request, response) => {
@@ -11522,7 +11800,7 @@ app.post('/api/todos/:todoId/notes', asyncHandler(async (request, response) => {
     client.release()
   }
   if (noteId != null) enqueueTodoNoteDeliveries(noteId)
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getProjectWorkspace(userId, projectId, ['todos'], request))
 }))
 
 app.patch('/api/todos/:todoId/notes/:noteId', asyncHandler(async (request, response) => {
@@ -11615,7 +11893,7 @@ app.patch('/api/todos/:todoId/notes/:noteId', asyncHandler(async (request, respo
     client.release()
   }
   enqueueTodoNoteDeliveries(noteId)
-  response.json(await getWorkspace(userId))
+  response.json(await getProjectWorkspace(userId, projectId, ['todos'], request))
 }))
 
 app.get('/api/package-market/rules', asyncHandler(async (request, response) => {
@@ -12391,7 +12669,7 @@ app.post('/api/drafts', asyncHandler(async (request, response) => {
     `,
     [userId, encryptText(content), request.body.suggestedProjectId ? Number(request.body.suggestedProjectId) : null],
   )
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspaceSections(userId, ['inbox'], request))
 }))
 
 app.post('/api/drafts/:draftId/archive', asyncHandler(async (request, response) => {
@@ -12508,7 +12786,12 @@ app.post('/api/drafts/:draftId/archive', asyncHandler(async (request, response) 
   } finally {
     client.release()
   }
-  response.json(await getWorkspace(userId))
+  response.json(await (supportsSectionedWorkspace(request)
+    ? getWorkspace(userId, {
+        projectId,
+        sections: new Set<WorkspaceSection>(['inbox', 'project', 'todos']),
+      })
+    : getWorkspace(userId)))
 }))
 
 app.post('/api/integrations/feishu/conversation-analysis', asyncHandler(async (request, response) => {
@@ -12751,7 +13034,7 @@ app.post('/api/ai/conversations/:conversationId/turns/:turnId/document', asyncHa
     )
     response.status(result.created ? 201 : 200).json({
       ...result,
-      workspace: await getWorkspace(userId),
+      workspace: await getWorkspaceSections(userId, ['summaries'], request),
     })
   } catch (error) {
     if (!sendAiConversationError(response, error)) throw error
@@ -13354,7 +13637,7 @@ app.post('/api/ai/todo-proposals/:batchId/confirm', asyncHandler(async (request,
       Number(request.params.batchId),
       Array.isArray(request.body.proposals) ? request.body.proposals : [],
     )
-    response.status(201).json(await getWorkspace(userId))
+    response.status(201).json(await getWorkspaceSections(userId, ['todos'], request))
   } catch (error) {
     if (!sendAiConversationError(response, error)) throw error
   }
@@ -13367,7 +13650,7 @@ app.delete('/api/drafts/:draftId', asyncHandler(async (request, response) => {
     Number(request.params.draftId),
     userId,
   ])
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspaceSections(userId, ['inbox'], request))
 }))
 
 app.post('/api/projects/:projectId/summaries', asyncHandler(async (request, response) => {
@@ -13387,7 +13670,7 @@ app.post('/api/projects/:projectId/summaries', asyncHandler(async (request, resp
     response.status(result.status ?? 500).json({ error: result.error ?? 'Summary failed' })
     return
   }
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspaceSections(userId, ['summaries'], request))
 }))
 
 app.post('/api/summaries', asyncHandler(async (request, response) => {
@@ -13415,7 +13698,7 @@ app.post('/api/summaries', asyncHandler(async (request, response) => {
       response.status(result.status ?? 500).json({ error: result.error ?? 'Summary failed' })
       return
     }
-    response.status(201).json(await getWorkspace(userId))
+    response.status(201).json(await getWorkspaceSections(userId, ['summaries'], request))
     return
   }
 
@@ -13448,7 +13731,7 @@ app.post('/api/summaries', asyncHandler(async (request, response) => {
       encryptText(content),
     ],
   )
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspaceSections(userId, ['summaries'], request))
 }))
 
 async function handleFeishuAiCardAction(

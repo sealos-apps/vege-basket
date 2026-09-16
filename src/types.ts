@@ -520,6 +520,7 @@ export type Project = {
   feishuChatEnabled?: boolean
   feishuChatId?: string
   createdAt: string
+  latestJournalAt?: string
   updatedAt: string
   tags: string[]
   journals: JournalEntry[]

@@ -136,12 +136,24 @@ The production image builds `src/` into `dist/`, copies `server/`, and starts
 
 ## Workbench Loading
 
-Changing the active browser view does not invalidate the workspace snapshot. Workspace and
-organization catalog refreshes are driven by authentication, periodic reconciliation, or an
-explicit successful mutation. The test and organization workbenches may request named read-only
-sections for their active tab; omitting the section parameter preserves the complete legacy
-response used by mutations and compatibility callers. Every section performs the same server-side
-authentication and resource authorization as the complete response.
+Changing the active browser view does not invalidate cached workspace sections. Authentication
+and periodic reconciliation load the project catalog, while the active project, inbox, AI view,
+and deep-linked todo request only their named sections. Project-scoped snapshots replace one
+project's cached details; catalog snapshots preserve those details and prune inaccessible projects.
+`GET /api/workspace` accepts explicit `sections` plus an optional `projectId`; the current browser
+always requests a scope, while an omitted selector preserves the complete response for rolling
+deployment compatibility. The current client declares `X-Veges-Workspace-Contract: sections-v1`
+for lightweight authentication and mutation snapshots; old clients without that header retain the
+complete response. Writes return only the sections they changed for section-aware clients. Content search has a separate authorized, rate- and
+concurrency-limited endpoint that returns project IDs rather than hydrating matching documents into
+the catalog. Todo deep links resolve through a dedicated authorized project snapshot.
+The `project` and `todos` sections require `projectId`; cross-project todo confirmation uses its
+mutation response rather than exposing an unbounded general read.
+
+The test and organization workbenches may also request named read-only sections for their active
+tab; omitting their section parameter preserves their complete legacy response used by mutations
+and compatibility callers. Every section performs the same server-side authentication and resource
+authorization as the corresponding complete response.
 
 Test-workbench content sections are additionally scoped to the active test space. Case reads may
 narrow further to one subject, while Bug list reads omit comments, events, verification submissions,

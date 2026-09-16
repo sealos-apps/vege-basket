@@ -79,11 +79,21 @@ export type { AiTurnStreamPhase } from '../shared/server-sent-events'
 export type WorkspaceData = {
   departedUserIds: number[]
   inbox: InboxItem[]
+  loadedSections?: WorkspaceSection[]
   memberships: ProjectMembership[]
+  projectId?: number
   projects: Project[]
   summaries: Summary[]
   todos: Todo[]
 }
+
+export type WorkspaceSection =
+  | 'catalog'
+  | 'inbox'
+  | 'memberships'
+  | 'project'
+  | 'summaries'
+  | 'todos'
 
 export type AiTurnDocumentResponse = {
   created: boolean
@@ -258,6 +268,7 @@ export async function request<T>(path: string, options: RequestInit = {}) {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'X-Veges-Workspace-Contract': 'sections-v1',
       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
       ...options.headers,
     },
@@ -376,8 +387,34 @@ async function requestAiTurnStream(
   throw new Error('AI response stream ended before the turn was confirmed')
 }
 
-export function fetchWorkspace() {
-  return request<WorkspaceData>('/api/workspace')
+export function fetchWorkspace(
+  scope: { projectId?: number; sections?: WorkspaceSection[] } = {},
+  options: Pick<RequestInit, 'signal'> = {},
+) {
+  const params = new URLSearchParams()
+  if (scope.projectId) params.set('projectId', String(scope.projectId))
+  if (scope.sections?.length) params.set('sections', scope.sections.join(','))
+  const query = params.toString()
+  return request<WorkspaceData>(`/api/workspace${query ? `?${query}` : ''}`, options)
+}
+
+export function searchWorkspaceProjects(
+  organizationId: OrganizationContext,
+  search: string,
+  options: Pick<RequestInit, 'signal'> = {},
+) {
+  const params = new URLSearchParams({
+    organizationId: serializeOrganizationContext(organizationId),
+    q: search,
+  })
+  return request<{ projectIds: number[] }>(`/api/workspace/search?${params}`, options)
+}
+
+export function fetchTodoWorkspace(
+  todoId: number,
+  options: Pick<RequestInit, 'signal'> = {},
+) {
+  return request<WorkspaceData>(`/api/todos/${todoId}/workspace`, options)
 }
 
 export function fetchChangelog() {

@@ -3,6 +3,14 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+const workspaceApiSource = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8')
+const workspaceCacheSource = readFileSync(new URL('../src/workspace-cache.ts', import.meta.url), 'utf8')
+const serverSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+const schemaSource = readFileSync(new URL('./schema.ts', import.meta.url), 'utf8')
+const workspaceIndexMigration = readFileSync(
+  new URL('./migrations/20260916_workspace_read_indexes.sql', import.meta.url),
+  'utf8',
+)
 const organizationClientSource = readFileSync(
   new URL('../src/components/organization-workbench.tsx', import.meta.url),
   'utf8',
@@ -23,6 +31,35 @@ test('role and view changes do not invalidate unrelated application data', () =>
   )
   assert.match(appSource, /\[authUserId, loggedIn, organizationRefreshVersion\]/u)
   assert.match(appSource, /initialOrganizations=\{organizations\}/u)
+})
+
+test('workspace reads are sectioned and active-view refreshes stay scoped', () => {
+  assert.match(serverSource, /type WorkspaceSection =/u)
+  assert.match(serverSource, /const workspaceQuery = createLimitedQuery\(\)/u)
+  assert.match(serverSource, /function getInitialWorkspace/u)
+  assert.match(serverSource, /X-Veges-Workspace-Contract/u)
+  assert.match(serverSource, /supportsSectionedWorkspace/u)
+  assert.match(workspaceApiSource, /'X-Veges-Workspace-Contract': 'sections-v1'/u)
+  assert.match(serverSource, /app\.get\('\/api\/workspace\/search'/u)
+  assert.match(serverSource, /projectId === undefined && \(sections\?\.has\('project'\) \|\| sections\?\.has\('todos'\)\)/u)
+  assert.match(serverSource, /workspaceSearchRateLimiter\.allow\(userId\)/u)
+  assert.match(serverSource, /workspaceSearchConcurrencyLimiter\.acquire\(userId\)/u)
+  assert.match(serverSource, /app\.get\('\/api\/todos\/:todoId\/workspace'/u)
+  assert.match(appSource, /fetchWorkspace\(\{ sections: \['catalog'\] \}\)/u)
+  assert.match(appSource, /projectId: selectedProjectId,[\s\S]*sections: \['memberships', 'project', 'todos'\]/u)
+  assert.match(appSource, /searchWorkspaceProjects\(selectedOrganizationId, query/u)
+  assert.match(workspaceCacheSource, /mergeCatalogProjects/u)
+  assert.match(workspaceCacheSource, /replaceProjectItems/u)
+  for (const indexName of [
+    'idx_journal_entries_project_time',
+    'idx_todos_project_time',
+    'idx_todo_notes_todo_time',
+    'idx_draft_items_user_state_time',
+    'idx_summaries_user_time',
+  ]) {
+    assert.match(schemaSource, new RegExp(indexName, 'u'))
+    assert.match(workspaceIndexMigration, new RegExp(indexName, 'u'))
+  }
 })
 
 test('test workbench reads stay sectioned and scoped to the active space', () => {

@@ -2414,8 +2414,12 @@ create unique index if not exists idx_image_sync_workflow_runs_user_active
   on image_sync_workflow_runs(user_id)
   where status in ('dispatching', 'queued', 'in_progress');
 create index if not exists idx_journal_entries_project_id on journal_entries(project_id);
+create index if not exists idx_journal_entries_project_time
+  on journal_entries(project_id, created_at desc, id desc);
 create index if not exists idx_journal_entries_author_user_id on journal_entries(author_user_id);
 create index if not exists idx_todos_project_id on todos(project_id);
+create index if not exists idx_todos_project_time
+  on todos(project_id, created_at desc, id desc);
 create index if not exists idx_todos_collaborator_id on todos(collaborator_id);
 create index if not exists idx_todos_created_by_user_id on todos(created_by_user_id);
 create index if not exists idx_todos_assignee_user_id on todos(assignee_user_id);
@@ -2439,6 +2443,8 @@ create index if not exists idx_todo_activity_events_assignee_time
   on todo_activity_events(assignee_user_id, occurred_at desc, id desc);
 create index if not exists idx_project_modules_project_id on project_modules(project_id);
 create index if not exists idx_todo_notes_todo_id on todo_notes(todo_id);
+create index if not exists idx_todo_notes_todo_time
+  on todo_notes(todo_id, created_at, id);
 create index if not exists idx_todo_notes_author_user_id on todo_notes(author_user_id);
 create index if not exists idx_todo_note_mentions_user_id on todo_note_mentions(mentioned_user_id);
 create index if not exists idx_todo_mentions_todo_id on todo_mentions(todo_id);
@@ -2448,6 +2454,8 @@ create index if not exists idx_collaborators_project_id on collaborators(project
 create index if not exists idx_collaborators_name_lookup on collaborators(user_id, name_lookup);
 create index if not exists idx_risks_project_id on risks(project_id);
 create index if not exists idx_draft_items_user_id on draft_items(user_id);
+create index if not exists idx_draft_items_user_state_time
+  on draft_items(user_id, processed, created_at desc, id desc);
 create index if not exists idx_ai_conversations_user_activity
   on ai_conversations(user_id, last_turn_at desc, id desc);
 create index if not exists idx_ai_conversations_project_user
@@ -2480,6 +2488,8 @@ create index if not exists idx_feishu_ai_messages_user_chat
 create index if not exists idx_feishu_ai_chats_conversation
   on feishu_ai_chats(conversation_id);
 create index if not exists idx_summaries_user_id on summaries(user_id);
+create index if not exists idx_summaries_user_time
+  on summaries(user_id, created_at desc, id desc);
 create index if not exists idx_summaries_project_id on summaries(project_id);
 create unique index if not exists idx_summaries_source_turn
   on summaries(source_turn_id)
