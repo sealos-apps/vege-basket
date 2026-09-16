@@ -1757,7 +1757,6 @@ function App() {
   const [invitePasswordRequired, setInvitePasswordRequired] = useState(false)
   const [invitePasswordVerified, setInvitePasswordVerified] = useState(false)
   const [view, setView] = useState<View>(getInitialView)
-  const organizationReturnViewRef = useRef<View>('search')
   const [organizationSidebarHost, setOrganizationSidebarHost] = useState<HTMLDivElement | null>(null)
   const [organizationTopbarHost, setOrganizationTopbarHost] = useState<HTMLDivElement | null>(null)
   const [changelogCanManage, setChangelogCanManage] = useState(false)
@@ -3230,20 +3229,7 @@ function App() {
   }
 
   function openOrganizationManagement() {
-    if (view !== 'organization') organizationReturnViewRef.current = view
     setView('organization')
-  }
-
-  function closeOrganizationManagement() {
-    const returnView = organizationReturnViewRef.current
-    const canRestoreReturnView = authUser
-      && returnView !== 'organization'
-      && canUseViewForUser(returnView, authUser)
-      && (returnView !== 'project' || (
-        selectedProjectId != null
-        && scopedProjects.some((project) => project.id === selectedProjectId)
-      ))
-    setView(canRestoreReturnView ? returnView : getRoleLandingView(authUser?.activeRole ?? 'developer'))
   }
 
   function selectProject(projectId: number) {
@@ -4855,7 +4841,6 @@ ${packageTimelineText}`
               onDisconnectFeishu={disconnectFeishuBinding}
               onSaveAccountSettings={updateAccountSettings}
               onRoleChange={(role) => void changeActiveUserRole(role)}
-              onCloseOrganization={closeOrganizationManagement}
               onOpenOrganization={openOrganizationManagement}
               onOpenChangelog={() => setView('changelog')}
               onSignOut={signOut}
@@ -4984,7 +4969,6 @@ ${packageTimelineText}`
             onDisconnectFeishu={disconnectFeishuBinding}
             onSaveAccountSettings={updateAccountSettings}
             onRoleChange={(role) => void changeActiveUserRole(role)}
-            onCloseOrganization={closeOrganizationManagement}
             onOpenOrganization={openOrganizationManagement}
             onOpenChangelog={() => setView('changelog')}
             onSignOut={signOut}
@@ -5994,7 +5978,6 @@ function AccountMenu({
   themeMode,
   onSaveAccountSettings,
   onRoleChange,
-  onCloseOrganization,
   onOpenOrganization,
   onOpenChangelog,
   onSignOut,
@@ -6008,7 +5991,6 @@ function AccountMenu({
     displayName: string
   }) => Promise<void>
   onRoleChange: (role: SwitchableUserRole) => void
-  onCloseOrganization: () => void
   onOpenOrganization: () => void
   onOpenChangelog: () => void
   onSignOut: () => void
@@ -6052,7 +6034,7 @@ function AccountMenu({
           >
             <FileText /> 更新日志
           </DropdownMenuItem>
-          {user && availableRoles.length > 1 ? (
+          {user && (availableRoles.length > 1 || activeView === 'organization') ? (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuSub>
@@ -6078,13 +6060,11 @@ function AccountMenu({
           {canOpenOrganization ? (
             <DropdownMenuItem
               className="account-menu-item"
-              onSelect={activeView === 'organization' ? onCloseOrganization : onOpenOrganization}
+              data-active={activeView === 'organization' ? 'true' : undefined}
+              aria-current={activeView === 'organization' ? 'page' : undefined}
+              onSelect={onOpenOrganization}
             >
-              {activeView === 'organization' ? (
-                <><ArrowLeft /> 返回工作区</>
-              ) : (
-                <><Buildings /> 组织管理</>
-              )}
+              <Buildings /> 组织管理
             </DropdownMenuItem>
           ) : null}
           {user?.isSystemAdmin ? (

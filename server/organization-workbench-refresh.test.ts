@@ -7,6 +7,10 @@ const workbenchSource = readFileSync(
   'utf8',
 )
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+const workbenchCssSource = readFileSync(
+  new URL('../src/components/organization-workbench.css', import.meta.url),
+  'utf8',
+)
 const packageWorkbenchSource = readFileSync(
   new URL('../src/components/project-package-workbench.tsx', import.meta.url),
   'utf8',
@@ -38,7 +42,7 @@ test('organization management replaces the workspace navigation in the existing 
   assert.match(appSource, /ref=\{view === 'organization' \? setOrganizationTopbarHost : undefined\}/u)
   assert.match(appSource, /topbarActionHost=\{organizationTopbarHost\}/u)
   assert.match(appSource, /onOpenOrganization=\{openOrganizationManagement\}/u)
-  assert.match(appSource, /onCloseOrganization=\{closeOrganizationManagement\}/u)
+  assert.doesNotMatch(appSource, /onCloseOrganization/u)
   assert.match(workbenchSource, /createPortal\([\s\S]*?organization-sidebar-panel[\s\S]*?sidebarNavigationHost/u)
   assert.match(workbenchSource, /createPortal\([\s\S]*?organization-topbar-controls[\s\S]*?topbarActionHost/u)
   assert.match(workbenchSource, /aria-label="组织管理导航"/u)
@@ -51,6 +55,10 @@ test('organization management replaces the workspace navigation in the existing 
   assert.doesNotMatch(workbenchSource, /organization-settings-dialog/u)
   assert.doesNotMatch(workbenchSource, /organizationTabs\.slice/u)
   assert.doesNotMatch(workbenchSource, /className="organization-tabs-row"/u)
+  assert.match(
+    workbenchCssSource,
+    /\.organization-sidebar-nav\s*\{[\s\S]*?align-content: start;/u,
+  )
 })
 
 test('global package market uses the selected sidebar organization as its only context', () => {
