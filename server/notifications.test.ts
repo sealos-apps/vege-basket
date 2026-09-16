@@ -401,7 +401,7 @@ test('keeps assigned Bug Feishu text and card fields aligned with the Bug detail
   assert.match(serverSource, /space\.version_label as test_space_version_label/u)
   assert.match(serverSource, /subject\.name as test_subject_name/u)
   assert.match(serverSource, /bugId: Number\(bug\.id\)/u)
-  assert.match(serverSource, /testSubjectName: decryptText\(bug\.test_subject_name\)/u)
+  assert.match(serverSource, /testSubjectName: bug\.test_subject_name \? decryptText\(bug\.test_subject_name\) : '未关联一级目录'/u)
   assert.match(serverSource, /testSpaceVersionLabel: bug\.test_space_version_label/u)
 
   const textBuilderStart = serverSource.indexOf('function buildFeishuNotificationText(')
@@ -415,7 +415,7 @@ test('keeps assigned Bug Feishu text and card fields aligned with the Bug detail
     'Bug 标题',
     '负责人',
     '测试空间',
-    '测试对象',
+    '一级目录',
     '版本号',
     '严重程度',
     '优先级',
@@ -446,7 +446,7 @@ test('keeps assigned Bug Feishu text and card fields aligned with the Bug detail
   for (const label of [
     '**Bug 编号**',
     '**Bug 标题**',
-    '**测试对象**',
+    '**一级目录**',
     '**版本号**',
     '**环境**',
     '**复现步骤**',

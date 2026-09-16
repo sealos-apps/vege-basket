@@ -14,6 +14,10 @@ const organizationWorkbenchSource = readFileSync(
   new URL('../src/components/organization-workbench.tsx', import.meta.url),
   'utf8',
 )
+const organizationWorkbenchStyles = readFileSync(
+  new URL('../src/components/organization-workbench.css', import.meta.url),
+  'utf8',
+)
 const weeklyReportWorkbenchSource = readFileSync(
   new URL('../src/components/weekly-report-workbench.tsx', import.meta.url),
   'utf8',
@@ -158,4 +162,39 @@ test('configuration and collection share saved order, name fallback, and a stabl
   assert.match(weeklyReportsSource,
     /order by membership\.weekly_report_sort_order asc nulls last,\s+lower\(coalesce\(nullif\(users\.display_name, ''\), users\.email\)\), membership\.user_id/u)
   assert.match(organizationWorkbenchSource, /setWeeklyReportAssigneeUserIds\(detail\.weeklyReportAssigneeUserIds\)/u)
+})
+
+test('the rule editor combines assignment and ordering in one list while search preserves selected order', () => {
+  assert.match(organizationWorkbenchSource, /const selectedWeeklyReportAssignees = weeklyReportAssigneeUserIds\.flatMap/u)
+  assert.match(organizationWorkbenchSource,
+    /const visibleUnselectedWeeklyReportAssignees = visibleWeeklyReportAssigneeCandidates\.filter\(\s*\(member\) => !weeklyReportAssigneeUserIds\.includes\(member\.id\)/u)
+  assert.equal(organizationWorkbenchSource.match(/className="organization-weekly-assignee-list"/gu)?.length, 1)
+  assert.doesNotMatch(organizationWorkbenchSource, /organization-weekly-assignee-order/u)
+  assert.match(organizationWorkbenchSource,
+    /selectedWeeklyReportAssignees\.map[\s\S]+visibleUnselectedWeeklyReportAssignees\.map/u)
+  assert.match(organizationWorkbenchSource, /checked\s+disabled=\{busy\}/u)
+  assert.match(organizationWorkbenchSource, /checked=\{false\}\s+disabled=\{busy\}/u)
+  assert.equal(organizationWorkbenchSource.match(/htmlFor=\{`weekly-report-assignee-\$\{member\.id\}`\}/gu)?.length, 2)
+  assert.match(organizationWorkbenchSource, /setWeeklyReportAssigneeUserIds\(\(current\) => checked\s+\? \[\.\.\.new Set\(\[\.\.\.current, userId\]\)\]/u)
+  assert.match(organizationWorkbenchSource, /index === 0[\s\S]+index === selectedWeeklyReportAssignees\.length - 1/u)
+})
+
+test('weekly report member lists use the dialog as their only scroll container', () => {
+  const dialogStart = organizationWorkbenchStyles.indexOf('.organization-weekly-rules-dialog {')
+  const dialogEnd = organizationWorkbenchStyles.indexOf('.organization-weekly-rules-form {', dialogStart)
+  const listStart = organizationWorkbenchStyles.indexOf('.organization-weekly-assignee-list {')
+  const listEnd = organizationWorkbenchStyles.indexOf('.organization-weekly-assignee-list > li', listStart)
+
+  assert.ok(dialogStart >= 0)
+  assert.ok(dialogEnd > dialogStart)
+  assert.ok(listStart >= 0)
+  assert.ok(listEnd > listStart)
+  const dialogStyles = organizationWorkbenchStyles.slice(dialogStart, dialogEnd)
+  const listStyles = organizationWorkbenchStyles.slice(listStart, listEnd)
+  assert.match(dialogStyles, /overflow-y: auto/u)
+  assert.match(dialogStyles, /overscroll-behavior: contain/u)
+  assert.match(dialogStyles, /scrollbar-gutter: stable/u)
+  assert.match(dialogStyles, /::-webkit-scrollbar/u)
+  assert.doesNotMatch(listStyles, /max-height/u)
+  assert.doesNotMatch(listStyles, /overflow-y/u)
 })

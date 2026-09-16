@@ -3826,6 +3826,59 @@
   margin: 0;
 }
 
+.test-import-guidance {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--control-bg);
+}
+
+.test-import-guidance summary {
+  padding: 10px 12px;
+  color: var(--strong);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.test-import-guidance-table,
+.test-import-results {
+  max-height: 300px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+
+.test-import-guidance-table > div,
+.test-import-results > div {
+  min-width: 620px;
+  padding: 9px 12px;
+  display: grid;
+  grid-template-columns: 116px minmax(220px, 1fr) minmax(180px, .8fr);
+  gap: 12px;
+  align-items: start;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.test-import-guidance-table > div:last-child,
+.test-import-results > div:last-child {
+  border-bottom: 0;
+}
+
+.test-import-guidance-heading,
+.test-import-results-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  color: var(--muted-text);
+}
+
+.test-import-guidance-table code,
+.test-import-results code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .test-import-preview {
   display: grid;
   gap: 14px;
@@ -3833,7 +3886,7 @@
 
 .test-import-metrics {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   border-block: 1px solid var(--line);
 }
 
@@ -3877,6 +3930,31 @@
 .test-import-samples code {
   color: var(--muted-text);
   font-size: 11px;
+}
+
+.test-import-results > div {
+  grid-template-columns: 40px minmax(190px, 1fr) minmax(180px, 1fr);
+}
+
+.test-import-results > div[data-action='invalid'] > :last-child {
+  color: var(--destructive);
+}
+
+.test-import-results > div[data-action='create'] > :last-child {
+  color: var(--primary);
+}
+
+.test-import-results span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.test-import-results small {
+  overflow: hidden;
+  color: var(--muted-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .test-plan-case-picker {

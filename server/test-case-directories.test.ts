@@ -5,8 +5,10 @@ import {
   createDirectoryIndex,
   countDirectoryCases,
   decodeDirectoryPath,
+  decodeRootDirectoryPath,
   directoryName,
   encodeDirectoryPath,
+  encodeRootDirectoryPath,
   nullableDirectoryId,
   parseCaseMoveIds,
   planDirectoryImport,
@@ -14,7 +16,7 @@ import {
 } from '../shared/test-case-directories.ts'
 import { parseTestCaseCsv } from './test-case-import.ts'
 import { buildTestCaseCsv } from '../src/test-case-csv.ts'
-import type { TestCase, TestCaseFolder } from '../src/test-workbench-types.ts'
+import type { TestCase, TestCaseFolder, TestSubject } from '../src/test-workbench-types.ts'
 
 process.env.APP_ENCRYPTION_ACTIVE_KEY_ID = 'directory-test'
 process.env.APP_ENCRYPTION_KEYS = `directory-test:${Buffer.alloc(32, 31).toString('base64')}`
@@ -119,10 +121,13 @@ test('name and ID validation rejects ambiguous and invalid values', () => {
 
 test('paths preserve literal slash/tilde and distinguish uncategorized from a named directory', () => {
   const names = ['A/B', '~1', '未分类', 'a,b"c']
-  assert.deepEqual(decodeDirectoryPath(encodeDirectoryPath(names)), names)
+  const encoded = encodeDirectoryPath(names)
+  assert.equal(encoded, 'A/B~\\~1~未分类~a,b"c')
+  assert.deepEqual(decodeDirectoryPath(encoded), names)
   assert.deepEqual(decodeDirectoryPath(''), [])
-  for (const value of ['/A', 'A/', 'A//B', '~2', '~'])
+  for (const value of ['~A', 'A~', 'A\\', 'A\\x'])
     assert.throws(() => decodeDirectoryPath(value))
+  assert.deepEqual(decodeDirectoryPath('父级~子/级'), ['父级', '子/级'])
   assert.deepEqual([...createDirectoryIndex(folders).descendants(1)], [1, 2, 3])
   const counts = countDirectoryCases(folders, [
     { folderId: 1 },
@@ -132,6 +137,15 @@ test('paths preserve literal slash/tilde and distinguish uncategorized from a na
   assert.equal(counts.direct.get(1), 1)
   assert.equal(counts.total.get(1), 2)
   assert.equal(counts.total.get(null), 3)
+})
+
+test('strict CSV paths use a leading root separator while an empty value means the root', () => {
+  assert.equal(encodeRootDirectoryPath([]), '')
+  assert.equal(encodeRootDirectoryPath(['产品', '业务']), '~产品~业务')
+  assert.deepEqual(decodeRootDirectoryPath(''), [])
+  assert.deepEqual(decodeRootDirectoryPath('~产品~业务'), ['产品', '业务'])
+  assert.throws(() => decodeRootDirectoryPath('产品~业务'), /必须以 ~/u)
+  assert.throws(() => decodeRootDirectoryPath('~'), /必须以 ~/u)
 })
 
 test('import plan deduplicates siblings and validates the complete batch before any writes', () => {
@@ -162,6 +176,10 @@ test('scoped CSV round trip retains hierarchy, multiline content and all supplie
     createdAt: '',
   })) satisfies TestCaseFolder[]
   const cases = Array.from({ length: 35 }, (_, i) => ({
+    canDelete: true,
+    caseType: 'functional' as const,
+    createdAt: '',
+    csvCaseId: `CASE-${i + 1}`,
     id: i + 1,
     folderId: i % 2 ? 3 : 1,
     title: `用例,"${i}"`,
@@ -171,30 +189,36 @@ test('scoped CSV round trip retains hierarchy, multiline content and all supplie
     remarks: '',
     priority: 'high',
     customTags: ['核心'],
-  })) as TestCase[]
-  const csv = buildTestCaseCsv(cases, typedFolders, 1)
-  const parsed = parseTestCaseCsv(csv, 'tree')
+    status: 'active' as const,
+    testSpaceId: 1,
+    testSubjectId: 1,
+    updatedAt: '',
+  })) satisfies TestCase[]
+  const typedSubjects = [{
+    canDelete: true,
+    canEdit: true,
+    createdAt: '',
+    description: '',
+    directoryRoot: false,
+    id: 1,
+    name: '产品',
+    testSpaceId: 1,
+  }] satisfies TestSubject[]
+  const csv = buildTestCaseCsv(cases, typedFolders, typedSubjects)
+  const parsed = parseTestCaseCsv(csv)
   assert.equal(parsed.rows.length, 35)
-  assert.deepEqual(parsed.rows[1].directorySegments, ['登录/退出', '~特殊目录'])
-  assert.deepEqual(parsed.rows[0].directorySegments, [])
+  assert.deepEqual(parsed.rows[1].directorySegments, ['产品', '账户', '登录/退出', '~特殊目录'])
+  assert.deepEqual(parsed.rows[0].directorySegments, ['产品', '账户'])
   assert.equal(parsed.rows[1].steps, '步骤一\n步骤二')
   assert.equal(parsed.rows[1].title, cases[1].title)
   assert.throws(
-    () => buildTestCaseCsv([{ ...cases[0], folderId: 5 }], typedFolders, 1),
-    /不属于/u,
-  )
-  assert.deepEqual(
-    parseTestCaseCsv(csv, 'current').rows[1].directorySegments,
-    [],
+    () => buildTestCaseCsv([{ ...cases[0], testSubjectId: 99 }], typedFolders, typedSubjects),
+    /一级目录不存在/u,
   )
   const legacy =
     '用例名称,所属模块,前置条件,步骤描述,预期结果,备注,用例等级\n旧用例,/原样/保留,,,结果,,P1'
-  assert.deepEqual(parseTestCaseCsv(legacy).rows[0].directorySegments, [
-    '/原样/保留',
-  ])
-  assert.deepEqual(parseTestCaseCsv(legacy, 'tree').rows[0].directorySegments, [
-    '/原样/保留',
-  ])
+  assert.throws(() => parseTestCaseCsv(legacy), /严格使用指定字段/u)
+  assert.throws(() => parseTestCaseCsv(legacy), /严格使用指定字段/u)
 })
 
 test('scope lock rejects revoked/viewer access before locking resources', async () => {
@@ -363,20 +387,14 @@ test('client sends frozen import scope and ID-based moves on their dedicated end
   )
   const { previewTestCaseImport, importTestCases, moveTestCases } =
     await import('../src/test-workbench-api.ts')
-  await previewTestCaseImport(10, 20, 'csv-preview', {
-    directoryMode: 'tree',
-    targetFolderId: 30,
-  })
-  await importTestCases(10, 20, 'csv-submit', {
-    directoryMode: 'tree',
-    targetFolderId: 30,
-  })
+  await previewTestCaseImport(10, 'csv-preview')
+  await importTestCases(10, 'csv-submit')
   await moveTestCases(10, 20, [1, 2], null)
   for (const request of requests.slice(0, 2)) {
     const url = new URL(request.url, 'https://example.test')
-    assert.equal(url.searchParams.get('testSubjectId'), '20')
-    assert.equal(url.searchParams.get('directoryMode'), 'tree')
-    assert.equal(url.searchParams.get('targetFolderId'), '30')
+    assert.equal(url.searchParams.has('testSubjectId'), false)
+    assert.equal(url.searchParams.has('directoryMode'), false)
+    assert.equal(url.searchParams.has('targetFolderId'), false)
   }
   assert.equal(requests[0].options?.body, 'csv-preview')
   assert.equal(requests[1].options?.body, 'csv-submit')

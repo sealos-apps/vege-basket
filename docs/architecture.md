@@ -476,12 +476,10 @@ The schema is normalized around these groups:
   snapshot, or delete the plan. Test cases use hierarchical directories; the former
   baseline/archiving concept has been removed. Deleting a plan
   preserves existing bugs while clearing their plan association.
-  Every new Bug directly references a canonical test case. A composite foreign key
-  enforces case/space/subject consistency; subject is derived from the case and is not
-  a Bug selection boundary. Existing execution-backed Bugs are backfilled only when
-  the source case survives. Other legacy Bugs remain readable and support creator-owned
-  one-time case binding. New inserts, unlinking, and space transfers without a case are
-  rejected by a database trigger; NOT NULL is enabled when no unlinked rows remain.
+  Bugs may reference a canonical test case, but case and subject are optional for standalone
+  triage. When a case is present, a composite foreign key enforces case/space/subject consistency
+  and the subject/module are derived from that case. Without a case, an enabled organization
+  module may be selected manually; empty modules are stored as `NULL` and displayed as `无模块`.
   Referenced cases cannot be deleted. Subject deletion is also rejected while Bugs remain;
   deleting the entire test space retains its existing explicit cascade behavior.
   Case folder metadata is read from the current case, including its ancestor path for
@@ -567,8 +565,13 @@ Atomicity rules:
   partial project-derived text.
 - Disconnecting Feishu disables the user's daily digest subscription in the same
   transaction that clears the bound identity.
-- CSV test-case imports validate the complete file before the first write, then create or
-  reuse module folders and insert every encrypted case in one transaction.
+- Strict CSV test-case imports use `~`-prefixed, `~`-separated complete paths from the case-directory root
+  and reject legacy headers and path encodings. The first segment maps to the internal
+  first-level directory compatibility row; an empty path maps to the space's system root.
+  Preflight classifies every row as create, update, or invalid. Submission revalidates before
+  the first write, then creates or reuses first-level and nested directories and inserts or
+  updates every encrypted case in one transaction. Stable CSV case IDs are unique within a
+  test space; unknown or empty IDs create cases and matching IDs update CSV fields.
 - Concurrency safety must be enforced by database constraints plus conflict-safe SQL,
   not by a standalone select-before-insert check.
 
@@ -653,6 +656,12 @@ unique indexes enforce sibling name lookups. Names stay encrypted; full paths ar
 computed after decryption and are never persisted. Legacy module strings, including
 literal slashes, remain root directory names with their original IDs.
 
+The product surface treats legacy test-subject rows as first-level directories rather
+than a separate test-object concept. `test_subjects.is_directory_root` identifies the
+single system row that holds cases whose complete CSV directory path is empty. It cannot
+be renamed or deleted. CSV import/export includes ordinary first-level directory names
+as the first path segment and omits the system root from serialized paths.
+
 `shared/test-case-directories.ts` owns path escaping, depth (32 levels), sibling
 validation and import planning. `server/test-case-directories.ts` owns scoped writes.
 All directory/assignment writers lock the space, then the subject, then resources;
@@ -665,5 +674,6 @@ Case migration changes assignment and update time only, preserving plan snapshot
 The case workbench keeps tree expansion separate from the desktop panel preference.
 Mobile uses an independent drawer. Directory selection clears batch selection;
 collapsing the panel or the whole tree preserves case scope and selection. Filtering
-and export share the same result set, including every matching page. Import captures
-its target on opening and invalidates asynchronous previews when closed or changed.
+and export share the same result set, including every matching page. Export always emits
+complete root-based paths. Import is independent of the current tree selection and
+invalidates asynchronous previews when closed or changed.

@@ -8,6 +8,7 @@ const emptyWorkbench = {
   cases: [],
   departedUserIds: [],
   folders: [],
+  modules: [],
   notifications: [],
   planCases: [],
   plans: [],

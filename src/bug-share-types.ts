@@ -25,6 +25,8 @@ export type BugShareView = {
   priority: string
   projectName: string | null
   organizationId?: number | null
+  moduleId?: number
+  moduleName?: string
   reproductionSteps: string
   severity: string
   status: string

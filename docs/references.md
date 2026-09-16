@@ -244,8 +244,12 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   ordered IDs, deduplicating by first occurrence. Saving atomically replaces the assignee set
   and zero-based positions; deselected members lose their position. Existing unranked members
   follow ranked members in name/username order with user ID as a stable tie breaker. New and
-  restored memberships remain unranked until the next rule save. Search only filters the
-  candidate list; selected member order remains fully visible for up/down movement.
+  restored memberships remain unranked until the next rule save. The rule editor uses one
+  list: selected members remain first with their draft assignment checkbox, draft-order
+  position, and up/down controls; unselected members follow with assignment checkboxes.
+  Search filters only unselected members so the entire selected order remains available.
+  New selections append to the selected order; checkbox, bulk selection, and reorder changes
+  take effect together only on rule save.
 - Weekly-rule configuration shows a live example for the calendar period containing today's
   Shanghai date: report range, opening, deadline (inclusive through its minute), and next
   opening. `T`/`T+1` refer to report periods; day 1 is the configured organization week start.
@@ -362,7 +366,8 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   but the workbench no longer exposes case versions or archived status as the primary
   workflow.
 - Test cases use `case_type` for functional, regression, smoke, security, or performance classification. The former baseline/archiving concept has been removed. Test cases also support encrypted custom tags.
-- Test-case folders/modules are scoped to one test subject. Test-space owners and editors
+- Test-case folders/modules use legacy test-subject rows as internal first-level directory
+  scopes; the product exposes no separate test-object concept. Test-space owners and editors
   can create, rename, and delete empty folders. Move cases out before deleting their folder;
   moving cases to the root clears `folder_id`, and their Bugs become uncategorized.
 - Test-case deletion requires test-space write access and is limited to the account that
@@ -370,10 +375,16 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   Bugs also cannot be deleted. Otherwise deletion permanently removes the source case, while existing test-plan
   execution snapshots remain and their nullable `test_case_id` is cleared.
 - Test-case CSV import accepts UTF-8 `text/csv` at
-  `POST /api/test-spaces/:spaceId/cases/import?testSubjectId=:id`; add `preview=true` for
-  validation-only preview. Required headers are `用例名称`, `所属模块`, `前置条件`,
-  `步骤描述`, `预期结果`, `备注`, and `用例等级`. Levels map as P0/high,
-  P1/medium, and P2/low. Files are limited to 2 MB and 1000 non-empty rows.
+  `POST /api/test-spaces/:spaceId/cases/import`; add `preview=true` for
+  validation-only preview. The canonical header order is exactly `用例ID`, `用例名称`,
+  `所属模块`, `用例目录`, `用例等级`, `用例类型`, `前置条件`, `步骤描述`, `预期结果`,
+  and `备注`; missing, extra, duplicate, or reordered fields are rejected. Legacy CSV headers
+  and path encodings are not accepted. `用例ID` may be empty or use `CASE-<positive integer>`.
+  Within a test space, a matching ID updates the CSV-controlled fields and may move the case to
+  another complete directory path; an empty or unknown ID
+  creates a case, and an unknown non-empty ID is retained as that case's stable CSV ID. Levels map
+  as P0/high, P1/medium, and P2/low. Types are `功能`, `回归`, `冒烟`, `安全`, or `性能`. Files are
+  limited to 2 MB and 1000 non-empty rows.
 - Test-plan status: `draft`, `in_progress`, `completed`, `aborted`.
 - Test plans are scoped to a test space and select cases from the space-level case library. Legacy subject IDs remain in snapshots for compatibility. A plan may optionally link to an accessible project through `projectId` and must select an environment assigned to the current space through `testEnvironmentId`;
   project access is checked when creating or updating the plan. A plan response includes
@@ -385,15 +396,16 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   Plan deletion keeps bugs and clears their plan and plan-case references.
 - Test result: `untested`, `passed`, `failed`, `blocked`, `skipped`.
 - Bug status: `new`, `pending_confirmation`, `assigned`, `in_progress`, `pending_verification`, `closed`, `rejected`.
-  `POST /api/test-spaces/:spaceId/bugs` requires `testCaseId`; the server derives the subject
-  from that case and checks any `testPlanCaseId` against the same canonical case.
+  `POST /api/test-spaces/:spaceId/bugs` accepts an optional `testCaseId`; when present, the
+  server derives the subject and module from that case and checks any `testPlanCaseId` against it.
+  Without a case, `testSubjectId` and `moduleId` may be supplied independently.
   Bug DTOs include optional `testCaseId`, `testCaseTitle`, `testCaseFolderId`, and
   `testCaseFolderName` (full path; optional for legacy unlinked Bugs or uncategorized cases).
   `testCaseDirectoryPath` contains only that case's ancestor IDs/names, in root-to-leaf order;
   choosing a parent directory matches all descendant cases, while equal names keep distinct IDs.
-  Creator-owned detail PATCH accepts `testCaseId` to fill a missing legacy association;
-  an existing association cannot change. Ordinary status/assignment updates remain possible
-  for legacy Bugs. Detail edits require case binding first.
+  Creator-owned detail PATCH accepts optional `testCaseId` and `moduleId`; selecting a case
+  refreshes its derived module, while clearing the case permits standalone triage.
+  Ordinary status/assignment updates remain possible for legacy Bugs.
   `POST /api/test-spaces/:spaceId/bugs/:bugId/transfer-space` requires `targetSpaceId` and
   `targetTestCaseId`. Target-space ownership and same-organization checks remain in force;
   old plan/execution links are cleared and recorded in encrypted collaboration text. Legacy
@@ -681,20 +693,23 @@ Folder DTOs include `parentId: number | null`. Under `/api/test-spaces/:spaceId`
   Moving a subtree to itself/descendants, sibling duplicates, or exceeding 32 levels
   is rejected. Names are trimmed, 1–240 characters, with no control characters.
 - `DELETE /folders/:folderId`: only an empty directory; nonempty returns 409.
-- Case create/update accepts `folderId` (null means uncategorized). The legacy
-  `modulePath` string is accepted separately as one root name; sending both is invalid.
+- Case create/update accepts `folderId` (null means uncategorized) and optional organization
+  `moduleId`; an omitted module is shown as `无模块`.
 - `POST /cases/move`: `{ testSubjectId, caseIds, targetFolderId }`, with 1–1000 distinct
   positive numeric IDs and a folder ID or null. The entire batch succeeds or fails.
   Response is `{ movedCount, workbench }`; unchanged assignments produce no notification.
-- `POST /cases/import?testSubjectId=…&directoryMode=current|tree&targetFolderId=…`:
+- `POST /cases/import`:
   UTF-8 CSV, at most 2 MiB / 1000 cases. `preview=true` validates without writes and
-  returns `preview` with `targetPath`, `newDirectoryCount`, `reusedDirectoryCount`,
-  `samplePaths` and the existing row/priority summaries. Submission revalidates.
+  returns `preview` with per-row create/update/invalid results, `targetPath`,
+  `newDirectoryCount`, `newTopLevelDirectoryCount`, `reusedDirectoryCount`, and row/priority
+  summaries. Any invalid row disables the whole import. Submission revalidates under the same
+  space and sorted first-level-directory locks before writing.
 
-`current` ignores directory columns and places all cases directly in the target.
-`tree` uses relative `目录路径`: `/` separates segments, `~1` escapes a literal slash,
-`~0` escapes a tilde, and an empty value means the selected target. If the path column
-is absent, `所属模块` is treated as one literal child name. Omitting `directoryMode`
-retains legacy root-module import behavior. Other required Chinese CSV fields and
-priority mappings remain unchanged. Exports include both a readable `所属模块` and the
-reversible relative `目录路径`; uncategorized exports use an empty path.
+`用例目录` is always a complete path from the case-directory root: every non-empty path starts
+with `~`, later `~` characters separate segments, `\~` escapes a literal tilde, `\\` escapes a
+literal backslash, and an empty value means the system root. The first segment is an ordinary first-level directory. Missing path segments are
+created atomically and existing sibling directories are reused. New exports use the strict
+canonical header order above, emit the organization module name in `所属模块`, and emit this
+complete reversible path in `用例目录`. Canonical exports intentionally omit custom tags. The case list can
+export either every case in the active directory/search/type/priority filter or the explicitly
+selected cases across pages.

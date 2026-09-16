@@ -1,45 +1,42 @@
 import {
   createDirectoryIndex,
-  encodeDirectoryPath,
+  encodeRootDirectoryPath,
 } from '../shared/test-case-directories.ts'
-import type { TestCase, TestCaseFolder } from './test-workbench-types.ts'
+import { testCaseCsvHeaders, testCaseTypeLabels } from '../shared/test-case-csv.ts'
+import type { TestCase, TestCaseFolder, TestSubject } from './test-workbench-types.ts'
 
-export const testCaseCsvHeaders = [
-  '用例名称',
-  '所属模块',
-  '前置条件',
-  '步骤描述',
-  '预期结果',
-  '备注',
-  '用例等级',
-  '自定义标签',
-  '目录路径',
-]
+export { testCaseCsvFieldGuidance, testCaseCsvHeaders } from '../shared/test-case-csv.ts'
+
 export function buildTestCaseCsv(
   cases: TestCase[],
   folders: TestCaseFolder[],
-  rootId: number | null = null,
+  subjects: TestSubject[],
 ) {
   const index = createDirectoryIndex(folders)
-  const rootPath = index.path(rootId)
   const levels = { high: 'P0', medium: 'P1', low: 'P2' }
   const rows = cases.map((item) => {
+    const subject = subjects.find((candidate) => candidate.id === item.testSubjectId)
+    if (!subject) throw new Error('导出用例的一级目录不存在。')
     const path = index.path(item.folderId ?? null)
-    if (rootId !== null && !path.some((folder) => folder.id === rootId))
-      throw new Error('导出用例不属于当前目录。')
+    if (path.some((folder) => folder.testSubjectId !== item.testSubjectId))
+      throw new Error('导出用例的目录范围无效。')
     return [
+      item.csvCaseId || `CASE-${item.id}`,
       item.title,
-      path.map((folder) => folder.name).join(' / ') || '未分类',
+      item.moduleName || '',
+      encodeRootDirectoryPath(
+        [
+          ...(subject.directoryRoot ? [] : [subject.name]),
+          ...path.map((folder) => folder.name),
+        ],
+      ),
+      levels[item.priority],
+      testCaseTypeLabels[item.caseType],
       item.preconditions,
       item.steps,
       item.expectedResult,
       item.remarks,
-      levels[item.priority],
-      item.customTags.join('、'),
-      encodeDirectoryPath(
-        path.slice(rootPath.length).map((folder) => folder.name),
-      ),
     ]
   })
-  return `\uFEFF${[testCaseCsvHeaders, ...rows].map((row) => row.map((value) => `"${value.replace(/"/gu, '""')}"`).join(',')).join('\r\n')}\r\n`
+  return `\uFEFF${[testCaseCsvHeaders, ...rows].map((row) => row.map((value) => `"${String(value ?? '').replace(/"/gu, '""')}"`).join(',')).join('\r\n')}\r\n`
 }
