@@ -4,9 +4,12 @@ import { pool, query } from './db.ts'
 import {
   createPackageItemDownloadUrl,
   isPackageMarketObjectKeyAllowedForRule,
+  type PackageMarketRule,
 } from './package-market.ts'
 import { getDepartedUserIds } from './user-lifecycle.ts'
 import { lockProjectMutation } from './project-lock.ts'
+import { getPlatformConfigSnapshot } from './platform-config-runtime.ts'
+import { getPackageMarketRulesForConfigRevision } from './platform-package-rules.ts'
 
 export type ProjectPackageEventType = 'init' | 'upgrade'
 export type ProjectPackageEventStatus = 'draft' | 'delivering' | 'delivered'
@@ -56,6 +59,7 @@ export type ProjectPackageItem = {
   objectLastModified?: string
   packageName: string
   sizeBytes?: number
+  sourceConfigRevision?: number
   sourcePackageId: string
   sourcePackageName: string
   version: string
@@ -167,6 +171,7 @@ type ItemRow = {
   object_last_modified: Date | null
   project_package_group_id: string
   size_bytes: string | null
+  source_config_revision: string | null
   source_package_id: string
   source_package_name: string
   version: string
@@ -963,13 +968,23 @@ function textValue(value: unknown, fallback = '-') {
   return normalized || fallback
 }
 
-function packageDownloadUrlValue(item: Pick<ProjectPackageItem, 'channel' | 'objectKey' | 'sourcePackageId'>) {
+function packageDownloadUrlValue(
+  item: Pick<ProjectPackageItem, 'channel' | 'objectKey' | 'sourceConfigRevision' | 'sourcePackageId'>,
+  rulesByRevision?: ReadonlyMap<number, readonly PackageMarketRule[]>,
+) {
   try {
     const channel = item.channel === 'ci' || item.channel === 'release' ? item.channel : null
+    const rules = item.sourceConfigRevision
+      ? rulesByRevision?.get(item.sourceConfigRevision)
+      : undefined
+    if (item.sourceConfigRevision && !rules) {
+      return '临时下载链接生成失败：历史平台配置不可用'
+    }
     if (!channel || !isPackageMarketObjectKeyAllowedForRule({
       channel,
       objectKey: item.objectKey,
       packageId: item.sourcePackageId,
+      rules,
     })) {
       return '临时下载链接生成失败：安装包对象路径与安装包规则不匹配'
     }
@@ -1092,6 +1107,7 @@ function buildOperationMarkdown(
 function buildPackageTimelineMarkdown(
   group: ProjectPackageGroup,
   relatedTodoDetailsByOperation: Map<number, OperationRelatedTodoExportDetail[]>,
+  rulesByRevision: ReadonlyMap<number, readonly PackageMarketRule[]>,
   options: {
     headingLevel?: string
     sectionNumber?: string
@@ -1123,7 +1139,7 @@ function buildPackageTimelineMarkdown(
       if (node.type !== 'package-operation') return
       const item = node.item
       const fileName = packageFileName(item.objectKey, item.packageName)
-      const downloadUrl = packageDownloadUrlValue(item)
+      const downloadUrl = packageDownloadUrlValue(item, rulesByRevision)
       if (downloadUrl.startsWith('临时下载链接生成失败：')) {
         lines.push(`- ${textValue(fileName)}：${downloadUrl}`)
         return
@@ -1168,6 +1184,7 @@ function buildProjectPackageTimelineMarkdown(
   ownerName: string,
   timeline: ProjectPackageTimeline,
   relatedTodoDetailsByOperation: Map<number, OperationRelatedTodoExportDetail[]>,
+  rulesByRevision: ReadonlyMap<number, readonly PackageMarketRule[]>,
 ) {
   const lines = [
     `# ${textValue(projectName, '未命名项目')} 项目时间线`,
@@ -1186,7 +1203,7 @@ function buildProjectPackageTimelineMarkdown(
     if (eventIndex > 0) {
       lines.push('', '---', '')
     }
-    lines.push(...buildProjectPackageEventMarkdown(event, relatedTodoDetailsByOperation))
+    lines.push(...buildProjectPackageEventMarkdown(event, relatedTodoDetailsByOperation, rulesByRevision))
   })
 
   return `${lines.join('\n')}\n`
@@ -1195,6 +1212,7 @@ function buildProjectPackageTimelineMarkdown(
 function buildProjectPackageEventMarkdown(
   event: ProjectPackageEvent,
   relatedTodoDetailsByOperation: Map<number, OperationRelatedTodoExportDetail[]>,
+  rulesByRevision: ReadonlyMap<number, readonly PackageMarketRule[]>,
 ) {
   const lines: string[] = [
     '',
@@ -1244,7 +1262,7 @@ function buildProjectPackageEventMarkdown(
     .sort((left, right) => left.packageName.localeCompare(right.packageName, 'zh-CN'))
     .forEach((group, groupIndex) => {
       lines.push(
-        ...buildPackageTimelineMarkdown(group, relatedTodoDetailsByOperation, {
+        ...buildPackageTimelineMarkdown(group, relatedTodoDetailsByOperation, rulesByRevision, {
           headingLevel: '###',
           sectionNumber: String(groupIndex + 2),
         }),
@@ -1315,6 +1333,7 @@ export async function getProjectPackageTimeline(projectId: number) {
              i.object_key,
              i.object_last_modified,
              i.size_bytes::text,
+             i.source_config_revision,
              i.created_at
       from project_package_items i
       join project_package_groups g on g.id = i.project_package_group_id
@@ -1442,6 +1461,7 @@ export async function getProjectPackageTimeline(projectId: number) {
         ? formatDateTime(row.object_last_modified)
         : undefined,
       sizeBytes: row.size_bytes ? Number(row.size_bytes) : undefined,
+      sourceConfigRevision: row.source_config_revision ? Number(row.source_config_revision) : undefined,
       createdAt: formatDateTime(row.created_at),
     })
   }
@@ -1593,6 +1613,7 @@ export async function saveProjectPackageEvent(params: {
   if (params.action === 'publish' && !documents.some((document) => document.scope === 'event')) {
     throw new ProjectPackageEventError('An event document is required before publishing', 400)
   }
+  const sourceConfigRevision = getPlatformConfigSnapshot().revision
 
   return withTransaction(async (client) => {
     await lockProjectMutation(client, params.projectId)
@@ -1700,9 +1721,10 @@ export async function saveProjectPackageEvent(params: {
           object_key,
           object_last_modified,
           size_bytes,
-          created_by_user_id
+          created_by_user_id,
+          source_config_revision
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         `,
         [
           groupId,
@@ -1716,6 +1738,7 @@ export async function saveProjectPackageEvent(params: {
           item.objectLastModified,
           item.sizeBytes,
           params.createdByUserId,
+          sourceConfigRevision,
         ],
       )
     }
@@ -1939,6 +1962,7 @@ export async function addProjectPackageItems(params: {
   ) => Promise<void>
 }) {
   const items = normalizeProjectPackageItems(params.items)
+  const sourceConfigRevision = getPlatformConfigSnapshot().revision
 
   await withTransaction(async (client) => {
     await params.validatePackageItems?.(client, items)
@@ -1961,9 +1985,10 @@ export async function addProjectPackageItems(params: {
           object_key,
           object_last_modified,
           size_bytes,
-          created_by_user_id
+          created_by_user_id,
+          source_config_revision
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         `,
         [
           groupId,
@@ -1977,6 +2002,7 @@ export async function addProjectPackageItems(params: {
           item.objectLastModified,
           item.sizeBytes,
           params.createdByUserId,
+          sourceConfigRevision,
         ],
       )
       await maybeSeedGroupOperation(
@@ -2216,6 +2242,7 @@ export async function deleteProjectPackageOperation(params: {
 export type ProjectPackageItemDownloadSource = {
   channel: string
   objectKey: string
+  sourceConfigRevision: number | null
   sourcePackageId: string
 }
 
@@ -2226,11 +2253,13 @@ export async function getProjectPackageItemDownloadSource(params: {
   const result = await query<{
     channel: string
     object_key: string
+    source_config_revision: string | null
     source_package_id: string
   }>(
     `
     select i.object_key,
            i.channel,
+           i.source_config_revision,
            i.source_package_id
     from project_package_items i
     join project_package_groups g on g.id = i.project_package_group_id
@@ -2244,6 +2273,7 @@ export async function getProjectPackageItemDownloadSource(params: {
     ? {
         channel: row.channel,
         objectKey: row.object_key,
+        sourceConfigRevision: row.source_config_revision ? Number(row.source_config_revision) : null,
         sourcePackageId: row.source_package_id,
       }
     : null
@@ -2322,10 +2352,21 @@ export async function exportProjectPackageTimeline(projectId: number, eventId?: 
     ? null
     : timeline.events.find((event) => event.id === eventId) ?? null
   if (eventId != null && !selectedEvent) throw new Error('Event not found')
+  const sourceRevisions = new Set(
+    (selectedEvent ? [selectedEvent] : timeline.events)
+      .flatMap((event) => event.groups)
+      .flatMap((group) => group.items)
+      .flatMap((item) => item.sourceConfigRevision ? [item.sourceConfigRevision] : []),
+  )
+  const rulesByRevision = new Map<number, readonly PackageMarketRule[]>()
+  await Promise.all([...sourceRevisions].map(async (revision) => {
+    const rules = await getPackageMarketRulesForConfigRevision(revision)
+    if (rules) rulesByRevision.set(revision, rules)
+  }))
   const markdown = selectedEvent
     ? [
       `# ${textValue(projectName, '未命名项目')} · ${textValue(selectedEvent.title, '未命名事件')} 时间线`,
-      ...buildProjectPackageEventMarkdown(selectedEvent, relatedTodoDetailsByOperation),
+      ...buildProjectPackageEventMarkdown(selectedEvent, relatedTodoDetailsByOperation, rulesByRevision),
       '',
     ].join('\n')
     : buildProjectPackageTimelineMarkdown(
@@ -2333,6 +2374,7 @@ export async function exportProjectPackageTimeline(projectId: number, eventId?: 
       ownerName,
       timeline,
       relatedTodoDetailsByOperation,
+      rulesByRevision,
     )
   const timestamp = formatExportDateTimeForFileName(new Date())
   const fileName = sanitizeExportFileName(

@@ -5,6 +5,7 @@ import type { PoolClient } from 'pg'
 import { decryptText, encryptText } from './crypto.ts'
 import { pool, query } from './db.ts'
 import { normalizeOssEndpoint } from './package-market.ts'
+import { getPlatformConfigSnapshot } from './platform-config-runtime.ts'
 import { getAuthenticatedRoleSession } from './roles.ts'
 import { normalizeContainerImageReference } from '../shared/container-image-reference.ts'
 
@@ -44,6 +45,10 @@ type ImageSyncRunRow = {
   error_message: string | null
   github_run_id: string | null
   github_run_url: string | null
+  github_repository: string | null
+  github_workflow_file: string | null
+  github_ref: string | null
+  config_revision: string | null
   id: string
   image_ref_encrypted: string
   last_synced_at: string | null
@@ -80,11 +85,7 @@ type GitHubWorkflowJob = {
 }
 
 const githubApiVersion = '2026-03-10'
-const githubOwner = 'sealos-apps'
-const githubRepo = 'sealos-pro'
-const githubWorkflow = 'sync-images-tar-oss.yml'
-const githubRef = 'main'
-const githubApiRoot = `https://api.github.com/repos/${githubOwner}/${githubRepo}`
+const defaultGithubRepository = 'https://github.com/sealos-apps/sealos-pro'
 const activeStatuses: readonly ImageSyncRunStatus[] = ['dispatching', 'queued', 'in_progress']
 const dispatchReconciliationWindowMs = 5 * 60 * 1000
 const defaultImageSyncDownloadExpireSeconds = 30 * 60
@@ -147,6 +148,14 @@ function positiveInteger(value: unknown) {
 }
 
 export function selectGitHubWorkflowRun(value: unknown, dispatchKey: string) {
+  return selectGitHubWorkflowRunForRepository(value, dispatchKey, defaultGithubRepository)
+}
+
+function selectGitHubWorkflowRunForRepository(
+  value: unknown,
+  dispatchKey: string,
+  repositoryUrl: string,
+) {
   if (!isRecord(value) || !Array.isArray(value.workflow_runs)) return null
   const expectedName = buildImageSyncRunName(dispatchKey)
   return value.workflow_runs
@@ -159,7 +168,7 @@ export function selectGitHubWorkflowRun(value: unknown, dispatchKey: string) {
       if (
         runId == null ||
         runName !== expectedName ||
-        !runUrl.startsWith(`https://github.com/${githubOwner}/${githubRepo}/actions/runs/`)
+        !runUrl.startsWith(`${repositoryUrl}/actions/runs/`)
       ) {
         return []
       }
@@ -286,7 +295,7 @@ export function buildImageSyncArtifactUris(input: {
   return { md5Uri: `${tarUri}.md5`, tarUri }
 }
 
-export function getImageSyncDownloadExpireSeconds(value: unknown = process.env.IMAGE_SYNC_DOWNLOAD_EXPIRE_SECONDS) {
+export function getImageSyncDownloadExpireSeconds(value: unknown = '') {
   const configured = String(value ?? '').trim()
   if (!configured) return defaultImageSyncDownloadExpireSeconds
   if (!/^\d+$/.test(configured)) {
@@ -336,10 +345,11 @@ export function buildImageSyncTarObjectKey(input: {
 }
 
 function imageSyncOssClient() {
-  const endpoint = normalizeOssEndpoint(process.env.OSS_ENDPOINT)
-  const accessKeyId = String(process.env.OSS_ACCESS_KEY_ID ?? '').trim()
-  const accessKeySecret = String(process.env.OSS_ACCESS_KEY_SECRET ?? '').trim()
-  const bucket = normalizeOssBucket(process.env.OSS_BUCKET)
+  const storage = getPlatformConfigSnapshot().config.storage
+  const endpoint = normalizeOssEndpoint(storage.endpoint)
+  const accessKeyId = storage.accessKeyId.trim()
+  const accessKeySecret = storage.accessKeySecret.trim()
+  const bucket = normalizeOssBucket(storage.bucket)
   if (!endpoint || !accessKeyId || !accessKeySecret || !bucket) {
     throw new ImageSyncWorkflowError(
       'OSS_DOWNLOAD_UNAVAILABLE',
@@ -356,28 +366,53 @@ function imageSyncOssClient() {
   })
 }
 
-function readGitHubToken() {
-  const token = String(process.env.GITHUB_ACTIONS_TOKEN ?? '').trim()
-  if (!token) {
+type GitHubTarget = {
+  apiRoot: string
+  branch: string
+  repositoryUrl: string
+  token: string
+  workflowFile: string
+}
+
+function readGitHubTarget(overrides: Partial<Pick<GitHubTarget, 'branch' | 'repositoryUrl' | 'workflowFile'>> = {}): GitHubTarget {
+  const config = getPlatformConfigSnapshot().config.github
+  const repositoryUrl = overrides.repositoryUrl || config.repositoryUrl
+  const repository = new URL(repositoryUrl)
+  const [owner, repo] = repository.pathname.split('/').filter(Boolean)
+  const token = config.token.trim()
+  if (!config.enabled || !token || !owner || !repo) {
     throw new ImageSyncWorkflowError(
       'GITHUB_ACTIONS_NOT_CONFIGURED',
       '镜像同步服务尚未配置，请联系管理员。',
       503,
     )
   }
-  return token
+  return {
+    apiRoot: `https://api.github.com/repos/${owner}/${repo}`,
+    branch: overrides.branch || config.branch,
+    repositoryUrl,
+    token,
+    workflowFile: overrides.workflowFile || config.workflowFile,
+  }
 }
 
-async function githubRequest(path: string, options: RequestInit = {}) {
-  const token = readGitHubToken()
+function githubTargetForRun(row: ImageSyncRunRow) {
+  return readGitHubTarget({
+    branch: row.github_ref ?? undefined,
+    repositoryUrl: row.github_repository ?? undefined,
+    workflowFile: row.github_workflow_file ?? undefined,
+  })
+}
+
+async function githubRequest(target: GitHubTarget, path: string, options: RequestInit = {}) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 15_000)
   try {
-    const response = await fetch(`${githubApiRoot}${path}`, {
+    const response = await fetch(`${target.apiRoot}${path}`, {
       ...options,
       headers: {
         Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${target.token}`,
         'Content-Type': 'application/json',
         'User-Agent': 'veges-image-sync',
         'X-GitHub-Api-Version': githubApiVersion,
@@ -438,13 +473,14 @@ async function githubRequest(path: string, options: RequestInit = {}) {
 export async function dispatchImageSyncWorkflow(input: {
   arch: ImageSyncArchitecture
   image: string
-}, dispatchKey: string) {
+}, dispatchKey: string, target = readGitHubTarget()) {
   const result = await githubRequest(
-    `/actions/workflows/${encodeURIComponent(githubWorkflow)}/dispatches`,
+    target,
+    `/actions/workflows/${encodeURIComponent(target.workflowFile)}/dispatches`,
     {
       body: JSON.stringify({
         inputs: { arch: input.arch, image: input.image, request_id: dispatchKey },
-        ref: githubRef,
+        ref: target.branch,
       }),
       method: 'POST',
     },
@@ -458,7 +494,7 @@ export async function dispatchImageSyncWorkflow(input: {
   }
   const runId = positiveInteger(result.workflow_run_id)
   const runUrl = boundedString(result.html_url, 500)
-  if (runId == null || !runUrl.startsWith(`https://github.com/${githubOwner}/${githubRepo}/actions/runs/`)) {
+  if (runId == null || !runUrl.startsWith(`${target.repositoryUrl}/actions/runs/`)) {
     throw new ImageSyncWorkflowError(
       'GITHUB_DISPATCH_UNCERTAIN',
       '正在确认 GitHub 是否已接收任务。',
@@ -468,27 +504,32 @@ export async function dispatchImageSyncWorkflow(input: {
   return { runId, runUrl }
 }
 
-async function findGitHubWorkflowRun(dispatchKey: string, createdAt: string) {
+async function findGitHubWorkflowRun(
+  dispatchKey: string,
+  createdAt: string,
+  target: GitHubTarget,
+) {
   const created = new Date(createdAt)
   const createdAfter = Number.isNaN(created.getTime())
     ? new Date(Date.now() - dispatchReconciliationWindowMs).toISOString()
     : new Date(created.getTime() - 60 * 1000).toISOString()
   const params = new URLSearchParams({
-    branch: githubRef,
+    branch: target.branch,
     created: `>=${createdAfter}`,
     event: 'workflow_dispatch',
     per_page: '100',
   })
   const value = await githubRequest(
-    `/actions/workflows/${encodeURIComponent(githubWorkflow)}/runs?${params.toString()}`,
+    target,
+    `/actions/workflows/${encodeURIComponent(target.workflowFile)}/runs?${params.toString()}`,
   )
-  return selectGitHubWorkflowRun(value, dispatchKey)
+  return selectGitHubWorkflowRunForRepository(value, dispatchKey, target.repositoryUrl)
 }
 
-async function loadGitHubRun(githubRunId: number) {
+async function loadGitHubRun(githubRunId: number, target: GitHubTarget) {
   const [runValue, jobsValue] = await Promise.all([
-    githubRequest(`/actions/runs/${githubRunId}`),
-    githubRequest(`/actions/runs/${githubRunId}/jobs?per_page=100`),
+    githubRequest(target, `/actions/runs/${githubRunId}`),
+    githubRequest(target, `/actions/runs/${githubRunId}/jobs?per_page=100`),
   ])
   if (!isRecord(runValue)) {
     throw new ImageSyncWorkflowError(
@@ -534,7 +575,7 @@ function serializeRun(row: ImageSyncRunRow) {
   const artifacts = classifyImageSyncRun(row.status, row.conclusion) === 'success'
     ? buildImageSyncArtifactUris({
         arch: row.architecture,
-        bucket: process.env.OSS_BUCKET,
+        bucket: getPlatformConfigSnapshot().config.storage.bucket,
         image: decryptText(row.image_ref_encrypted),
         runCreatedAt: storedProgress.runCreatedAt ?? row.created_at,
       })
@@ -570,7 +611,7 @@ function createImageSyncDownloadLink(row: ImageSyncRunRow, artifact: ImageSyncAr
   const storedProgress = parseProgress(row.progress)
   const objectKey = buildImageSyncArtifactObjectKey({
     arch: row.architecture,
-    bucket: process.env.OSS_BUCKET,
+    bucket: getPlatformConfigSnapshot().config.storage.bucket,
     image: decryptText(row.image_ref_encrypted),
     runCreatedAt: storedProgress.runCreatedAt ?? row.created_at,
   }, artifact)
@@ -581,7 +622,9 @@ function createImageSyncDownloadLink(row: ImageSyncRunRow, artifact: ImageSyncAr
       409,
     )
   }
-  const expiresInSeconds = getImageSyncDownloadExpireSeconds()
+  const expiresInSeconds = getImageSyncDownloadExpireSeconds(
+    getPlatformConfigSnapshot().config.github.downloadExpireSeconds,
+  )
   try {
     return {
       downloadUrl: imageSyncOssClient().signatureUrl(objectKey, { expires: expiresInSeconds, method: 'GET' }),
@@ -600,7 +643,8 @@ function createImageSyncDownloadLink(row: ImageSyncRunRow, artifact: ImageSyncAr
 
 const runColumns = `
   id, user_id, dispatch_key, image_ref_encrypted, architecture, status, conclusion,
-  github_run_id, github_run_url, progress, error_code, error_message,
+  github_run_id, github_run_url, github_repository, github_workflow_file, github_ref,
+  config_revision, progress, error_code, error_message,
   created_at, updated_at, last_synced_at, next_sync_at, completed_at
 `
 
@@ -662,7 +706,7 @@ async function bindOwnedRunToGitHub(
 }
 
 async function syncOwnedRunFromGitHub(row: ImageSyncRunRow, githubRunId: number) {
-  const current = await loadGitHubRun(githubRunId)
+  const current = await loadGitHubRun(githubRunId, githubTargetForRun(row))
   const updated = await query<ImageSyncRunRow>(
     `update image_sync_workflow_runs
      set status = $1, conclusion = $2, github_run_id = $3,
@@ -689,6 +733,8 @@ async function createDispatchingRun(
   userId: number,
   input: ReturnType<typeof normalizeImageSyncInput>,
 ) {
+  const snapshot = getPlatformConfigSnapshot()
+  const github = readGitHubTarget()
   await client.query(
     `select pg_advisory_xact_lock(hashtextextended('image-sync:' || $1::text, 0))`,
     [userId],
@@ -730,10 +776,19 @@ async function createDispatchingRun(
   }
   const inserted = await client.query<ImageSyncRunRow>(
     `insert into image_sync_workflow_runs (
-       user_id, image_ref_encrypted, architecture, status
-     ) values ($1, $2, $3, 'dispatching')
+       user_id, image_ref_encrypted, architecture, status,
+       config_revision, github_repository, github_workflow_file, github_ref
+     ) values ($1, $2, $3, 'dispatching', $4, $5, $6, $7)
      returning ${runColumns}`,
-    [userId, encryptText(input.image), input.arch],
+    [
+      userId,
+      encryptText(input.image),
+      input.arch,
+      snapshot.revision,
+      github.repositoryUrl,
+      github.workflowFile,
+      github.branch,
+    ],
   )
   return inserted.rows[0]
 }
@@ -748,7 +803,7 @@ imageSyncWorkflowRouter.post('/image-sync-runs', async (request, response, next)
       return
     }
     const input = normalizeImageSyncInput(request.body)
-    readGitHubToken()
+    const githubTarget = readGitHubTarget()
     const client = await pool.connect()
     let localRun: ImageSyncRunRow
     try {
@@ -763,7 +818,7 @@ imageSyncWorkflowRouter.post('/image-sync-runs', async (request, response, next)
     }
 
     try {
-      const dispatched = await dispatchImageSyncWorkflow(input, localRun.dispatch_key)
+      const dispatched = await dispatchImageSyncWorkflow(input, localRun.dispatch_key, githubTarget)
       const updated = await query<ImageSyncRunRow>(
         `update image_sync_workflow_runs
          set status = 'queued', github_run_id = $1, github_run_url = $2, updated_at = now()
@@ -935,7 +990,11 @@ imageSyncWorkflowRouter.get('/image-sync-runs/:runId', async (request, response,
             )
             row = expired.rows[0] ?? row
           } else {
-            const matched = await findGitHubWorkflowRun(row.dispatch_key, row.created_at)
+            const matched = await findGitHubWorkflowRun(
+              row.dispatch_key,
+              row.created_at,
+              githubTargetForRun(row),
+            )
             if (matched) {
               githubRunId = matched.runId
               row = await bindOwnedRunToGitHub(row, matched)

@@ -27,7 +27,7 @@
 | Docker CI 工作流 | `.github/workflows/docker-pr.yml`, `.github/workflows/docker-push.yml` |
 | Sealos install surface | `.sealos/template/index.yaml` |
 
-## Environment Variables
+## Startup Environment Variables
 
 Required for server startup:
 
@@ -45,45 +45,21 @@ PostgreSQL pool controls:
 | `DB_POOL_CONNECTION_TIMEOUT_MS` | `3000`. Bounded wait for a PostgreSQL client connection. |
 | `DB_POOL_IDLE_TIMEOUT_MS` | `30000`. Idle time before a pooled client is closed. |
 
-Core and AI controls:
+Process controls:
 
 | Variable | Default / behavior |
 | --- | --- |
 | `PORT` | `8787`. |
-| `APP_PUBLIC_URL` | Public application origin used for Feishu todo links. Production requires HTTPS; local development permits HTTP only for loopback hosts. Query strings, fragments, credentials, and non-root paths are rejected. |
-| `AI_API_BASE` | Shared OpenAI-compatible HTTPS public base URL; `198.18.0.0/15` proxy Fake-IP answers require successful public DNS-over-HTTPS verification. |
-| `AI_API_KEY` | Shared provider key; required to enable AI and never returned to the browser. |
-| `AI_MODEL` | Shared provider model name; required to enable AI. |
-| `AI_RATE_LIMIT` | `5` requests per user per in-memory window. |
-| `AI_GLOBAL_RATE_LIMIT` | `30` total requests per application replica per window. |
-| `VEGES_ADMIN_USERNAMES` | Comma-separated normalized usernames allowed to manage account roles; empty disables role administration. |
-| `GITHUB_ACTIONS_TOKEN` | Instance-level fine-grained token scoped to `sealos-apps/sealos-pro` with Actions write permission. It is never returned to the browser. |
-| `AI_RATE_WINDOW_MS` | `60000`. |
-| `AI_MAX_MESSAGE_LENGTH` | `2000` characters. |
-| `AI_MAX_CONTEXT_CHARS` | `12000` characters. |
+Business configuration is not a process environment contract. Superadministrators edit
+the public URL, the existing eight AI fields, SMTP, OSS, package rules, Feishu, and GitHub
+Actions in Platform Management. Each version is encrypted in PostgreSQL. API replicas reload
+through `LISTEN/NOTIFY` plus reconciliation; the digest worker reads the current version before
+delivery. Fixed Feishu event and OAuth callback URLs are stored separately and are read-only.
 
-AI provider URL, key, and model are deployment-level environment variables shared by all
-authenticated users. There is no user-level AI settings table or API. With all three
-provider variables configured, password registration requires an active project or
-organization invite. Feishu OAuth remains the
-internal identity path. The rate limiter is replica-local, so a
-future multi-replica deployment needs a shared quota or upstream budget policy.
-
-Feishu integration:
-
-| Variable | Purpose |
-| --- | --- |
-| `FEISHU_APP_ID`, `FEISHU_APP_SECRET` | OAuth, identity lookup, message fetch, and delivery. |
-| `FEISHU_OAUTH_REDIRECT_URI` | Explicit OAuth callback URL; otherwise derived from the request origin. |
-| `FEISHU_OAUTH_STATE_SECRET` | OAuth state signing secret; falls back to app secret or encryption key ring. |
-| `FEISHU_VERIFICATION_TOKEN` | Required token for `/api/integrations/feishu/events` and `/api/integrations/feishu/card-actions`. |
-| `FEISHU_WEBHOOK_USER_EMAIL` | Veges account receiving conversation-analysis output. |
-| `FEISHU_WEBHOOK_BASIC_USER`, `FEISHU_WEBHOOK_BASIC_PASSWORD` | Basic credentials for the conversation-analysis webhook. |
-| `FEISHU_DELIVERY_ENABLED` | Set to `false` to disable outbound notification delivery. |
-| `FEISHU_AI_CHAT_ENABLED` | Defaults to disabled. Set to `true` to accept bound users' private bot messages as canonical Veges AI turns and reply in Feishu. |
-
-`FEISHU_ENCRYPT_KEY` is declared in deployment metadata but is not consumed by the
-current server.
+The built-in `admin` account has an immutable database grant. Managed platform grants are
+separate from occupational roles. New accounts are created only by successful Feishu OAuth;
+legacy password accounts may still sign in. `VEGES_ADMIN_USERNAMES` and the former business
+environment variables are accepted only by the one-time `platform:config import` command.
 
 Successful Feishu OAuth is treated as internal identity and may create a user without a
 project invite. The Feishu custom application's availability scope must therefore be
@@ -99,31 +75,18 @@ encrypted source content. Todo extraction replies with a proposal card. `创建�
 same transactional confirmation path as the browser. Candidates with a recognized due date but
 no recognized project become structured todo drafts; the remaining candidates become todos in
 the same transaction. `进入 Veges 编辑` uses
-`APP_PUBLIC_URL/?aiTodoBatch=<id>` and survives authentication before opening the review.
+the configured public URL with `?aiTodoBatch=<id>` and survives authentication before opening the review.
 Weekly-report reminders use the same validated root origin with
 `?weeklyReportOrg=<organization-id>&weekStart=<YYYY-MM-DD>`. The browser preserves the link
 through authentication, opens the shared weekly-report workbench only after membership checks,
 and removes only those two query parameters.
 
-OSS and package market:
-
-| Variable | Default / behavior |
-| --- | --- |
-| `OSS_ENDPOINT` | Required HTTPS origin when OSS features are used. |
-| `OSS_ACCESS_KEY_ID`, `OSS_ACCESS_KEY_SECRET`, `OSS_BUCKET` | OSS credentials and bucket. |
-| `PACKAGE_MARKET_RULES_FILE` | Defaults to `server/trial-combo-package-rules.yaml`. |
-| `PACKAGE_MARKET_MIDDLEWARE_ROOT` | Compatibility fallback for middleware discovery roots. YAML `page_kinds.middleware.discovery.roots` takes precedence. |
-| `PACKAGE_MARKET_BASE_OBJECT_TEMPLATE` | Compatibility template for legacy base-package objects. Apps rules take precedence. |
-| `PACKAGE_MARKET_BASE_LIST_PREFIX_TEMPLATE` | Compatibility listing prefix for legacy base-package objects. |
-| `PACKAGE_MARKET_DOWNLOAD_EXPIRE_SECONDS` | Default signed URL lifetime; fallback is 30 minutes. |
-| `TODO_IMAGE_UPLOAD_MAX_BYTES` | Default `10485760` bytes. Applies to todo images and test-workbench evidence attachments. |
-| `TODO_IMAGE_OBJECT_PREFIX` | Default `todo-images`. Used for todo images and test-workbench evidence attachments. |
-| `TODO_IMAGE_URL_SECRET` | HMAC secret for todo image and test-workbench evidence URLs; falls back to OAuth state secret or encryption key ring. |
-
-Compatibility aliases remain accepted for `OSS_UI_MIDDLEWARE_ROOT`,
-`OSS_UI_BASE_OBJECT_TEMPLATE`, `OSS_UI_BASE_LIST_PREFIX_TEMPLATE`,
-`OSS_UI_DOWNLOAD_EXPIRE_SECONDS`, and `TRIAL_COMBO_PACKAGE_RULES_FILE`. New deployments
-should use the `PACKAGE_MARKET_*` names.
+Object storage is always enabled as a platform capability. The attachment limit defaults to
+10 MB and the object prefix defaults to `todo-images`; the attachment signing key is generated
+during legacy import when no explicit old key exists. Once an endpoint and bucket are configured,
+changing endpoint, bucket, or prefix requires a separate data migration. Package rules are edited
+as validated YAML. Legacy middleware roots and object/list templates remain encrypted compatibility
+state and are intentionally hidden from the UI.
 
 The package-market YAML uses `roots` as component prefixes. Release objects are
 read from `<root>/release/<version>/` and CI objects from
@@ -183,7 +146,7 @@ families are:
 | Authentication | `/api/auth/register`, `/api/auth/login`, `/api/auth/me`, `/api/auth/password`, `/api/auth/feishu/oauth/*` |
 | Workspace | Compatibility `GET /api/workspace`; live scoped reads under `GET /api/workspace/{catalog,overview,inbox,documents,search}`, `GET /api/projects/:projectId/{overview,journals,todos}`, and `GET /api/todos/:todoId/detail`; `GET /api/my-work?organizationId=:id|personal`; lightweight `GET /api/navigation-counts?organizationId=:id|personal`; `GET /api/notifications`, notification read/dismiss routes, `GET/PUT /api/notification-subscription` |
 | Assigned Bugs | `GET /api/test-bugs/assigned?organizationId=:id|personal` and all `/api/test-bugs/:bugId/assigned*` mutations require the same active organization context; verification submissions require either package snapshots or one or more validated, pinned cluster-image references, and create an immutable acceptance comment in the same transaction. CI package snapshots retain their validated branch when the object path uses the canonical `/ci/<branch>/<hash>/` layout; branchless middleware CI snapshots remain valid without one. `GET /api/test-bugs/:bugId/verification-submissions/:submissionId/script?expireMinutes=30|60|120` rechecks tester/developer access and returns an ephemeral script; package URLs are signed only for that response, while cluster images run directly. |
-| Changelog | `GET /api/changelog` for authenticated readers; `POST /api/admin/changelog` and `PATCH /api/admin/changelog/:id` require `VEGES_ADMIN_USERNAMES` system-admin access |
+| Changelog | `GET /api/changelog` for authenticated readers; writes require an active database-backed platform administrator grant |
 | Projects | `/api/projects`, journals, risks, modules, invitations, expiring invite links, Feishu project settings, `GET /api/projects/:projectId/todo-activity` |
 | Todos | `/api/todos`, todo notes, `POST /api/todo-images`, signed `GET /api/todo-images` |
 | Drafts and summaries | `/api/drafts`, journal/todo draft archive and delete, `/api/summaries` |
@@ -192,6 +155,7 @@ families are:
 | Image sync | `POST /api/image-sync-runs`, `GET /api/image-sync-runs`, `GET /api/image-sync-runs/:runId?refresh=true`, `DELETE /api/image-sync-runs/:runId`; every route is session-protected and owner-scoped, and deletion accepts failed local records only |
 | AI | `GET /api/ai/status`, `POST /api/ai/intent-classifications`, `GET/POST /api/ai/conversations/:conversationId/turns`, `POST .../turns/:turnId/document`, `POST .../turns/:turnId/retry`, `POST .../turns/:turnId/cancel`, `POST .../turns/:turnId/reconcile`, `GET /api/ai/conversations`, `PATCH/DELETE /api/ai/conversations/:conversationId`, `POST /api/projects/:projectId/summaries`, todo-proposal read/confirm routes |
 | Feishu webhooks | `/api/integrations/feishu/conversation-analysis`, `/api/integrations/feishu/events` |
+| Platform management | `/api/admin/platform-config`, config test/history/restore/runtime routes, `/api/admin/users`, platform grants, and platform organization create/delete routes require a platform administrator |
 | Roles | `POST /api/auth/active-role`, `GET /api/admin/users`, `PATCH /api/admin/users/:userId/roles` |
 | Organizations | `/api/organizations/*`, system-admin organization creation, owner/admin organization rename, week-start setting and confirmed deletion, direct member admission, expiring `/api/organization-invite-links/*` browser links, legacy Feishu invitations, resource attachment, organization-admin project governance, test-environment `POST/PATCH/DELETE /api/organizations/:organizationId/test-environments(/:environmentId)`, direct organization-member admission to organization projects without invite notifications, milestones including inline `PATCH .../milestones/:milestoneId/status`, task overview, weekly reports, weekly summaries, and the dedicated package-market catalog/policy settings Tab |
 | Organization project modules | `POST /api/organizations/:organizationId/project-modules` with `{ name }`; `PATCH .../project-modules/:moduleId` with nonempty `{ name?, enabled? }`; returns `OrganizationDetail` (201/200). Requires `organization_admin` and active organization owner/admin. Names trim to 1–40 characters, exact case-sensitive uniqueness including disabled names. Invalid input 400; permission change 403; missing nested resource 404; duplicate/legacy rename collision 409. |
@@ -311,18 +275,18 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   in login selection and the account role switcher. Selecting it opens organization management
   and updates the displayed identity without sending it to `POST /api/auth/active-role`.
   System administrators assign it through user role management.
-- Organization access: `owner`, `admin`, `member`. System administrators create
-  organizations; organization owners and administrators rename or delete organizations
+- Organization access: `owner`, `admin`, `member`. Platform administrators create and delete
+  organizations; organization owners and administrators rename organizations
   and manage organization membership. They may add an existing account directly or create
   an expiring browser invite link; link acceptance activates ordinary member access without
-  a Feishu callback. Deletion requires the exact organization name,
-  detaches projects and test spaces, and removes organization-only records.
-  Only accounts assigned `organization_admin` see the organization-management identity in
-  the role switcher; system-administrator status alone does not expose it. The separate
-  organization-management entry is removed. This selection is independent of the global
-  organization selector. Refreshing a stored management view rechecks the assigned role;
-  losing it returns the user to their available business workspace. Server authorization
-  and system-administrator APIs remain unchanged.
+  a Feishu callback. Platform deletion requires the exact organization name and succeeds only
+  for an empty organization; it never detaches or deletes business resources.
+  Accounts assigned `organization_admin` see the organization-management identity, and active
+  platform administrators see the super-administrator identity in the same role switcher.
+  There are no separate management menu entries. These selections are independent of the
+  global organization selector. Refreshing a stored management view rechecks the relevant
+  grant; losing it returns the user to an available business workspace. Server authorization
+  never trusts the selected browser identity.
   If they also have active `owner` or `admin` membership in an organization, they receive
   access to all attached projects and project records, test spaces and test records, and
   Bugs and comments. That dual authorization may update attached project lifecycle status,
@@ -589,7 +553,7 @@ The daily digest subscription is Feishu-only, defaults to disabled at `10:00`
 `Asia/Shanghai`, and sends previous-day completion/reopen activity plus the current
 outstanding backlog at delivery time. Delivery uses a passive Feishu JSON 2.0 card with
 no callback actions or buttons. New canonical digest text retains each positive todo ID;
-when `APP_PUBLIC_URL` is valid, the card converts the escaped title into a server-generated
+when the platform public URL is valid, the card converts the escaped title into a server-generated
 same-site `?todo=<id>` link. Missing or invalid configuration leaves titles as plain text.
 The browser preserves that query through password or Feishu sign-in, resolves the ID only
 against the authenticated workspace, opens the exact todo when authorized, and then removes
@@ -613,7 +577,7 @@ Bug 分享接口：`POST /api/test-bugs/:bugId/share-link` 创建或复用当前
 `DELETE /api/test-bugs/:bugId/share-link` 撤销链接；两者要求报告人、负责人或组织管理员
 读取范围。`GET /api/bug-shares/:token` 为公开读取接口，`POST /api/bug-shares/:token/comments`
 要求登录后发表评论。公共读取响应不包含敏感身份字段或内部附件链接，分享地址基于已验证
-的 `APP_PUBLIC_URL` 生成；未配置时 API 返回同站路径，由浏览器按当前页面的可信来源补全，
+的平台公网地址生成；未配置时 API 返回同站路径，由浏览器按当前页面的可信来源补全，
 不使用服务端请求的 Host 头推导公开域名。
 
 待办分享接口：`POST /api/todos/:todoId/share-link` 创建或复用当前有效链接，
@@ -627,7 +591,7 @@ Bug 分享接口：`POST /api/test-bugs/:bugId/share-link` 创建或复用当前
 留言人解析 mentions。留言请求需携带 UUID `requestId`，写入现有加密待办
 备注及 mention 表，并复用待办备注飞书投递策略；接口按用户和链接限制频率、并发和分钟/
 每日留言数，公开响应最多返回最近 100 条备注。分享来源留言不接受图片 Markdown，并按纯
-文本展示；链接本身不授予项目权限。分享地址使用与 Bug 分享相同的 `APP_PUBLIC_URL` 校验
+文本展示；链接本身不授予项目权限。分享地址使用与 Bug 分享相同的平台公网地址校验
 和同站路径回退。
 
 Project invite links default to a 10 minute lifetime. Owners can request one of the

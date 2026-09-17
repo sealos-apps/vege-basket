@@ -182,8 +182,8 @@ diagnostics contain only duration and aggregate connection counts, never SQL tex
 
 ## Request And Authorization Path
 
-Password or Feishu sign-in creates a random session token stored in `sessions` for 30
-days. Protected endpoints accept `Authorization: Bearer <token>`. Project-scoped routes
+Legacy password sign-in or Feishu sign-in creates a random session token stored in `sessions`
+for 30 days. Only successful Feishu OAuth may create a new ordinary account. Protected endpoints accept `Authorization: Bearer <token>`. Project-scoped routes
 must resolve `getProjectAccess(projectId, userId)` before reading or mutating nested IDs;
 owner-only actions add an explicit role check.
 
@@ -244,19 +244,18 @@ creation and revocation are another explicit exception: managed organization adm
 share todos in projects attached to their organization without receiving general project mutation
 access.
 
-System administrators identified by `VEGES_ADMIN_USERNAMES` may read organization-attached
+Platform administrators with active database grants may read organization-attached
 projects and todos and may update only a todo's due date, priority, module, assignee, watchers,
 or reviewer. This does not make the project writable and does not grant access to unscoped
 projects or other todo fields.
 
 The update log is a global authenticated read surface. Its create and update routes require
-`isSystemAdmin(username)`, which is derived from `VEGES_ADMIN_USERNAMES`; an
+the database-backed platform administrator check; an
 `organization_admin` role does not grant global update-log write access.
 
-`AI_API_BASE`, `AI_API_KEY`, and `AI_MODEL` form one deployment-level provider
-configuration. Users never submit or read AI credentials. When that shared provider is
-configured, password registration requires an active project or organization invite;
-Feishu OAuth can still create or link an internal user. An active organization invite
+The platform configuration's AI base URL, API key, and model form one shared provider
+configuration. Users never submit or read AI credentials. Password registration is disabled;
+Feishu OAuth can create or link an internal user. An active organization invite
 link also adds the authenticated account to that organization. AI calls
 pass both per-user and application-replica
 sliding-window limits.
@@ -666,13 +665,12 @@ database mutation, not a read-only smoke test. Versioned files under
 `server/migrations/` are the operator-facing incremental DDL record and must be
 applied before code that depends on a new structure. The application does not
 automatically execute those versioned files, and there is no automatic down migration.
-The image-sync surface additionally requires an instance-level `GITHUB_ACTIONS_TOKEN` scoped
-to `sealos-apps/sealos-pro` Actions write. It never accepts repository, workflow, ref, or token
-values from the browser. Each dispatch carries a server-generated UUID as the workflow
+The image-sync surface uses the repository, workflow, branch, and token in the encrypted
+platform configuration. Only platform administrators may edit or test those values. Each dispatch carries a server-generated UUID as the workflow
 `request_id`; uncertain POST responses remain recoverable until a matching GitHub `run-name`
 is found or the five-minute reconciliation window expires. Real dispatch verification consumes
 GitHub runner and OSS resources and therefore requires explicit authorization.
-The Sealos template provisions PostgreSQL, injects runtime configuration, probes
+The Sealos template provisions PostgreSQL, injects only startup configuration, probes
 `/api/health`, deploys one application replica, and runs the todo-digest worker every
 five minutes. Digest runs are unique per subscription/date, claimed with row locking and
 a lease, retried at most three times, and terminally failed when the last lease expires.

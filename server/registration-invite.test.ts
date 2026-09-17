@@ -12,33 +12,15 @@ function sourceBetween(start: string, end: string) {
   return serverSource.slice(startIndex, endIndex)
 }
 
-test('shared-AI password registration accepts project or organization invites inside the user transaction', () => {
-  const registration = sourceBetween(
-    'async function registerPasswordUser',
-    'async function getProjectAccess',
-  )
+test('password registration is disabled because new users are created by Feishu OAuth', () => {
   const route = sourceBetween(
     "app.post('/api/auth/register'",
     "app.post('/api/auth/login'",
   )
-  const insertIndex = registration.indexOf('insert into users')
-  const projectAcceptIndex = registration.indexOf('acceptProjectInviteTokenWithClient')
-  const organizationAcceptIndex = registration.indexOf('acceptOrganizationInviteTokenWithClient')
-  const commitIndex = registration.indexOf("client.query('commit')")
-  const registrationIndex = route.indexOf('registerPasswordUser')
-  const sessionIndex = route.indexOf('createSession')
-
-  assert.ok(insertIndex >= 0)
-  assert.ok(insertIndex < projectAcceptIndex)
-  assert.ok(projectAcceptIndex < organizationAcceptIndex)
-  assert.ok(organizationAcceptIndex < commitIndex)
-  assert.ok(registrationIndex >= 0)
-  assert.ok(registrationIndex < sessionIndex)
-  assert.match(
-    registration,
-    /if \(params\.requireInvite && !projectInviteAccepted && !organizationInviteAccepted\) \{[\s\S]*?client\.query\('rollback'\)/u,
-  )
-  assert.doesNotMatch(route, /isActiveProjectInviteToken/u)
+  assert.match(route, /response\.status\(403\)/u)
+  assert.match(route, /REGISTRATION_VIA_FEISHU_ONLY/u)
+  assert.doesNotMatch(route, /insert into users|createSession/u)
+  assert.doesNotMatch(serverSource, /async function registerPasswordUser/u)
 })
 
 test('registration invite acceptance verifies the password before locking and validates the live record', () => {

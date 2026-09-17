@@ -25,20 +25,42 @@ test('Sealos application and digest worker share one required immutable image in
     sealosTemplate,
     /VEGES_IMAGE:[\s\S]*?immutable linux\/amd64 image tag or digest[\s\S]*?required: true/iu,
   )
-  assert.equal(sealosTemplate.match(/\$\{\{ inputs\.VEGES_IMAGE \}\}/gu)?.length, 3)
+  assert.equal(sealosTemplate.match(/\$\{\{ inputs\.VEGES_IMAGE \}\}/gu)?.length, 4)
   assert.doesNotMatch(
     sealosTemplate,
     /ghcr\.io\/felixqiu014-wq\/vege-basket:/u,
   )
 })
 
-test('Sealos does not grant system administration to a predictable default username', () => {
-  const adminInput = sealosTemplate.slice(
-    sealosTemplate.indexOf('VEGES_ADMIN_USERNAMES:'),
-    sealosTemplate.indexOf('AI_API_BASE:'),
-  )
-  assert.match(adminInput, /default: ''/u)
-  assert.doesNotMatch(adminInput, /default: admin/u)
+test('Sealos injects only startup configuration into application processes', () => {
+  const businessEnvironmentKeys = [
+    'APP_PUBLIC_URL',
+    'VEGES_ADMIN_USERNAMES',
+    'AI_API_BASE',
+    'AI_API_KEY',
+    'AI_MODEL',
+    'FEISHU_APP_ID',
+    'FEISHU_APP_SECRET',
+    'OSS_ENDPOINT',
+    'OSS_ACCESS_KEY_ID',
+    'OSS_ACCESS_KEY_SECRET',
+    'OSS_BUCKET',
+    'PACKAGE_MARKET_RULES_FILE',
+  ]
+  for (const key of businessEnvironmentKeys) {
+    assert.doesNotMatch(sealosTemplate, new RegExp(`(?:name:|inputs\\.) ${key}|inputs\\.${key}`, 'u'))
+  }
+  assert.equal(sealosTemplate.match(/name: APP_ENCRYPTION_KEYS\b/gu)?.length, 3)
+  assert.equal(sealosTemplate.match(/name: DATABASE_URL\b/gu)?.length, 3)
+  assert.equal(sealosTemplate.match(/name: VEGES_BOOTSTRAP_ADMIN_PASSWORD\b/gu)?.length, 1)
+})
+
+test('Sealos initializes schema, builtin admin, fixed callbacks, and default platform config before startup', () => {
+  const initializer = sealosTemplate.slice(sealosTemplate.indexOf('- name: initialize-platform'))
+  assert.match(initializer, /npm run db:init/u)
+  assert.match(initializer, /platform:config -- initialize/u)
+  assert.match(initializer, /\/api\/integrations\/feishu\/events/u)
+  assert.match(initializer, /\/api\/auth\/feishu\/oauth\/callback/u)
 })
 
 test('Sealos bounds application and digest worker database pools separately', () => {

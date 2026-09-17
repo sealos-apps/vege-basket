@@ -29,9 +29,10 @@ export function readAiRateLimitConfig(
 }
 
 export function createAiRateLimiter<Key = number>(
-  config: AiRateLimitConfig,
+  initialConfig: AiRateLimitConfig,
   now: () => number = Date.now,
 ) {
+  let config = initialConfig
   const userRequests = new Map<Key, number[]>()
   let globalRequests: number[] = []
 
@@ -52,6 +53,9 @@ export function createAiRateLimiter<Key = number>(
   }
 
   return {
+    updateConfig(nextConfig: AiRateLimitConfig) {
+      config = nextConfig
+    },
     canAllow(userId: Key) {
       return hasCapacity(userId)
     },

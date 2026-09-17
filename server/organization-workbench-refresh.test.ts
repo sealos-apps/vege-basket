@@ -28,7 +28,8 @@ test('organization weekly collection does not reload from whole detail object re
 
 test('organization detail loading cannot render the empty organization state early', () => {
   assert.match(workbenchSource, /const \[detailLoading, setDetailLoading\] = useState\(false\)/u)
-  assert.match(workbenchSource, /setDetailLoading\(nextId !== 0\)/u)
+  assert.match(workbenchSource, /setDetailLoading\(true\)[\s\S]*?fetchOrganization\(selectedOrganizationId/u)
+  assert.match(workbenchSource, /if \(!selectedOrganizationId\) \{[\s\S]*?setDetailLoading\(false\)/u)
   assert.match(
     workbenchSource,
     /if \(\(!detail \|\| detail\.id !== selectedOrganizationId\) && \(loading \|\| detailLoading\)\)/u,

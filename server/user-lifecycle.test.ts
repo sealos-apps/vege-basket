@@ -40,3 +40,14 @@ test('offboarding recipients receive one aggregated notification per departure',
   assert.match(appSource, /accountOffboardingReceived/u)
   assert.match(appSource, /离职后的资产/u)
 })
+
+test('disabling a managed platform administrator preserves the grant and revokes sessions atomically', () => {
+  const source = readFileSync(new URL('./account-offboarding.ts', import.meta.url), 'utf8')
+  const statusStart = source.indexOf('export async function updateManagedAccountStatus')
+  const statusSource = source.slice(statusStart)
+
+  assert.match(statusSource, /delete from sessions where user_id = \$1/u)
+  assert.doesNotMatch(statusSource, /delete from platform_admin_grants/u)
+  assert.match(statusSource, /lockPlatformAdministration/u)
+  assert.match(statusSource, /requirePlatformAdminWithClient/u)
+})

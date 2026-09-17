@@ -40,13 +40,41 @@ read-only check. Importing the running API validates encryption config and appli
 runs and may send personal Feishu messages. Run it only with an authorized database,
 configured Feishu application, and explicit permission to deliver messages.
 
-`FEISHU_AI_CHAT_ENABLED=true` makes the API callback path persist inbound Feishu messages,
-apply schema additions at startup, invoke the shared AI provider, and send personal Feishu
-replies. Enable it only in an authorized environment with a current database backup and a
-verified bot availability scope. Keep it `false` for read-only or production-adjacent checks.
+Enabling Feishu private-chat AI in Platform Management makes the callback path persist inbound
+messages, invoke the shared AI provider, and send personal replies. Keep this hidden compatibility
+setting disabled unless the environment, backup, and bot availability scope are authorized.
 
 Do not submit an image-sync task during read-only verification. A real submission invokes
 GitHub Actions, pulls an external image, and writes a tar plus checksum to OSS.
+
+## Platform Configuration Rollout
+
+The runtime environment contains only database, connection-pool, port, and application
+encryption settings. For an existing deployment, preserve the old environment file outside Git,
+apply the reviewed schema in an authorized maintenance window, then run:
+
+```bash
+npm run platform:config -- inspect --env-file /secure/path/legacy.env
+npm run platform:config -- verify --env-file /secure/path/legacy.env
+npm run platform:config -- bootstrap-admin --env-file /secure/path/legacy.env
+npm run platform:config -- import --env-file /secure/path/legacy.env \
+  --event-callback-url https://veges.private.sealos.pub/api/integrations/feishu/events \
+  --oauth-redirect-url https://pre.veges.private.sealos.pub/api/auth/feishu/oauth/callback
+```
+
+`bootstrap-admin` prompts for a password and creates or upgrades the immutable built-in `admin`.
+在平台配置尚未初始化时，健康检查、`admin` 登录和当前用户读取仍可用，便于通过“平台管理”保存首个配置版本；其他业务接口会返回配置未初始化错误。
+`import` runs once, encrypts business settings into PostgreSQL, imports
+`VEGES_ADMIN_USERNAMES` as managed grants, and fixes both callback URLs. It refuses to overwrite
+an existing platform configuration. Retain the complete application encryption key ring for every
+stored config version. After import, remove business values from the workload environment and use
+the Platform Management page for all changes.
+
+Fresh Sealos installations run `db:init` and `platform:config -- initialize` in an init container.
+The `VEGES_BOOTSTRAP_ADMIN_PASSWORD` template input is passed only to that initializer; it is not
+part of the application or digest-worker runtime environment. The initializer is idempotent after
+successful setup and refuses to create defaults when it detects existing users without an active
+platform configuration, so upgrades cannot silently replace their legacy settings.
 
 ## Local Runtime
 
@@ -304,10 +332,9 @@ Before an encryption-key change:
 
 1. 查看 `main` 推送触发的构建与推送结果，确认合并镜像已生成。
 2. 查看自动发布 job，确认 Deployment rollout 完成且应用镜像校验通过。
-3. Pass database, encryption, shared AI, Feishu, and OSS configuration through the
-   deployment environment; confirm real credential values are absent from the image and Git.
-   The Sealos template derives `APP_PUBLIC_URL` from its TLS ingress host; custom deployments
-   must set it to the application's exact HTTPS root origin.
+3. Pass only database, application encryption, port, and pool settings through the deployment
+   environment. Confirm platform business settings exist in PostgreSQL and real credential values
+   are absent from the workload manifest, image, and Git.
 4. Deploy to a test environment first, then verify health, sign-in, one authorized
    project read, and any changed integration. For an AI change, verify ordinary text arrives
    incrementally, structured turns expose progress without partial JSON, and a deliberately
@@ -325,9 +352,9 @@ Before an encryption-key change:
    Confirm the recipient receives a passive Feishu JSON 2.0 card titled with the
    scheduled delivery date, previous-day activity is separate from the current backlog,
    long sections stop after five items, each new todo title opens the exact authorized
-   todo through the configured `APP_PUBLIC_URL`, and no card button or callback is present.
+   todo through the configured platform public URL, and no card button or callback is present.
    Repeat while signed out to verify the link survives login. An inaccessible ID must show
-   `待办不存在或你无权访问` without revealing todo data. Temporarily omit `APP_PUBLIC_URL`
+   `待办不存在或你无权访问` without revealing todo data. Temporarily clear the platform public URL
    and confirm delivery still builds a valid card with plain titles.
 
 AI conversation protocol releases replace the stateless `/api/ai/chat`, the old
@@ -371,22 +398,21 @@ encrypted record, and the workflow that triggered rollback.
   production URL for local verification.
 - Startup reports an encryption-key mismatch: ensure the active ID names a 32-byte
   base64 key in `APP_ENCRYPTION_KEYS` and retain keys for older envelopes.
-- Package market fails: verify the HTTPS OSS origin, bucket credentials, bundled or
-  configured rules file, and allowed object-key roots.
-- Image sync is unavailable: verify `GITHUB_ACTIONS_TOKEN` is present and scoped to
-  `sealos-apps/sealos-pro` with Actions write permission, then verify the API host is reachable from
+- Package market fails: verify the HTTPS OSS origin, bucket credentials, saved YAML rules,
+  and allowed object-key roots in Platform Management.
+- Image sync is unavailable: test the saved GitHub repository, workflow, branch, and token in
+  Platform Management, then verify the API host is reachable from
   the Veges runtime. A transient dispatch timeout should leave the task in `dispatching`; use
   refresh to reconcile the `request_id` run name before submitting anything else. A 409 means
   the current user already has an active run; a 429 means the ten-runs-per-hour user quota or
   submission cooldown was reached.
 - Todo image upload fails: verify OSS config, upload size/type, and the URL-signing secret
   or its documented fallback.
-- AI returns 503: verify `AI_API_BASE`, `AI_API_KEY`, and `AI_MODEL` are all present in the
-  application environment. The URL must be HTTPS and resolve only to public addresses.
+- AI returns 503: verify the platform AI address, API key, and model are complete. The URL must
+  be HTTPS and resolve only to public addresses.
 - Veges AI rejects a text attachment message as too long: split the input or reduce the
   attachments. The composer enforces both its attachment limits and the effective
-  `AI_MAX_MESSAGE_LENGTH` returned by `GET /api/ai/status`; raising the provider limit
-  requires a deliberate deployment configuration change.
+  message length returned by `GET /api/ai/status`; changing the limit requires a platform save.
 - AI history is empty after sign-in: verify the conversation belongs to the current user.
   Project conversations are intentionally hidden while project access is inactive; restoring
   active membership makes retained history visible again.
@@ -418,16 +444,16 @@ encrypted record, and the workflow that triggered rollback.
   `https://cloudflare-dns.com` or exclude the provider hostname from Fake-IP mode. A
   transient public-DNS failure is retryable after name resolution recovers. Literal and
   ordinary private addresses are intentionally rejected.
-- Password registration returns 403 while AI is enabled: use a current project invite or
-  sign in through Feishu OAuth; existing password accounts can still log in normally.
+- Password registration returns 403: new accounts must sign in through Feishu OAuth; existing
+  password accounts can still log in normally.
 - Daily digest is not sent: verify the user subscription is enabled, the user has a bound
-  Feishu `open_id`, `FEISHU_DELIVERY_ENABLED` is not `false`, the CronJob uses the current
+  Feishu `open_id`, platform notification delivery is enabled, the CronJob uses the current
   image, and the latest digest run is not `failed` or `skipped`.
-- Daily digest titles are not clickable: verify `APP_PUBLIC_URL` is an HTTPS root origin in
-  production and is injected into the digest CronJob. HTTP is accepted only for localhost
+- Daily digest titles are not clickable: verify the platform public URL is an HTTPS root origin.
+  HTTP is accepted only for localhost
   or loopback local development; invalid values intentionally fall back to plain titles.
-- Feishu callback returns 401: verify the callback token matches
-  `FEISHU_VERIFICATION_TOKEN`; challenge payloads are authenticated too.
+- Feishu callback returns 401: verify the saved verification token matches the Feishu application;
+  challenge payloads are authenticated too.
 - Unexpected users can complete Feishu OAuth: narrow the company custom application's
   availability scope before re-enabling sign-in; Veges does not maintain a second tenant
   or email-domain allowlist.
@@ -489,6 +515,5 @@ nonempty deletion rejection, wrong-subject parents/cases, and whole-batch rollba
 Pure tests and browser tests with mocked callbacks do not establish PostgreSQL lock,
 constraint, migration or HTTP integration behavior.
 
-If pure `npm test` imports fail with `DATABASE_URL is required`, supply an inert
-loopback URL with an unused port for the test command only. The affected tests import
-pure helpers from database-aware modules but must not start the API or issue queries.
+`npm test` supplies an inert loopback database URL only when the caller has not configured one.
+Pure tests import database-aware modules but do not start the API or issue queries.

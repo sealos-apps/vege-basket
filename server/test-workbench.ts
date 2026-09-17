@@ -45,6 +45,8 @@ import {
   listPackageMarketRules,
   packageMarketCiBranchFromObjectKey,
 } from './package-market.ts'
+import { getPlatformConfigSnapshot } from './platform-config-runtime.ts'
+import { getPackageMarketRulesForConfigRevision } from './platform-package-rules.ts'
 import {
   canDeleteTestCase,
   canDeleteTestBug,
@@ -5790,6 +5792,7 @@ router.post('/test-bugs/:bugId/assigned/verification-submissions', asyncRoute(as
 
   // Package rule discovery may contact OSS, so complete it before taking the Bug row lock.
   const rules = packages.length > 0 ? await listPackageMarketRules() : []
+  const sourceConfigRevision = getPlatformConfigSnapshot().revision
   let statusEvent: TestBugStatusChangedEvent | null = null
   await transaction(async (client) => {
     const current = await client.query<{ organization_id: string | null; status: BugStatus }>(
@@ -5843,8 +5846,8 @@ router.post('/test-bugs/:bugId/assigned/verification-submissions', asyncRoute(as
         insert into test_bug_verification_packages (
           test_bug_verification_submission_id, position, source_package_id, source_package_name,
           package_name, channel, channel_label, ci_branch, arch, version, object_key,
-          object_last_modified, size_bytes
-        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::bigint)
+          object_last_modified, size_bytes, source_config_revision
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::bigint, $14::bigint)
         `,
         [
           submissionId,
@@ -5860,6 +5863,7 @@ router.post('/test-bugs/:bugId/assigned/verification-submissions', asyncRoute(as
           item.objectKey,
           item.objectLastModified,
           item.sizeBytes ?? null,
+          sourceConfigRevision,
         ],
       )
     }
@@ -5925,10 +5929,12 @@ router.get('/test-bugs/:bugId/verification-submissions/:submissionId/script', as
     query<{
       channel: 'release' | 'ci'
       object_key: string
+      source_config_revision: string | null
       source_package_id: string
     }>(
       `
-      select package.source_package_id, package.channel, package.object_key
+      select package.source_package_id, package.channel, package.object_key,
+             package.source_config_revision
       from test_bug_verification_packages package
       join test_bug_verification_submissions submission
         on submission.id = package.test_bug_verification_submission_id
@@ -5968,8 +5974,14 @@ router.get('/test-bugs/:bugId/verification-submissions/:submissionId/script', as
     response.status(400).json({ error: '下载链接有效期仅支持 30 分钟、1 小时或 2 小时' })
     return
   }
-  const rules = await listPackageMarketRules()
+  const rulesByRevision = new Map<number | null, Awaited<ReturnType<typeof getPackageMarketRulesForConfigRevision>>>()
   for (const item of packages.rows) {
+    const revision = item.source_config_revision ? Number(item.source_config_revision) : null
+    let rules = rulesByRevision.get(revision)
+    if (!rulesByRevision.has(revision)) {
+      rules = await getPackageMarketRulesForConfigRevision(revision)
+      rulesByRevision.set(revision, rules)
+    }
     if (!isPackageMarketObjectKeyAllowedForRule({
       channel: item.channel,
       objectKey: item.object_key,

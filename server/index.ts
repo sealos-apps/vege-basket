@@ -61,6 +61,7 @@ import {
 import { createPackageItemFailureDiagnostic } from './package-item-diagnostics.ts'
 import {
   createPackageItemDownloadLink,
+  configurePackageMarketRuntime,
   getOssObject,
   getPackageMarketDetail,
   getPackageMarketExpireMinutes,
@@ -187,19 +188,35 @@ import {
   getAuthenticatedRoleSession,
   getUserRoleContext,
   getSwitchableUserRoles,
-  isSystemAdmin,
   roleRouter,
   type UserRole,
 } from './roles.ts'
 import {
   addTodoShareComment,
+  configureTodoSharePublicUrl,
   createTodoShareLink,
   getTodoShareView,
   revokeTodoShareLink,
 } from './todo-share.ts'
-import { buildBugShareUrl } from './bug-share.ts'
+import { buildBugShareUrl, configureBugSharePublicUrl } from './bug-share.ts'
 import type { UserAccountStatus } from '../shared/user-lifecycle.ts'
 import { getDepartedUserIds } from './user-lifecycle.ts'
+import { isPlatformAdmin } from './platform-admins.ts'
+import {
+  platformAiEnvironment,
+  platformFeishuConfig,
+  platformPublicUrl,
+} from './platform-config-values.ts'
+import { platformManagementRouter } from './platform-management-router.ts'
+import { getLegacyPlatformSecrets, getPlatformInstanceSettings } from './platform-config-store.ts'
+import {
+  platformConfigRequestMiddleware,
+  getPlatformConfigSnapshot,
+  startPlatformConfigRuntime,
+  stopPlatformConfigRuntime,
+} from './platform-config-runtime.ts'
+import { assertPlatformBootstrapIntegrity, markPlatformStorageUsed } from './platform-config-store.ts'
+import { getPackageMarketRulesForConfigRevision } from './platform-package-rules.ts'
 import {
   configureAccountOffboardingNotifications,
   type AccountOffboardingNotificationEvent,
@@ -236,7 +253,6 @@ import {
   buildFeishuAiReplyCard,
   buildFeishuAiReviewUrl,
   buildFeishuAiTodoProposalCard,
-  isFeishuAiChatEnabled,
   shouldRetainFeishuAiSource,
   type FeishuAiProposalCardItem,
 } from './feishu-ai.ts'
@@ -287,6 +303,8 @@ type AiAgentType =
   | 'organization-weekly-summary'
   | 'personal-weekly-report'
 type FeishuTenantAccessToken = {
+  appId: string
+  configRevision: number
   expireAt: number
   token: string
 }
@@ -381,18 +399,11 @@ app.set('trust proxy', true)
 const port = Number(process.env.PORT ?? 8787)
 const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const clientDistPath = path.resolve(serverDir, '../dist')
-const configuredAiMaxMessageLength = Number(process.env.AI_MAX_MESSAGE_LENGTH ?? 2_000)
-const aiMaxMessageLength = Number.isSafeInteger(configuredAiMaxMessageLength) && configuredAiMaxMessageLength > 0
-  ? configuredAiMaxMessageLength
-  : 2_000
-const aiMaxContextChars = Number(process.env.AI_MAX_CONTEXT_CHARS ?? 12_000)
+const aiMaxMessageLength = () => getPlatformConfigSnapshot().config.ai.maxMessageLength
+const aiMaxContextChars = () => getPlatformConfigSnapshot().config.ai.maxContextChars
 const aiStructuredTurnTimeoutMs = 90_000
 const activeAiTurnControllers = new AiTurnControllerRegistry()
-const todoImageUploadMaxBytes = Number(process.env.TODO_IMAGE_UPLOAD_MAX_BYTES ?? 10 * 1024 * 1024)
-const todoImageObjectPrefix = String(process.env.TODO_IMAGE_OBJECT_PREFIX ?? 'todo-images')
-  .trim()
-  .replace(/^\/+|\/+$/g, '') || 'todo-images'
-const aiRateLimiter = createAiRateLimiter(readAiRateLimitConfig())
+const aiRateLimiter = createAiRateLimiter({ globalLimit: 30, perUserLimit: 5, windowMs: 60_000 })
 const aiIntentRequestRateLimiter = createAiRateLimiter({
   globalLimit: 60,
   perUserLimit: 10,
@@ -441,6 +452,22 @@ const aiIntentRoutingDependencies = {
 let feishuTenantAccessToken: FeishuTenantAccessToken | null = null
 const feishuUserNameCache = new Map<string, string>()
 const feishuUserLookupWarnings = new Set<string>()
+
+function feishuDeliveryAvailable() {
+  const config = platformFeishuConfig()
+  return config.deliveryEnabled && Boolean(config.appId && config.appSecret)
+}
+
+function feishuAiChatEnabled() {
+  return platformFeishuConfig().aiChatEnabled
+}
+
+configureTodoSharePublicUrl(platformPublicUrl)
+configureBugSharePublicUrl(platformPublicUrl)
+configurePackageMarketRuntime(() => {
+  const config = getPlatformConfigSnapshot().config
+  return { packages: config.packages, storage: config.storage }
+})
 
 const aiAgentPrompts: Record<AiAgentType, string> = {
   general:
@@ -500,10 +527,14 @@ const aiAgentPrompts: Record<AiAgentType, string> = {
 app.use(cors())
 app.use('/api/integrations/feishu/conversation-analysis', express.text({ type: '*/*' }))
 
-app.post('/api/todo-images', express.raw({
-  limit: todoImageUploadMaxBytes,
-  type: ['image/*', 'video/*'],
-}), asyncHandler(async (request, response) => {
+app.post('/api/todo-images', (request, response, next) => {
+  void platformConfigRequestMiddleware(request, response, next)
+}, (request, response, next) => {
+  express.raw({
+    limit: getPlatformConfigSnapshot().config.storage.uploadMaxBytes,
+    type: ['image/*', 'video/*'],
+  })(request, response, next)
+}, asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
   const contentType = normalizeTodoImageContentType(request.headers['content-type'])
@@ -516,6 +547,7 @@ app.post('/api/todo-images', express.raw({
     return
   }
   const objectKey = createTodoImageObjectKey(userId, contentType)
+  await markPlatformStorageUsed(getPlatformConfigSnapshot().revision)
   await putOssObject(objectKey, request.body, contentType)
   response.status(201).json({
     attachmentUrl: todoImageUrl(objectKey),
@@ -525,10 +557,12 @@ app.post('/api/todo-images', express.raw({
   })
 }))
 
-app.get('/api/todo-images', asyncHandler(async (request, response) => {
+app.get('/api/todo-images', (request, response, next) => {
+  void platformConfigRequestMiddleware(request, response, next)
+}, asyncHandler(async (request, response) => {
   const objectKey = String(request.query.key ?? '')
   const signature = String(request.query.sig ?? '')
-  if (!isTodoImageObjectKey(objectKey) || !isValidTodoImageSignature(objectKey, signature)) {
+  if (!isTodoImageObjectKey(objectKey) || !(await isValidTodoImageSignature(objectKey, signature))) {
     response.status(400).json({ error: 'Invalid todo image key' })
     return
   }
@@ -550,6 +584,15 @@ app.use(express.json({
     }
   },
 }))
+app.use('/api', platformManagementRouter)
+app.use('/api', (request, response, next) => {
+  if (request.path === '/health' || request.path === '/auth/login' ||
+      (request.path === '/auth/me' && request.method === 'GET')) {
+    next()
+    return
+  }
+  void platformConfigRequestMiddleware(request, response, next)
+})
 app.use('/api', roleRouter)
 app.use('/api', changelogRouter)
 app.use('/api', imageSyncWorkflowRouter)
@@ -703,7 +746,7 @@ function todoImageExtension(contentType: string) {
 
 function createTodoImageObjectKey(userId: number, contentType: string) {
   return [
-    todoImageObjectPrefix,
+    getPlatformConfigSnapshot().config.storage.objectPrefix,
     formatDate(new Date()),
     `user-${userId}`,
     `${crypto.randomUUID()}.${todoImageExtension(contentType)}`,
@@ -711,37 +754,35 @@ function createTodoImageObjectKey(userId: number, contentType: string) {
 }
 
 function isTodoImageObjectKey(objectKey: string) {
+  const objectPrefix = getPlatformConfigSnapshot().config.storage.objectPrefix
   return (
-    objectKey.startsWith(`${todoImageObjectPrefix}/`) &&
+    objectKey.startsWith(`${objectPrefix}/`) &&
     !objectKey.includes('..') &&
     objectKey.length <= 512
   )
 }
 
 function todoImageUrlSecret() {
-  const secret = String(
-    process.env.TODO_IMAGE_URL_SECRET ??
-      process.env.FEISHU_OAUTH_STATE_SECRET ??
-      process.env.APP_ENCRYPTION_KEYS ??
-      '',
-  )
+  const secret = getPlatformConfigSnapshot().config.storage.urlSecret
   if (!secret) {
     throw new Error('TODO_IMAGE_URL_SECRET or APP_ENCRYPTION_KEYS must be set')
   }
   return secret
 }
 
-function todoImageSignature(objectKey: string) {
-  return crypto.createHmac('sha256', todoImageUrlSecret()).update(objectKey).digest('base64url')
+function todoImageSignature(objectKey: string, secret = todoImageUrlSecret()) {
+  return crypto.createHmac('sha256', secret).update(objectKey).digest('base64url')
 }
 
-function isValidTodoImageSignature(objectKey: string, signature: string) {
+async function isValidTodoImageSignature(objectKey: string, signature: string) {
   if (!signature) return false
-  const expected = todoImageSignature(objectKey)
-  const expectedBuffer = Buffer.from(expected)
-  const signatureBuffer = Buffer.from(signature)
-  return expectedBuffer.length === signatureBuffer.length &&
-    crypto.timingSafeEqual(expectedBuffer, signatureBuffer)
+  const secrets = [todoImageUrlSecret(), ...(await getLegacyPlatformSecrets('todo_image_url'))]
+  return secrets.some((secret) => {
+    const expectedBuffer = Buffer.from(todoImageSignature(objectKey, secret))
+    const signatureBuffer = Buffer.from(signature)
+    return expectedBuffer.length === signatureBuffer.length &&
+      crypto.timingSafeEqual(expectedBuffer, signatureBuffer)
+  })
 }
 
 function todoImageUrl(objectKey: string) {
@@ -825,10 +866,10 @@ function serializeUser(row: UserRow) {
 async function serializeUserWithRoleContext(row: UserRow, token: string) {
   return {
     ...serializeUser(row),
-    ...(await getUserRoleContext(Number(row.id), token, row.email)),
+    ...(await getUserRoleContext(Number(row.id), token)),
   }
 }
-function trimForAi(value: string, maxLength = aiMaxMessageLength) {
+function trimForAi(value: string, maxLength = aiMaxMessageLength()) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value
 }
 
@@ -870,6 +911,7 @@ function buildFeishuInformationSummary(analysis: string) {
 }
 
 function checkAiRateLimit(userId: number) {
+  aiRateLimiter.updateConfig(readAiRateLimitConfig(platformAiEnvironment()))
   return aiRateLimiter.allow(userId)
 }
 
@@ -927,7 +969,7 @@ async function resolveAiIntentClassification(
       input.source.userContent,
       input.source.attachments,
     )
-    const intent = await classifyAiIntentWithModel(readAiProviderConfig(), {
+    const intent = await classifyAiIntentWithModel(readAiProviderConfig(platformAiEnvironment()), {
       content: sourceContent,
       hasPendingTodoProposals: context.hasPendingTodoProposals,
       shanghaiDate: formatDate(new Date()),
@@ -980,8 +1022,7 @@ function timingSafeTextEqual(left: string, right: string) {
 }
 
 function ensureFeishuWebhookAuth(request: express.Request, response: express.Response) {
-  const basicUser = process.env.FEISHU_WEBHOOK_BASIC_USER ?? ''
-  const basicPassword = process.env.FEISHU_WEBHOOK_BASIC_PASSWORD ?? ''
+  const { webhookBasicPassword: basicPassword, webhookBasicUser: basicUser } = platformFeishuConfig()
   if (!basicUser || !basicPassword) {
     response.status(503).json({ error: 'Feishu webhook is not configured' })
     return false
@@ -1023,8 +1064,8 @@ function getRequestOrigin(request: express.Request) {
   return `${proto}://${host}`
 }
 
-function getFeishuOAuthRedirectUri(request: express.Request) {
-  const configured = String(process.env.FEISHU_OAUTH_REDIRECT_URI ?? '').trim()
+async function getFeishuOAuthRedirectUri(request: express.Request) {
+  const configured = String((await getPlatformInstanceSettings())?.oauthRedirectUrl ?? '').trim()
   if (configured) return configured
   return `${getRequestOrigin(request)}/api/auth/feishu/oauth/callback`
 }
@@ -1037,12 +1078,10 @@ function sanitizeReturnTo(value: unknown) {
 }
 
 function getFeishuOAuthStateSecret() {
-  return (
-    process.env.FEISHU_OAUTH_STATE_SECRET ||
-    process.env.FEISHU_APP_SECRET ||
-    process.env.APP_ENCRYPTION_KEYS ||
-    'veges-local-oauth-state'
-  )
+  const config = platformFeishuConfig()
+  return config.oauthStateSecret && config.oauthStateSecret !== '[object Object]'
+    ? config.oauthStateSecret
+    : config.appSecret
 }
 
 function signFeishuOAuthState(payload: FeishuOAuthState) {
@@ -1156,7 +1195,7 @@ function extractConversationText(body: Record<string, unknown>) {
 }
 
 function verifyFeishuToken(token: unknown) {
-  const expectedToken = String(process.env.FEISHU_VERIFICATION_TOKEN ?? '').trim()
+  const expectedToken = platformFeishuConfig().verificationToken.trim()
   const receivedToken = String(token ?? '').trim()
   return Boolean(expectedToken && receivedToken) && timingSafeTextEqual(receivedToken, expectedToken)
 }
@@ -1189,12 +1228,15 @@ function normalizeFeishuEventPayload(body: Record<string, unknown>) {
 
 async function getFeishuTenantAccessToken() {
   const now = Date.now()
-  if (feishuTenantAccessToken && feishuTenantAccessToken.expireAt > now + 60_000) {
+  const snapshot = getPlatformConfigSnapshot()
+  const { appId, appSecret } = snapshot.config.feishu
+  if (
+    feishuTenantAccessToken?.appId === appId &&
+    feishuTenantAccessToken.configRevision === snapshot.revision &&
+    feishuTenantAccessToken.expireAt > now + 60_000
+  ) {
     return feishuTenantAccessToken.token
   }
-
-  const appId = process.env.FEISHU_APP_ID ?? ''
-  const appSecret = process.env.FEISHU_APP_SECRET ?? ''
   if (!appId || !appSecret) {
     throw new Error('Feishu app credentials are not configured')
   }
@@ -1220,6 +1262,8 @@ async function getFeishuTenantAccessToken() {
   }
 
   feishuTenantAccessToken = {
+    appId,
+    configRevision: snapshot.revision,
     token: data.tenant_access_token,
     expireAt: now + Math.max(60, data.expire ?? 7_000) * 1_000,
   }
@@ -1286,8 +1330,7 @@ async function resolveAndPersistFeishuOpenId(userId: number, email: string) {
 }
 
 async function exchangeFeishuOAuthCode(code: string, redirectUri: string) {
-  const appId = process.env.FEISHU_APP_ID ?? ''
-  const appSecret = process.env.FEISHU_APP_SECRET ?? ''
+  const { appId, appSecret } = platformFeishuConfig()
   if (!appId || !appSecret) {
     throw new Error('飞书应用凭据未配置。')
   }
@@ -1386,7 +1429,8 @@ async function findOrCreateFeishuOAuthUser(
           when $3 <> '' then $3
           else feishu_email
         end,
-        feishu_receive_id_type = 'open_id'
+        feishu_receive_id_type = 'open_id',
+        feishu_identity_verified_at = now()
     where feishu_user_id = $1
     returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
     `,
@@ -1408,11 +1452,14 @@ async function findOrCreateFeishuOAuthUser(
       set feishu_email = $1,
           feishu_user_id = $2,
           feishu_receive_id_type = 'open_id',
+          feishu_identity_verified_at = now(),
           display_name = case
             when $3 <> '' then $3
             else display_name
           end
       where email = $1
+        and lower(btrim(email)) <> 'admin'
+        and (feishu_user_id = '' or feishu_user_id = $2)
       returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
       `,
       [feishuUser.email, feishuUser.openId, displayName],
@@ -1431,8 +1478,10 @@ async function findOrCreateFeishuOAuthUser(
   const newDisplayName = displayName || feishuUser.email || '飞书用户'
   const created = await query<UserRow>(
     `
-    insert into users (email, password_hash, display_name, feishu_email, feishu_user_id, feishu_receive_id_type)
-    values ($1, $2, $3, $4, $5, 'open_id')
+    insert into users
+      (email, password_hash, display_name, feishu_email, feishu_user_id,
+       feishu_receive_id_type, registration_source, feishu_identity_verified_at)
+    values ($1, $2, $3, $4, $5, 'open_id', 'feishu', now())
     returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
     `,
     [username, '', newDisplayName, feishuUser.email, feishuUser.openId],
@@ -1820,7 +1869,7 @@ async function buildSelectedProjectAiContext(userId: number, projectId: number) 
       `最新日记：${source.latestJournal ? trimForAi(source.latestJournal, 500) : '无'}`,
       `当前风险：${source.latestRisk ? trimForAi(source.latestRisk, 240) : '无'}`,
       `待处理待办：${source.nextTodo ? trimForAi(source.nextTodo, 180) : '无'}`,
-    ].join('\n\n'), aiMaxContextChars)
+    ].join('\n\n'), aiMaxContextChars())
   }
 
   const source = await getMemberProjectSummarySource(projectId, userId)
@@ -1855,7 +1904,7 @@ async function buildSelectedProjectAiContext(userId: number, projectId: number) 
     `指派给我的待办：\n${assignedTodoLines}`,
     `备注中 @ 我的内容：\n${noteMentionLines}`,
     `指派给我的安装升级事项：\n${assignedEventLines}`,
-  ].join('\n\n'), aiMaxContextChars)
+  ].join('\n\n'), aiMaxContextChars())
 }
 
 async function assertAiWorkspaceReviewAccess(userId: number, projectIds: readonly number[]) {
@@ -1877,11 +1926,11 @@ async function createAiWorkspaceReviewResponse(params: {
   const request = await loadAiWorkspaceReviewRequest(
     params.userId,
     params.period,
-    aiMaxContextChars,
+    aiMaxContextChars(),
   )
   await assertAiWorkspaceReviewAccess(params.userId, request.projectIds)
   try {
-    const message = await requestAiChatCompletion(readAiProviderConfig(), {
+    const message = await requestAiChatCompletion(readAiProviderConfig(platformAiEnvironment()), {
       messages: params.messages,
       signal: params.signal,
       systemPrompt: request.systemPrompt,
@@ -1943,7 +1992,7 @@ async function generateAiPeriodSummary(params: {
 
   try {
     const request = buildAiPeriodSummaryRequest(period, facts)
-    const content = await requestAiChatCompletion(readAiProviderConfig(), {
+    const content = await requestAiChatCompletion(readAiProviderConfig(platformAiEnvironment()), {
       ...request,
       signal: params.signal,
       timeoutMs: aiStructuredTurnTimeoutMs,
@@ -2002,7 +2051,7 @@ async function createAiAgentResponse(
     return { error: 'Project not found', status: 404 as const }
   }
   try {
-    const message = await requestAiChatCompletion(readAiProviderConfig(), {
+    const message = await requestAiChatCompletion(readAiProviderConfig(platformAiEnvironment()), {
       messages,
       onDelta,
       signal,
@@ -2125,7 +2174,7 @@ async function generateAiTodoProposalCandidates(
     )
   }
   const aiRequest = buildAiTodoProposalRequest(sourceMarkdown, catalog, formatDate(new Date()))
-  const aiConfig = readAiProviderConfig()
+  const aiConfig = readAiProviderConfig(platformAiEnvironment())
   if (aiRequest.untrustedContext.length > aiConfig.maxContextChars) {
     throw new AiConversationStoreError(
       'AI_TODO_CONTEXT_TOO_LARGE',
@@ -2983,7 +3032,7 @@ async function saveFeishuAiChat(params: {
 }
 
 function buildFeishuAiAttachment(sourceContent: string, userContent: string) {
-  const availableCharacters = Math.max(0, aiMaxMessageLength - userContent.length - 2)
+  const availableCharacters = Math.max(0, aiMaxMessageLength() - userContent.length - 2)
   const content = trimForAi(sourceContent, Math.min(availableCharacters, 20_000))
   if (!content) return []
   return [{
@@ -3030,7 +3079,7 @@ async function buildFeishuAiTodoCard(batchId: number) {
   return buildFeishuAiTodoProposalCard({
     batchId,
     proposals,
-    reviewUrl: buildFeishuAiReviewUrl(batchId),
+    reviewUrl: buildFeishuAiReviewUrl(batchId, platformPublicUrl()),
   })
 }
 
@@ -3174,7 +3223,7 @@ async function processFeishuAiMessage(claim: FeishuAiMessageClaim) {
   )
   const userContent = isForward
     ? '请分析以下飞书转发对话，提炼关键信息、分歧、风险和下一步行动建议。'
-    : trimForAi(claim.eventContent, aiMaxMessageLength)
+    : trimForAi(claim.eventContent, aiMaxMessageLength())
   if (!userContent) throw new Error('Conversation content is required')
   const attachments = buildFeishuAiAttachment(sourceContent, userContent)
   const sourceContext = isForward
@@ -3254,7 +3303,7 @@ async function processFeishuAiMessage(claim: FeishuAiMessageClaim) {
 let feishuAiPumpRunning = false
 
 async function pumpFeishuAiMessages(preferredMessageId?: string) {
-  if (feishuAiPumpRunning || !isFeishuAiChatEnabled()) return
+  if (feishuAiPumpRunning || !feishuAiChatEnabled()) return
   feishuAiPumpRunning = true
   try {
     for (let index = 0; index < 5; index += 1) {
@@ -3674,71 +3723,6 @@ async function acceptOrganizationInviteToken(userId: number, rawToken: unknown) 
     const organizationId = await acceptOrganizationInviteTokenWithClient(client, userId, rawToken)
     await client.query('commit')
     return organizationId
-  } catch (error) {
-    await client.query('rollback')
-    throw error
-  } finally {
-    client.release()
-  }
-}
-
-type PasswordRegistrationResult =
-  | { registered: false; reason: 'existing_user' | 'invite_required' }
-  | { registered: true; user: UserRow; userId: number }
-
-async function registerPasswordUser(params: {
-  invitePassword: unknown
-  inviteToken: unknown
-  organizationInviteToken: unknown
-  passwordHash: string
-  requireInvite: boolean
-  username: string
-}): Promise<PasswordRegistrationResult> {
-  const client = await pool.connect()
-  try {
-    await client.query('begin')
-    const existing = await client.query<{ id: string }>(
-      'select id from users where email = $1',
-      [params.username],
-    )
-    if (existing.rows.length > 0) {
-      await client.query('rollback')
-      return { reason: 'existing_user', registered: false }
-    }
-
-    const user = await client.query<UserRow>(
-      `
-      insert into users (email, password_hash, display_name)
-      values ($1, $2, $3)
-      returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
-      `,
-      [params.username, params.passwordHash, params.username],
-    )
-    const userRow = user.rows[0]
-    const userId = Number(userRow.id)
-    await linkPendingMembershipsWithExecutor(
-      (text, queryParams) => client.query(text, queryParams),
-      userId,
-      params.username,
-    )
-    const projectInviteAccepted = await acceptProjectInviteTokenWithClient(
-      client,
-      userId,
-      params.inviteToken,
-      params.invitePassword,
-    )
-    const organizationInviteAccepted = await acceptOrganizationInviteTokenWithClient(
-      client,
-      userId,
-      params.organizationInviteToken,
-    )
-    if (params.requireInvite && !projectInviteAccepted && !organizationInviteAccepted) {
-      await client.query('rollback')
-      return { reason: 'invite_required', registered: false }
-    }
-
-    await client.query('commit')
-    return { registered: true, user: userRow, userId }
   } catch (error) {
     await client.query('rollback')
     throw error
@@ -4237,7 +4221,7 @@ async function getWorkspace(userId: number, options: WorkspaceReadOptions = {}) 
     [userId],
   )
   const currentUserName = displayNameFromUser(currentUser.rows[0])
-  const systemAdmin = isSystemAdmin(currentUser.rows[0]?.email ?? '')
+  const systemAdmin = await isPlatformAdmin(userId)
   const systemAdminOrganizationScopeSql = (alias: string) =>
     systemAdmin ? `${alias}.organization_id is not null` : 'false'
   const [
@@ -4974,41 +4958,10 @@ app.get('/api/health', (_request, response) => {
   response.json({ ok: true })
 })
 
-app.post('/api/auth/register', asyncHandler(async (request, response) => {
-  const username = normalizeUsername(request.body.username ?? request.body.email)
-  const password = String(request.body.password ?? '')
-
-  if (!username || password.length < 6) {
-    response.status(400).json({ error: 'Username and a 6+ character password are required' })
-    return
-  }
-
-  const passwordHash = await bcrypt.hash(password, 12)
-  const registration = await registerPasswordUser({
-    invitePassword: request.body.invitePassword,
-    inviteToken: request.body.inviteToken,
-    organizationInviteToken: request.body.organizationInviteToken,
-    passwordHash,
-    requireInvite: isAiProviderConfigured(),
-    username,
-  })
-  if (!registration.registered) {
-    if (registration.reason === 'existing_user') {
-      response.status(409).json({ error: 'Username already registered' })
-      return
-    }
-    response.status(403).json({
-      error: 'Password registration requires an active project or organization invite while shared AI is enabled',
-    })
-    return
-  }
-
-  const token = await createSession(registration.userId)
-  response.status(201).json({
-    isNewUser: true,
-    token,
-    user: await serializeUserWithRoleContext(registration.user, token),
-    workspace: await getWorkspace(registration.userId, { sections: new Set(['catalog']) }),
+app.post('/api/auth/register', asyncHandler(async (_request, response) => {
+  response.status(403).json({
+    error: '新用户只能通过飞书登录自动注册。',
+    code: 'REGISTRATION_VIA_FEISHU_ONLY',
   })
 }))
 
@@ -5084,14 +5037,13 @@ app.post('/api/auth/feishu/oauth/url', asyncHandler(async (request, response) =>
   const userId = await requireUserId(request)
   const intent: FeishuOAuthState['intent'] = userId ? 'bind' : 'signin'
 
-  const appId = process.env.FEISHU_APP_ID ?? ''
-  const appSecret = process.env.FEISHU_APP_SECRET ?? ''
+  const { appId, appSecret } = platformFeishuConfig()
   if (!appId || !appSecret) {
     response.status(503).json({ error: '飞书应用凭据未配置。' })
     return
   }
 
-  const redirectUri = getFeishuOAuthRedirectUri(request)
+  const redirectUri = await getFeishuOAuthRedirectUri(request)
   const state = signFeishuOAuthState({
     exp: Date.now() + 10 * 60 * 1_000,
     intent,
@@ -5143,6 +5095,7 @@ app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response
             end,
             feishu_user_id = $2,
             feishu_receive_id_type = 'open_id',
+            feishu_identity_verified_at = now(),
             display_name = case
               when $4 <> '' then $4
               else display_name
@@ -5250,10 +5203,10 @@ app.patch('/api/auth/password', asyncHandler(async (request, response) => {
 app.get('/api/ai/status', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
-  const model = String(process.env.AI_MODEL ?? '').trim()
+  const model = getPlatformConfigSnapshot().config.ai.model
   response.json({
-    configured: isAiProviderConfigured(),
-    maxMessageLength: aiMaxMessageLength,
+    configured: isAiProviderConfigured(platformAiEnvironment()),
+    maxMessageLength: aiMaxMessageLength(),
     model,
   })
 }))
@@ -7737,8 +7690,7 @@ async function deliverAccountOffboardingNotification(notificationId: number) {
     userId: Number(notification.recipient_user_id),
   }
   await recordTestWorkbenchInAppNotification(candidate)
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
 }
 
@@ -8030,8 +7982,7 @@ async function buildTodoMentionFeishuCandidateByMentionId(mentionId: number) {
 }
 
 async function deliverTodoMentionNotification(mentionId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildTodoMentionFeishuCandidateByMentionId(mentionId)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
@@ -8859,16 +8810,14 @@ async function buildTestExecutionResultFeishuCandidate(event: TestExecutionResul
 }
 
 async function deliverLatestAssignedTodoNotification(todoId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildAssignedTodoFeishuCandidateByTodoId(todoId)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
 }
 
 async function deliverLatestWatchedTodoNotification(todoId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidates = await buildWatchedTodoFeishuCandidateByTodoId(todoId)
   if (candidates.length === 0) return { failed: 0, sent: 0, skipped: 1 }
   const results = await Promise.all(candidates.map((candidate) => deliverFeishuNotification(candidate)))
@@ -8886,8 +8835,7 @@ async function deliverCompletedTodoCreatorNotification(params: {
   operatorUserId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildCompletedTodoCreatorFeishuCandidateByTodoId(params)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
@@ -8899,8 +8847,7 @@ async function deliverRejectedTodoCreatorNotification(params: {
   sourceId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildRejectedTodoCreatorFeishuCandidateByTodoId(params)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
@@ -8911,16 +8858,14 @@ async function deliverAcceptanceFailedTodoAssigneeNotification(params: {
   operatorUserId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildAcceptanceFailedTodoAssigneeFeishuCandidateByNoteId(params)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
 }
 
 async function deliverTodoNoteNotifications(noteId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidates = await buildTodoNoteFeishuCandidates(noteId)
   const totals = { failed: 0, sent: 0, skipped: 0 }
   for (const candidate of candidates) {
@@ -8933,8 +8878,7 @@ async function deliverTodoNoteNotifications(noteId: number) {
 }
 
 async function deliverTestBugAssignedNotification(event: TestBugAssignedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildTestBugAssignedFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   await query(
@@ -8948,8 +8892,7 @@ async function deliverTestPlanAssignedNotification(event: TestPlanAssignedEvent)
   const candidate = await buildTestPlanAssignedFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   await recordTestWorkbenchInAppNotification(candidate)
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   await query(
     `delete from notification_deliveries where kind = 'test_plan_assigned' and source_id = $1 and channel = 'feishu'`,
     [event.planId],
@@ -8961,8 +8904,7 @@ async function deliverTestBugStatusChangedNotification(event: TestBugStatusChang
   const candidate = await buildTestBugStatusChangedFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   await recordTestWorkbenchInAppNotification(candidate)
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   await query(
     `delete from notification_deliveries where kind = 'test_bug_status_changed' and source_id = $1 and channel = 'feishu'`,
     [event.bugId],
@@ -8974,8 +8916,7 @@ async function deliverTestBugRejectedNotification(event: TestBugRejectedEvent) {
   const candidate = await buildTestBugRejectedFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   await recordTestWorkbenchInAppNotification(candidate)
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   await query(
     `delete from notification_deliveries where kind = 'test_bug_rejected' and source_id = $1 and channel = 'feishu'`,
     [event.bugId],
@@ -8987,8 +8928,7 @@ async function deliverTestBugCommentAddedNotification(event: TestBugCommentAdded
   const candidates = await buildTestBugCommentFeishuCandidates(event)
   if (candidates.length === 0) return { failed: 0, sent: 0, skipped: 1 }
   await Promise.all(candidates.map((candidate) => recordTestWorkbenchInAppNotification(candidate)))
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const results = await Promise.all(candidates.map((candidate) => deliverFeishuNotification(candidate)))
   return results.reduce(
     (total, result) => ({
@@ -9001,8 +8941,7 @@ async function deliverTestBugCommentAddedNotification(event: TestBugCommentAdded
 }
 
 async function deliverTestCaseChangedNotification(event: TestCaseChangedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildTestCaseChangedFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   await query(`delete from notification_deliveries where kind = 'test_case_activity' and source_id = $1`, [event.caseId])
@@ -9010,8 +8949,7 @@ async function deliverTestCaseChangedNotification(event: TestCaseChangedEvent) {
 }
 
 async function deliverTestExecutionResultChangedNotification(event: TestExecutionResultChangedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildTestExecutionResultFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   const sourceId = -event.planCaseId
@@ -9021,8 +8959,7 @@ async function deliverTestExecutionResultChangedNotification(event: TestExecutio
 }
 
 function enqueueLatestAssignedTodoDelivery(todoId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverLatestAssignedTodoNotification(todoId).catch((error) => {
       console.error('Feishu assigned todo delivery failed', error)
@@ -9031,8 +8968,7 @@ function enqueueLatestAssignedTodoDelivery(todoId: number) {
 }
 
 function enqueueLatestWatchedTodoDelivery(todoId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverLatestWatchedTodoNotification(todoId).catch((error) => {
       console.error('Feishu watched todo delivery failed', error)
@@ -9041,8 +8977,7 @@ function enqueueLatestWatchedTodoDelivery(todoId: number) {
 }
 
 function enqueueTodoNoteDeliveries(noteId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverTodoNoteNotifications(noteId).catch((error) => {
       console.error('Feishu todo note delivery failed', error)
@@ -9051,8 +8986,7 @@ function enqueueTodoNoteDeliveries(noteId: number) {
 }
 
 function enqueueTodoMentionDeliveries(mentionIds: number[]) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   for (const mentionId of mentionIds) {
     setTimeout(() => {
       void deliverTodoMentionNotification(mentionId).catch((error) => {
@@ -9063,8 +8997,7 @@ function enqueueTodoMentionDeliveries(mentionIds: number[]) {
 }
 
 function enqueueTestBugAssignedDelivery(event: TestBugAssignedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverTestBugAssignedNotification(event).catch((error) => {
       console.error('Feishu test bug assignment delivery failed', error)
@@ -9105,8 +9038,7 @@ function enqueueTestBugCommentAddedDelivery(event: TestBugCommentAddedEvent) {
 }
 
 function enqueueTestCaseChangedDelivery(event: TestCaseChangedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverTestCaseChangedNotification(event).catch((error) => {
       console.error('Feishu test case delivery failed', error)
@@ -9115,8 +9047,7 @@ function enqueueTestCaseChangedDelivery(event: TestCaseChangedEvent) {
 }
 
 function enqueueTestExecutionResultChangedDelivery(event: TestExecutionResultChangedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverTestExecutionResultChangedNotification(event).catch((error) => {
       console.error('Feishu test execution result delivery failed', error)
@@ -9128,8 +9059,7 @@ function enqueueCompletedTodoCreatorDelivery(params: {
   operatorUserId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverCompletedTodoCreatorNotification(params).catch((error) => {
       console.error('Feishu completed todo creator delivery failed', error)
@@ -9143,8 +9073,7 @@ function enqueueRejectedTodoCreatorDelivery(params: {
   sourceId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverRejectedTodoCreatorNotification(params).catch((error) => {
       console.error('Feishu rejected todo creator delivery failed', error)
@@ -9157,8 +9086,7 @@ function enqueueAcceptanceFailedTodoAssigneeDelivery(params: {
   operatorUserId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverAcceptanceFailedTodoAssigneeNotification(params).catch((error) => {
       console.error('Feishu failed-acceptance todo assignee delivery failed', error)
@@ -9243,16 +9171,14 @@ async function buildAssignedPackageEventFeishuCandidateByEventId(eventId: number
 }
 
 async function deliverLatestAssignedPackageEventNotification(eventId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildAssignedPackageEventFeishuCandidateByEventId(eventId)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
 }
 
 function enqueueLatestAssignedPackageEventDelivery(eventId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverLatestAssignedPackageEventNotification(eventId).catch((error) => {
       console.error('Feishu assigned package event delivery failed', error)
@@ -9347,8 +9273,7 @@ async function deliverPackageEventCommentAddedNotification(params: {
   commentId: number
   mentionedUserIds: number[]
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidates = await buildPackageEventCommentAddedFeishuCandidates(params)
   if (candidates.length === 0) return { failed: 0, sent: 0, skipped: 1 }
   const results = await Promise.all(candidates.map((candidate) => deliverFeishuNotification(candidate)))
@@ -9367,8 +9292,7 @@ function enqueuePackageEventCommentAddedDelivery(params: {
   commentId: number
   mentionedUserIds: number[]
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverPackageEventCommentAddedNotification(params).catch((error) => {
       console.error('Feishu package event comment delivery failed', error)
@@ -11166,7 +11090,7 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
   const session = await getAuthenticatedRoleSession(request)
-  const systemAdmin = Boolean(session && session.userId === userId && isSystemAdmin(session.username))
+  const systemAdmin = Boolean(session && session.userId === userId && await isPlatformAdmin(userId))
   const todoId = Number(request.params.todoId)
   const existingTodo = await query<{
     assignee_user_id: string | null
@@ -12654,10 +12578,12 @@ app.get('/api/projects/:projectId/package-items/:itemId/download-url', asyncHand
       : null
   let objectBindingValid = false
   try {
+    const rules = await getPackageMarketRulesForConfigRevision(source.sourceConfigRevision)
     objectBindingValid = Boolean(channel && isPackageMarketObjectKeyAllowedForRule({
       channel,
       objectKey: source.objectKey,
       packageId: source.sourcePackageId,
+      rules,
     }))
   } catch {
     // Fail closed when the local rule catalog cannot be loaded.
@@ -12815,9 +12741,14 @@ app.post('/api/drafts/:draftId/archive', asyncHandler(async (request, response) 
 app.post('/api/integrations/feishu/conversation-analysis', asyncHandler(async (request, response) => {
   if (!ensureFeishuWebhookAuth(request, response)) return
 
+  const configuredUserId = platformFeishuConfig().webhookUserId
+  if (!configuredUserId) {
+    response.status(503).json({ error: 'Configured Veges user is not set' })
+    return
+  }
   const userResult = await query<{ id: string }>(
-    'select id from users where email = $1',
-    [normalizeUsername(process.env.FEISHU_WEBHOOK_USER_EMAIL ?? 'felix@vege.local')],
+    "select id from users where id = $1 and account_status = 'active'",
+    [configuredUserId],
   )
   const userId = userResult.rows[0] ? Number(userResult.rows[0].id) : null
   if (!userId) {
@@ -12906,7 +12837,7 @@ app.post('/api/integrations/feishu/events', asyncHandler(async (request, respons
   const chatId = message?.chat_id ?? ''
   const senderOpenId = getFeishuEventSenderOpenId(payload.event)
   console.log('Feishu event received', { chatType, messageId, messageType })
-  if (!isFeishuAiChatEnabled()) {
+  if (!feishuAiChatEnabled()) {
     response.json({ ok: true, ignored: true, reason: 'feishu-ai-disabled' })
     return
   }
@@ -12992,10 +12923,10 @@ app.post('/api/ai/intent-classifications', asyncHandler(async (request, response
       return
     }
     const modelContent = buildAiTurnModelContent(content, attachments)
-    if (modelContent.length > aiMaxMessageLength) {
+    if (modelContent.length > aiMaxMessageLength()) {
       response.status(413).json({
         code: 'AI_MESSAGE_TOO_LARGE',
-        error: `AI message must not exceed ${aiMaxMessageLength} characters`,
+        error: `AI message must not exceed ${aiMaxMessageLength()} characters`,
       })
       return
     }
@@ -13089,10 +13020,10 @@ app.post('/api/ai/conversations/:conversationId/turns', asyncHandler(async (requ
       return
     }
     const modelContent = buildAiTurnModelContent(content, attachments)
-    if (modelContent.length > aiMaxMessageLength) {
+    if (modelContent.length > aiMaxMessageLength()) {
       response.status(413).json({
         code: 'AI_MESSAGE_TOO_LARGE',
-        error: `AI message must not exceed ${aiMaxMessageLength} characters`,
+        error: `AI message must not exceed ${aiMaxMessageLength()} characters`,
       })
       return
     }
@@ -13784,7 +13715,7 @@ async function handleFeishuAiCardAction(
     : {}
   if (String(value.action ?? '') !== 'feishu_ai_todo_confirm_all') return false
 
-  const expectedToken = String(process.env.FEISHU_VERIFICATION_TOKEN ?? '')
+  const expectedToken = platformFeishuConfig().verificationToken
   const eventToken = String(header.token ?? body.token ?? '')
   if (!expectedToken || !timingSafeTextEqual(eventToken, expectedToken)) {
     response.status(401).json({ error: 'Invalid Feishu verification token' })
@@ -13808,7 +13739,7 @@ async function handleFeishuAiCardAction(
     response.json({ ok: true, ignored: true })
     return true
   }
-  if (!isFeishuAiChatEnabled()) {
+  if (!feishuAiChatEnabled()) {
     response.json({ toast: { content: 'Veges AI 飞书功能当前已停用', type: 'info' } })
     return true
   }
@@ -13914,7 +13845,7 @@ app.use('/api', createOrganizationRouter({
     const result = await createAiAgentResponse(
       userId,
       'organization-weekly-summary',
-      [{ role: 'user', content: trimForAi(source, aiMaxContextChars) }],
+      [{ role: 'user', content: trimForAi(source, aiMaxContextChars()) }],
       60_000,
     )
     return 'error' in result
@@ -13930,7 +13861,7 @@ app.use('/api', createWeeklyReportRouter({
     const result = await createAiAgentResponse(
       userId,
       'personal-weekly-report',
-      [{ role: 'user', content: trimForAi(source, aiMaxContextChars) }],
+      [{ role: 'user', content: trimForAi(source, aiMaxContextChars()) }],
       60_000,
     )
     return 'error' in result
@@ -14006,18 +13937,21 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
 assertEncryptionConfigured()
 await query(schemaSql)
 await initializeProjectModules(pool)
+await assertPlatformBootstrapIntegrity()
+await startPlatformConfigRuntime()
 
 app.listen(port, () => {
   console.log(`API server listening on http://127.0.0.1:${port}`)
 })
 
-const feishuAiRetryTimer = isFeishuAiChatEnabled()
-  ? setInterval(() => scheduleFeishuAiMessages(), 30_000)
-  : null
-feishuAiRetryTimer?.unref()
+const feishuAiRetryTimer = setInterval(() => {
+  if (feishuAiChatEnabled()) scheduleFeishuAiMessages()
+}, 30_000)
+feishuAiRetryTimer.unref()
 
 process.on('SIGINT', async () => {
-  if (feishuAiRetryTimer) clearInterval(feishuAiRetryTimer)
+  clearInterval(feishuAiRetryTimer)
+  await stopPlatformConfigRuntime()
   await pool.end()
   process.exit(0)
 })

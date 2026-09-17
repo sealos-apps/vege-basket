@@ -351,6 +351,7 @@ export type ProjectPackageItem = {
   objectKey: string
   objectLastModified?: string
   sizeBytes?: number
+  sourceConfigRevision?: number
   createdAt: string
 }
 

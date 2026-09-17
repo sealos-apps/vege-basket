@@ -1,3 +1,5 @@
+import { platformManagementSchemaSql } from './platform-management-schema.ts'
+
 export const schemaSql = `
 create table if not exists users (
   id bigserial primary key,
@@ -2632,6 +2634,8 @@ insert into test_environment_spaces (test_environment_id,test_space_id)
 select environment.id,space.id from test_environments environment
 join test_spaces space on space.organization_id=environment.organization_id
 on conflict (test_environment_id,test_space_id) do nothing;
+
+${platformManagementSchemaSql}
 `
 
 // Applied only after the encrypted, idempotent module-name backfill has succeeded.

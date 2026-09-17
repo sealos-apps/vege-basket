@@ -174,7 +174,6 @@ import {
   inviteProjectMember,
   markAllNotificationsRead,
   loginAccount,
-  registerAccount,
   clearAuthToken,
   completeProjectPackageEvent,
   addPackageEventComment,
@@ -307,6 +306,7 @@ import { TodoShareView } from './components/todo-share-view'
 import { getTodoShareTokenFromPath } from './todo-share-deep-link'
 import type { TestBug } from './test-workbench-types'
 import { OrganizationWorkbench } from './components/organization-workbench'
+import { PlatformManagementWorkbench } from './components/platform-management-workbench'
 import { ProjectSubprojectsPanel } from './components/project-subprojects-panel'
 import { ProjectModulePicker } from './components/project-module-picker'
 import { ChangelogWorkbench } from './components/changelog-workbench'
@@ -318,16 +318,13 @@ import {
 } from './components/weekly-report-workbench'
 import { MyWorkWorkbench } from './components/my-work-workbench'
 import { stripMarkdownLinksToText } from './markdown-preview-policy'
-import {
-  ManageRolesMenuLabel,
-  UserRoleManagementDialog,
-  UserRoleSelectionDialog,
-} from './components/user-role-dialogs'
+import { UserRoleSelectionDialog } from './components/user-role-dialogs'
 import {
   getActiveWorkspaceRole,
   getSelectableWorkspaceRoles,
   hasOrganizationAdminRole,
   userRoleLabel,
+  type WorkspaceIdentity,
 } from './user-roles'
 import './App.css'
 
@@ -375,6 +372,7 @@ type View =
   | 'my_work'
   | 'notifications'
   | 'organization'
+  | 'platform'
   | 'weekly_report'
   | 'package_market'
   | 'image_sync'
@@ -608,6 +606,7 @@ const appViews = [
   'my_work',
   'notifications',
   'organization',
+  'platform',
   'weekly_report',
   'package_market',
   'image_sync',
@@ -714,6 +713,7 @@ function canUseViewForUser(view: View, user: AuthUser) {
     return user.activeRole === 'developer' && SHOW_DEVELOPER_ASSIGNED_BUGS_MODULE
   }
   if (view === 'organization') return canAccessOrganizationManagement(user)
+  if (view === 'platform') return user.isSystemAdmin
   return true
 }
 
@@ -1827,7 +1827,6 @@ function App() {
   const [isProjectTodoDetailActive, setIsProjectTodoDetailActive] = useState(false)
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false)
   const [organizationRefreshVersion, setOrganizationRefreshVersion] = useState(0)
-  const [canCreateOrganization, setCanCreateOrganization] = useState(false)
   const [workspaceError, setWorkspaceError] = useState('')
   const confirmationScope = `${authUser?.id}:${selectedOrganizationId}:${selectedProjectId}:${view}`
   const { confirmAction, confirmationDialog } = useConfirmAction(confirmationScope)
@@ -2357,7 +2356,7 @@ function App() {
         setAuthUser(data.user)
         if (
           selectRoleAfterSessionLoadRef.current &&
-          getSelectableWorkspaceRoles(data.user.roles).length > 1
+          getSelectableWorkspaceRoles(data.user.roles, data.user.isSystemAdmin).length > 1
         ) {
           setRoleSelectionOpen(true)
         }
@@ -2386,7 +2385,6 @@ function App() {
     if (!loggedIn || !authUserId) {
       organizationContextReadyRef.current = false
       setOrganizations([])
-      setCanCreateOrganization(false)
       setSelectedOrganizationId(null)
       setOrganizationContextReady(false)
       setOrganizationContextError('')
@@ -2396,9 +2394,8 @@ function App() {
     let active = true
     setOrganizationContextError('')
     fetchOrganizations()
-      .then(({ canCreate, organizations: nextOrganizations }) => {
+      .then(({ organizations: nextOrganizations }) => {
         if (!active) return
-        setCanCreateOrganization(canCreate)
         const storedOrganizationId = loadStoredSelectedOrganizationId(authUserId)
         setOrganizations(nextOrganizations)
         setSelectedOrganizationId((current) => {
@@ -3218,33 +3215,24 @@ function App() {
     }
   }
 
-  async function signIn(username: string, password: string, mode: 'login' | 'register') {
+  async function signIn(username: string, password: string) {
     setAuthError('')
     if (inviteToken && invitePasswordRequired && !invitePasswordVerified) {
       setAuthError('请先输入邀请密码。')
       return
     }
     try {
-      const result =
-        mode === 'register'
-          ? await registerAccount({
-              username,
-              password,
-              inviteToken: inviteToken || undefined,
-              invitePassword: activeInvitePassword,
-              organizationInviteToken: organizationInviteToken || undefined,
-            })
-          : await loginAccount({
-              username,
-              password,
-              inviteToken: inviteToken || undefined,
-              invitePassword: activeInvitePassword,
-              organizationInviteToken: organizationInviteToken || undefined,
-            })
+      const result = await loginAccount({
+        username,
+        password,
+        inviteToken: inviteToken || undefined,
+        invitePassword: activeInvitePassword,
+        organizationInviteToken: organizationInviteToken || undefined,
+      })
       setAuthToken(result.token)
       resetWorkspaceState()
       setAuthUser(result.user)
-      setRoleSelectionOpen(getSelectableWorkspaceRoles(result.user.roles).length > 1)
+      setRoleSelectionOpen(getSelectableWorkspaceRoles(result.user.roles, result.user.isSystemAdmin).length > 1)
       if (result.isNewUser) {
         setDisplayNameOnboardingDraft('')
         setDisplayNameOnboardingError('')
@@ -3262,17 +3250,8 @@ function App() {
         clearOrganizationInviteTokenFromUrl()
       }
       void refreshNotifications()
-    } catch (error) {
-      const message = error instanceof Error ? error.message : ''
-      if (mode === 'register' && message.includes('active project or organization invite')) {
-        setAuthError('系统已启用共享 AI，请通过有效项目或组织邀请，也可以使用飞书登录创建账号。')
-      } else {
-        setAuthError(
-          mode === 'register'
-            ? '注册失败，请确认用户名未被使用且密码不少于 6 位。'
-            : '登录失败，请检查用户名和密码。',
-        )
-      }
+    } catch {
+      setAuthError('登录失败，请检查用户名和密码。')
     }
   }
 
@@ -3355,8 +3334,18 @@ function App() {
     }
   }
 
-  async function changeActiveUserRole(role: UserRole, targetView?: View) {
-    if (!authUser || roleSelectionBusy || !getSelectableWorkspaceRoles(authUser.roles).includes(role)) return
+  async function changeActiveUserRole(role: WorkspaceIdentity, targetView?: View) {
+    if (
+      !authUser || roleSelectionBusy ||
+      !getSelectableWorkspaceRoles(authUser.roles, authUser.isSystemAdmin).includes(role)
+    ) return
+
+    if (role === 'platform_admin') {
+      setWorkspaceError('')
+      setRoleSelectionOpen(false)
+      setView('platform')
+      return
+    }
 
     if (role === 'organization_admin') {
       setWorkspaceError('')
@@ -5402,7 +5391,7 @@ ${packageTimelineText}`
         ? 'workspace cockpit-workspace'
         : view === 'weekly_report'
           ? 'workspace embedded-module-workspace weekly-report-shell'
-          : view === 'assigned_bugs' || view === 'package_market' || view === 'image_sync' || view === 'changelog'
+          : view === 'assigned_bugs' || view === 'package_market' || view === 'image_sync' || view === 'changelog' || view === 'platform'
           ? view === 'changelog'
             ? 'workspace embedded-module-workspace changelog-shell'
             : 'workspace embedded-module-workspace'
@@ -5790,7 +5779,6 @@ ${packageTimelineText}`
 
         {view === 'organization' && authUser && canAccessOrganizationManagement(authUser) ? (
           <OrganizationWorkbench
-            canCreate={canCreateOrganization}
             currentUser={authUser}
             initialOrganizations={organizations}
             initialSelectedOrganizationId={selectedOrganizationId}
@@ -5812,6 +5800,16 @@ ${packageTimelineText}`
                   ? { ...organization, packageMarketEnabled: enabled }
                   : organization
               )))
+            }}
+          />
+        ) : null}
+
+        {view === 'platform' && authUser?.isSystemAdmin ? (
+          <PlatformManagementWorkbench
+            currentUserId={authUser.id}
+            onAuthorizationLost={() => {
+              setAuthUser((current) => current ? { ...current, isSystemAdmin: false } : current)
+              setView(getRoleLandingView(authUser.activeRole))
             }}
           />
         ) : null}
@@ -5997,28 +5995,14 @@ function LoginScreen({
   onFeishuSignIn: () => Promise<void>
   onInvitePasswordChange: (value: string) => void
   onVerifyInvitePassword: () => Promise<void>
-  onSignIn: (username: string, password: string, mode: 'login' | 'register') => void
+  onSignIn: (username: string, password: string) => void
   shareBackLabel?: string
 }) {
-  const [mode, setMode] = useState<'login' | 'register'>('login')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [formError, setFormError] = useState('')
   const [feishuBusy, setFeishuBusy] = useState(false)
 
-  function switchMode(nextMode: 'login' | 'register') {
-    if (nextMode === mode) return
-    setMode(nextMode)
-    setUsername('')
-    setPassword('')
-    setConfirmPassword('')
-    setFormError('')
-    onClearError()
-  }
-
   function clearErrors() {
-    setFormError('')
     onClearError()
   }
 
@@ -6062,16 +6046,12 @@ function LoginScreen({
               }
               return
             }
-            if (mode === 'register' && password !== confirmPassword) {
-              setFormError('两次输入的密码不一致。')
-              return
-            }
-            onSignIn(username, password, mode)
+            onSignIn(username, password)
           }}
         >
           <div className="login-form-heading">
-            <strong>{mode === 'register' ? '注册账号' : '登录'}</strong>
-            <span>{mode === 'register' ? '设置用户名和密码后进入工作区。' : '优先使用飞书，也可以用用户名和密码继续。'}</span>
+            <strong>登录</strong>
+            <span>新用户请使用飞书登录；历史账号可以继续使用用户名和密码。</span>
           </div>
           {hasProjectInvite && (
             <div className="login-invite-note">
@@ -6079,14 +6059,14 @@ function LoginScreen({
               <span>
                 {shouldGateInvitePassword
                   ? '检测到加密项目邀请链接，请先输入邀请密码。'
-                  : '检测到项目邀请链接，注册或登录后会自动加入项目。'}
+                  : '检测到项目邀请链接，通过飞书或历史账号登录后会自动加入项目。'}
               </span>
             </div>
           )}
           {!hasProjectInvite && hasOrganizationInvite ? (
             <div className="login-invite-note">
               <LinkSimple size={16} />
-              <span>检测到组织邀请链接，注册或登录后会自动加入组织。</span>
+              <span>检测到组织邀请链接，通过飞书或历史账号登录后会自动加入组织。</span>
             </div>
           ) : null}
           {shouldGateInvitePassword ? (
@@ -6137,7 +6117,7 @@ function LoginScreen({
           <Label>
             密码
             <Input
-              autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+              autoComplete="current-password"
               minLength={6}
               placeholder="至少 6 位"
               required
@@ -6149,26 +6129,9 @@ function LoginScreen({
               }}
             />
           </Label>
-          {mode === 'register' && (
-            <Label>
-              确认密码
-              <Input
-                autoComplete="new-password"
-                minLength={6}
-                placeholder="再次输入密码"
-                required
-                type="password"
-                value={confirmPassword}
-                onChange={(event) => {
-                  setConfirmPassword(event.target.value)
-                  clearErrors()
-                }}
-              />
-            </Label>
-          )}
-          {(formError || error) && <p className="form-error">{formError || error}</p>}
+          {error && <p className="form-error">{error}</p>}
           <Button className="solid-button wide" type="submit">
-            <SignIn size={18} /> {mode === 'register' ? '创建账号' : '进入驾驶舱'}
+            <SignIn size={18} /> 进入驾驶舱
           </Button>
           <div className="auth-divider">
             <span>或</span>
@@ -6182,29 +6145,7 @@ function LoginScreen({
           >
             <LinkSimple size={18} /> {feishuBusy ? '正在打开飞书...' : '用飞书继续'}
           </Button>
-          <p className="form-note">
-            {mode === 'register'
-              ? (
-                  <>
-                    已有账号？{' '}
-                    <button className="inline-text-button" type="button" onClick={() => switchMode('login')}>
-                      返回登录
-                    </button>
-                    。{hasProjectInvite || hasOrganizationInvite
-                      ? `注册后会创建个人工作区并加入受邀${hasProjectInvite ? '项目' : '组织'}，密码会加密保存。`
-                      : '共享 AI 环境下，密码注册需要项目或组织邀请；也可以使用公司飞书账号继续。'}
-                  </>
-                )
-              : (
-                  <>
-                    使用你{' '}
-                    <button className="inline-text-button" type="button" onClick={() => switchMode('register')}>
-                      注册
-                    </button>
-                    {' '}时设置的用户名和密码登录；也可以直接使用飞书账号登录或注册。
-                  </>
-                )}
-          </p>
+          <p className="form-note">首次使用请通过公司飞书账号自动注册。</p>
             </>
           )}
         </form>
@@ -6294,7 +6235,7 @@ function AccountMenu({
   onSaveAccountSettings: (payload: {
     displayName: string
   }) => Promise<void>
-  onRoleChange: (role: UserRole) => void
+  onRoleChange: (role: WorkspaceIdentity) => void
   roleSelectionBusy: boolean
   onOpenChangelog: () => void
   onSignOut: () => void
@@ -6302,9 +6243,10 @@ function AccountMenu({
 }) {
   const [accountDialogOpen, setAccountDialogOpen] = useState(false)
   const accountTriggerRef = useRef<HTMLButtonElement>(null)
-  const [roleManagementDialogOpen, setRoleManagementDialogOpen] = useState(false)
   const displayName = getUserDisplayName(user)
-  const availableRoles = user ? getSelectableWorkspaceRoles(user.roles) : []
+  const availableRoles = user
+    ? getSelectableWorkspaceRoles(user.roles, user.isSystemAdmin)
+    : []
   const activeRole = user ? getActiveWorkspaceRole(user, activeView) : null
   const accountMeta = activeRole
     ? userRoleLabel[activeRole]
@@ -6362,17 +6304,6 @@ function AccountMenu({
               </DropdownMenuSub>
             </>
           ) : null}
-          {user?.isSystemAdmin ? (
-            <DropdownMenuItem
-              className="account-menu-item"
-              onSelect={(event) => {
-                event.preventDefault()
-                setRoleManagementDialogOpen(true)
-              }}
-            >
-              <ManageRolesMenuLabel />
-            </DropdownMenuItem>
-          ) : null}
           <DropdownMenuItem
             className="account-menu-item theme-menu-item"
             onSelect={(event) => {
@@ -6404,10 +6335,6 @@ function AccountMenu({
         onSaveProfile={onSaveAccountSettings}
       />
 
-      <UserRoleManagementDialog
-        open={roleManagementDialogOpen}
-        onOpenChange={setRoleManagementDialogOpen}
-      />
     </div>
   )
 }
@@ -12951,6 +12878,7 @@ function getViewTitle(view: View, projectName: string) {
   if (view === 'inbox') return '草稿箱'
   if (view === 'search') return '项目篮子'
   if (view === 'organization') return '组织管理'
+  if (view === 'platform') return '平台管理'
   if (view === 'weekly_report') return '周报管理'
   if (view === 'package_market') return '安装包市场'
   if (view === 'image_sync') return '镜像同步'

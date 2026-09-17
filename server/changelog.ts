@@ -2,7 +2,8 @@ import type express from 'express'
 import { Router } from 'express'
 import { decryptText, encryptText } from './crypto.ts'
 import { query } from './db.ts'
-import { getAuthenticatedRoleSession, isSystemAdmin } from './roles.ts'
+import { getAuthenticatedRoleSession } from './roles.ts'
+import { isPlatformAdmin } from './platform-admins.ts'
 
 export const changelogTitleMaxLength = 120
 export const changelogVersionMaxLength = 40
@@ -61,11 +62,11 @@ async function getSession(request: express.Request, response: express.Response) 
   return session
 }
 
-function requireSystemAdmin(
+async function requireSystemAdmin(
   session: Awaited<ReturnType<typeof getAuthenticatedRoleSession>>,
   response: express.Response,
 ) {
-  if (!session || !isSystemAdmin(session.username)) {
+  if (!session || !(await isPlatformAdmin(session.userId))) {
     response.status(403).json({ error: 'System administrator access is required' })
     return false
   }
@@ -87,7 +88,7 @@ changelogRouter.get('/changelog', async (request, response, next) => {
       `,
     )
     response.json({
-      canManage: isSystemAdmin(session.username),
+      canManage: await isPlatformAdmin(session.userId),
       entries: result.rows.map(serializeChangelogEntry),
     })
   } catch (error) {
@@ -99,7 +100,7 @@ changelogRouter.post('/admin/changelog', async (request, response, next) => {
   try {
     const session = await getSession(request, response)
     if (!session) return
-    if (!requireSystemAdmin(session, response)) return
+    if (!(await requireSystemAdmin(session, response))) return
     const payload = normalizeChangelogPayload(request.body)
     if (!payload) {
       response.status(400).json({ error: '标题、正文或字段长度不符合要求' })
@@ -131,7 +132,7 @@ changelogRouter.patch('/admin/changelog/:id', async (request, response, next) =>
   try {
     const session = await getSession(request, response)
     if (!session) return
-    if (!requireSystemAdmin(session, response)) return
+    if (!(await requireSystemAdmin(session, response))) return
     const id = Number(request.params.id)
     if (!Number.isSafeInteger(id) || id <= 0) {
       response.status(400).json({ error: 'Invalid changelog id' })

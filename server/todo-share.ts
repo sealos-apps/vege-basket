@@ -113,9 +113,15 @@ async function transaction<T>(handler: (client: PoolClient) => Promise<T>) {
   }
 }
 
+let publicUrlProvider = () => ''
+
+export function configureTodoSharePublicUrl(provider: () => string) {
+  publicUrlProvider = provider
+}
+
 function publicTodoShareUrl(token: string) {
   const path = `/share/todo/${encodeURIComponent(token)}`
-  const origin = normalizePublicAppUrl(process.env.APP_PUBLIC_URL)
+  const origin = normalizePublicAppUrl(publicUrlProvider())
   return origin ? `${origin}${path}` : path
 }
 

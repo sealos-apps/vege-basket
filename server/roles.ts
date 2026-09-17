@@ -5,13 +5,16 @@ import {
   offboardUser,
   updateManagedAccountStatus,
 } from './account-offboarding.ts'
-import { pool, query } from './db.ts'
+import { query } from './db.ts'
+import { isPlatformAdmin, PlatformAdminError, updateManagedUserPermissions } from './platform-admins.ts'
 import type { UserAccountStatus } from '../shared/user-lifecycle.ts'
 
 export const userRoles = ['developer', 'tester', 'organization_admin'] as const
 export type UserRole = (typeof userRoles)[number]
 export const switchableUserRoles = ['developer', 'tester'] as const
 export type SwitchableUserRole = (typeof switchableUserRoles)[number]
+
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 
 type SessionRoleRow = {
   account_status: UserAccountStatus
@@ -42,14 +45,6 @@ export function canAssumeUserRole(roles: readonly UserRole[], role: SwitchableUs
   return roles.includes(role) || roles.includes('organization_admin')
 }
 
-export function isSystemAdmin(username: string) {
-  const configured = String(process.env.VEGES_ADMIN_USERNAMES || '')
-    .split(',')
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean)
-  return configured.includes(username.trim().toLowerCase())
-}
-
 export async function ensureDefaultUserRole(userId: number) {
   await query(
     `
@@ -62,7 +57,7 @@ export async function ensureDefaultUserRole(userId: number) {
   )
 }
 
-export async function getUserRoleContext(userId: number, token: string, username: string) {
+export async function getUserRoleContext(userId: number, token: string) {
   await ensureDefaultUserRole(userId)
   const [rolesResult, sessionResult] = await Promise.all([
     query<{ role: UserRole }>('select role from user_roles where user_id = $1 order by role', [userId]),
@@ -82,7 +77,7 @@ export async function getUserRoleContext(userId: number, token: string, username
   }
   return {
     activeRole,
-    isSystemAdmin: isSystemAdmin(username),
+    isSystemAdmin: await isPlatformAdmin(userId),
     roles,
   }
 }
@@ -107,6 +102,19 @@ export async function getAuthenticatedRoleSession(request: express.Request) {
     userId: Number(row.user_id),
     username: row.email,
   }
+}
+
+export async function requirePlatformAdminSession(request: express.Request, response: express.Response) {
+  const session = await getAuthenticatedRoleSession(request)
+  if (!session) {
+    response.status(401).json({ error: 'Unauthorized' })
+    return null
+  }
+  if (!(await isPlatformAdmin(session.userId))) {
+    response.status(403).json({ error: '需要超级管理员权限。', code: 'PLATFORM_ADMIN_REQUIRED' })
+    return null
+  }
+  return session
 }
 
 export async function requireActiveRole(
@@ -197,7 +205,7 @@ roleRouter.get('/admin/users', async (request, response, next) => {
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
-    if (!isSystemAdmin(session.username)) {
+    if (!(await isPlatformAdmin(session.userId))) {
       response.status(403).json({ error: 'System administrator access is required' })
       return
     }
@@ -206,14 +214,23 @@ roleRouter.get('/admin/users', async (request, response, next) => {
       email: string
       id: string
       account_status: UserAccountStatus
+      feishu_identity_verified_at: Date | null
+      grant_kind: 'builtin' | 'managed' | null
+      is_builtin_admin: boolean
+      permission_version: string
+      registration_source: 'builtin' | 'feishu' | 'legacy_unknown'
       roles: UserRole[]
     }>(
       `
       select u.id, u.email, u.display_name, u.account_status,
+        u.is_builtin_admin, u.registration_source, u.feishu_identity_verified_at,
+        grant_row.grant_kind, coalesce(version.revision, 0)::text as permission_version,
         coalesce(array_agg(ur.role order by ur.role) filter (where ur.role is not null), '{}') as roles
       from users u
       left join user_roles ur on ur.user_id = u.id
-      group by u.id
+      left join platform_admin_grants grant_row on grant_row.user_id = u.id
+      left join platform_user_permission_versions version on version.user_id = u.id
+      group by u.id, grant_row.grant_kind, version.revision
       order by lower(coalesce(nullif(u.display_name, ''), u.email)), u.id
       `,
     )
@@ -222,6 +239,12 @@ roleRouter.get('/admin/users', async (request, response, next) => {
         displayName: row.display_name || row.email,
         id: Number(row.id),
         accountStatus: row.account_status,
+        feishuIdentityVerified: Boolean(row.feishu_identity_verified_at),
+        isBuiltinAdmin: row.is_builtin_admin,
+        permissionVersion: Number(row.permission_version),
+        platformAdmin: Boolean(row.grant_kind),
+        platformAdminKind: row.grant_kind,
+        registrationSource: row.registration_source,
         roles: row.roles,
         username: row.email,
       })),
@@ -238,7 +261,7 @@ roleRouter.get('/admin/users/:userId/offboarding-preview', async (request, respo
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
-    if (!isSystemAdmin(session.username)) {
+    if (!(await isPlatformAdmin(session.userId))) {
       response.status(403).json({ error: 'System administrator access is required' })
       return
     }
@@ -265,22 +288,31 @@ roleRouter.post('/admin/users/:userId/offboard', async (request, response, next)
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
-    if (!isSystemAdmin(session.username)) {
+    if (!(await isPlatformAdmin(session.userId))) {
       response.status(403).json({ error: 'System administrator access is required' })
       return
     }
     const userId = Number(request.params.userId)
+    const expectedVersion = Number(request.body?.expectedVersion)
+    const requestId = String(request.body?.requestId ?? '')
     const selections = Array.isArray(request.body?.selections)
       ? request.body.selections.map((selection: { organizationId?: unknown; targetAdminUserId?: unknown }) => ({
         organizationId: Number(selection.organizationId),
         targetAdminUserId: Number(selection.targetAdminUserId),
       }))
       : []
-    if (!Number.isSafeInteger(userId) || userId <= 0) {
+    if (!Number.isSafeInteger(userId) || userId <= 0 ||
+        !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || !uuidPattern.test(requestId)) {
       response.status(400).json({ error: 'Valid user is required' })
       return
     }
-    response.json(await offboardUser(userId, session.userId, selections))
+    response.json(await offboardUser({
+      actorUserId: session.userId,
+      expectedVersion,
+      requestId,
+      selections,
+      userId,
+    }))
   } catch (error) {
     next(error)
   }
@@ -293,17 +325,26 @@ roleRouter.patch('/admin/users/:userId/status', async (request, response, next) 
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
-    if (!isSystemAdmin(session.username)) {
+    if (!(await isPlatformAdmin(session.userId))) {
       response.status(403).json({ error: 'System administrator access is required' })
       return
     }
     const userId = Number(request.params.userId)
     const status = request.body?.status
-    if (!Number.isSafeInteger(userId) || userId <= 0 || (status !== 'active' && status !== 'disabled')) {
+    const expectedVersion = Number(request.body?.expectedVersion)
+    const requestId = String(request.body?.requestId ?? '')
+    if (!Number.isSafeInteger(userId) || userId <= 0 || (status !== 'active' && status !== 'disabled') ||
+        !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || !uuidPattern.test(requestId)) {
       response.status(400).json({ error: 'Valid user and account status are required' })
       return
     }
-    response.json({ accountStatus: await updateManagedAccountStatus(userId, session.userId, status) })
+    response.json(await updateManagedAccountStatus({
+      actorUserId: session.userId,
+      expectedVersion,
+      requestId,
+      status,
+      userId,
+    }))
   } catch (error) {
     next(error)
   }
@@ -316,7 +357,7 @@ roleRouter.patch('/admin/users/:userId/roles', async (request, response, next) =
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
-    if (!isSystemAdmin(session.username)) {
+    if (!(await isPlatformAdmin(session.userId))) {
       response.status(403).json({ error: 'System administrator access is required' })
       return
     }
@@ -324,38 +365,30 @@ roleRouter.patch('/admin/users/:userId/roles', async (request, response, next) =
     const roles: UserRole[] = Array.isArray(request.body.roles)
       ? Array.from(new Set((request.body.roles as unknown[]).filter(isUserRole)))
       : []
-    if (!Number.isSafeInteger(userId) || userId <= 0 || roles.length === 0) {
+    const expectedVersion = Number(request.body?.expectedVersion)
+    const platformAdmin = request.body?.platformAdmin
+    const requestId = String(request.body?.requestId ?? '')
+    if (
+      !Number.isSafeInteger(userId) || userId <= 0 || roles.length === 0 ||
+      !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 ||
+      typeof platformAdmin !== 'boolean' || !uuidPattern.test(requestId)
+    ) {
       response.status(400).json({ error: 'At least one valid role is required' })
       return
     }
-
-    const client = await pool.connect()
-    try {
-      await client.query('begin')
-      const existingUser = await client.query('select id from users where id = $1 for update', [userId])
-      if (!existingUser.rows[0]) {
-        await client.query('rollback')
-        response.status(404).json({ error: 'User not found' })
-        return
-      }
-      await client.query('delete from user_roles where user_id = $1', [userId])
-      for (const role of roles) {
-        await client.query('insert into user_roles (user_id, role) values ($1, $2)', [userId, role])
-      }
-      const availableRoles = getSwitchableUserRoles(roles)
-      await client.query(
-        `update sessions set active_role = $1 where user_id = $2 and active_role <> all($3::text[])`,
-        [availableRoles[0] ?? 'developer', userId, availableRoles],
-      )
-      await client.query('commit')
-      response.json({ roles })
-    } catch (error) {
-      await client.query('rollback')
-      throw error
-    } finally {
-      client.release()
-    }
+    response.json(await updateManagedUserPermissions({
+      actorUserId: session.userId,
+      expectedVersion,
+      platformAdmin,
+      requestId,
+      roles,
+      targetUserId: userId,
+    }))
   } catch (error) {
+    if (error instanceof PlatformAdminError) {
+      response.status(error.status).json({ error: error.message, code: error.code })
+      return
+    }
     next(error)
   }
 })

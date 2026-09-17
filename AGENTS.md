@@ -48,8 +48,8 @@ historical product context; current code and these operational docs take precede
   project advisory locks and resource rows, and revalidate the organization after locking.
   A transfer stores the actual previous owner separately from its initiator and rechecks
   the initiator's authority when accepted. Other resource mutations still require the
-  original project membership, test-space access, creator, or Bug-assignee permission. System-administrator access comes
-  only from `VEGES_ADMIN_USERNAMES`, not from an occupational role.
+  original project membership, test-space access, creator, or Bug-assignee permission. Platform-administrator access comes
+  only from active database grants; the built-in `admin` grant is immutable and remains separate from occupational roles.
 - Keep document editors on the existing Markdown string contract. When registering
   `CodeBlockLowlight`, disable StarterKit's plain code block, preserve fenced-language
   metadata, highlight only an explicit supported language, and normalize link marks to
@@ -65,9 +65,9 @@ historical product context; current code and these operational docs take precede
 - Do not weaken AI URL validation: HTTPS only, no embedded credentials, public DNS/IPs
   only, and no redirect following. Pin validated addresses to the outbound AI connection
   while preserving the original hostname for TLS SNI and the HTTP Host header.
-- Shared AI uses only `AI_API_BASE`, `AI_API_KEY`, and `AI_MODEL`. Do not restore
-  user-level AI settings. While shared AI is configured, password registration must
-  require an active project invite; keep both per-user and instance-wide request limits.
+- Shared AI uses only the platform configuration's API base, API key, and model. Do not restore
+  user-level AI settings. New ordinary accounts come only from Feishu OAuth; keep both per-user
+  and instance-wide request limits.
 - AI conversations are private to one user and have an immutable `general`, `project`, or
   `conversation-analysis` context. Changing or removing `@项目` starts a blank conversation;
   never rebind an existing conversation or combine history from different contexts. General
@@ -166,7 +166,7 @@ historical product context; current code and these operational docs take precede
 - Keep daily digest run content as encrypted, deterministic, readable text. Feishu
   delivery may wrap it in a passive JSON 2.0 card, but must not add callbacks, buttons,
   arbitrary URLs, or other actions. A todo title may link only to a server-generated
-  same-site URL built from validated `APP_PUBLIC_URL` and its positive canonical todo ID.
+  same-site URL built from the validated platform public URL and its positive canonical todo ID.
   Escape current user-controlled item text for Lark Markdown, and render legacy `Veges
   待办日报 | YYYY-MM-DD` bodies as Markdown literals before retrying them.
 - Organization project modules are managed only by active organization owner/admin members

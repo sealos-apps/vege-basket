@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Buildings, Check, Code, Flask, UserMinus, UsersThree } from '@phosphor-icons/react'
+import { Buildings, Check, Code, Flask, ShieldCheck, UserMinus, UsersThree } from '@phosphor-icons/react'
 import {
   fetchOffboardingPreview,
   fetchManagedUsers,
@@ -14,6 +14,7 @@ import {
 import {
   getSelectableWorkspaceRoles,
   userRoleLabel,
+  type WorkspaceIdentity,
 } from '@/user-roles'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -34,17 +35,21 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
-const roleIcon: Record<UserRole, typeof Code> = {
+const roleIcon: Record<WorkspaceIdentity, typeof Code> = {
   developer: Code,
   tester: Flask,
   organization_admin: Buildings,
+  platform_admin: ShieldCheck,
 }
 
-const roleDescription: Record<UserRole, string> = {
+const roleDescription: Record<WorkspaceIdentity, string> = {
   developer: '项目工作区与指派给我的 Bug',
   tester: '用例、测试计划与 Bug 追踪',
   organization_admin: '组织管理',
+  platform_admin: '平台设置、用户权限与组织治理',
 }
+
+const managedUserRoles: UserRole[] = ['developer', 'tester', 'organization_admin']
 
 export function UserRoleSelectionDialog({
   activeRole,
@@ -53,9 +58,9 @@ export function UserRoleSelectionDialog({
   open,
   user,
 }: {
-  activeRole: UserRole
+  activeRole: WorkspaceIdentity
   busy: boolean
-  onSelect: (role: UserRole) => void
+  onSelect: (role: WorkspaceIdentity) => void
   open: boolean
   user: AuthUser
 }) {
@@ -67,7 +72,7 @@ export function UserRoleSelectionDialog({
           <DialogDescription>身份决定本次会话中显示的工作区域，可以稍后从账户菜单切换。</DialogDescription>
         </DialogHeader>
         <div className="role-selection-list">
-          {getSelectableWorkspaceRoles(user.roles).map((role) => {
+          {getSelectableWorkspaceRoles(user.roles, user.isSystemAdmin).map((role) => {
             const Icon = roleIcon[role]
             return (
               <button disabled={busy} key={role} type="button" onClick={() => onSelect(role)}>
@@ -131,8 +136,12 @@ export function UserRoleManagementDialog({
     setBusyUserId(userId)
     setError('')
     try {
-      const result = await updateManagedUserRoles(userId, roles)
-      setUsers((current) => current.map((user) => user.id === userId ? { ...user, roles: result.roles } : user))
+      const user = users.find((item) => item.id === userId)
+      if (!user) return
+      const result = await updateManagedUserRoles(user, roles)
+      setUsers((current) => current.map((user) => user.id === userId
+        ? { ...user, permissionVersion: result.version, roles: result.roles }
+        : user))
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : '角色保存失败。')
     } finally {
@@ -170,7 +179,7 @@ export function UserRoleManagementDialog({
     setOffboardingBusy(true)
     setError('')
     try {
-      await offboardManagedUser(offboardingUser.id, selections)
+      await offboardManagedUser(offboardingUser, selections)
       setOffboardingUser(undefined)
       setOffboardingPreview(undefined)
       await loadUsers()
@@ -186,8 +195,13 @@ export function UserRoleManagementDialog({
     setBusyUserId(user.id)
     setError('')
     try {
-      const result = await updateManagedUserStatus(user.id, nextStatus)
-      setUsers((current) => current.map((item) => item.id === user.id ? { ...item, accountStatus: result.accountStatus } : item))
+      const result = await updateManagedUserStatus(user, nextStatus)
+      setUsers((current) => current.map((item) => item.id === user.id ? {
+        ...item,
+        accountStatus: result.accountStatus,
+        permissionVersion: result.permissionVersion,
+        platformAdmin: nextStatus === 'disabled' ? false : item.platformAdmin,
+      } : item))
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : '账号状态更新失败。')
     } finally {
@@ -211,7 +225,7 @@ export function UserRoleManagementDialog({
                 <small>{user.username}</small>
               </div>
               <div className="role-checkboxes">
-                {(Object.keys(userRoleLabel) as UserRole[]).map((role) => (
+                {managedUserRoles.map((role) => (
                   <label key={role}>
                     <Checkbox checked={(drafts[user.id] ?? []).includes(role)} onCheckedChange={() => toggleRole(user.id, role)} />
                     {userRoleLabel[role]}

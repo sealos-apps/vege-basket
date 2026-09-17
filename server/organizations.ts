@@ -6,6 +6,7 @@ import { Router } from 'express'
 import type { PoolClient } from 'pg'
 import { blindIndex, decryptJson, decryptText, encryptJson, encryptText } from './crypto.ts'
 import { createLimitedQuery, pool, query } from './db.ts'
+import { platformFeishuConfig } from './platform-config-values.ts'
 import {
   canManageOrganization,
   canManageOrganizationProjects,
@@ -15,7 +16,6 @@ import {
   hashProjectTransferToken,
   isFreshFeishuTimestamp,
   isOrganizationAccessRole,
-  matchesOrganizationDeleteConfirmation,
   normalizeOrganizationName,
   normalizeTestEnvironmentAccessUrl,
   normalizeTestEnvironmentName,
@@ -29,7 +29,7 @@ import {
   type OrganizationAccessRole,
   verifyFeishuCardSignature,
 } from './organization-policy.ts'
-import { getAuthenticatedRoleSession, isSystemAdmin } from './roles.ts'
+import { getAuthenticatedRoleSession } from './roles.ts'
 import { getDepartedUserIds } from './user-lifecycle.ts'
 import {
   buildOrganizationInvitationCard,
@@ -1214,60 +1214,9 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       packageMarketEnabled: organization.package_market_enabled !== false,
     })).sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
     response.json({
-      canCreate: isSystemAdmin(session.username),
+      canCreate: false,
       organizations: items,
     })
-  }))
-
-  router.post('/admin/organizations', asyncRoute(async (request, response) => {
-    const session = await requireSession(request, response)
-    if (!session) return
-    if (!isSystemAdmin(session.username)) {
-      response.status(403).json({ error: 'System administrator access is required' })
-      return
-    }
-    const name = normalizeOrganizationName(request.body?.name)
-    const ownerUsername = normalizedEmail(request.body.ownerUsername || session.username)
-    if (!name || !ownerUsername) {
-      response.status(400).json({ error: 'Organization name and owner username are required' })
-      return
-    }
-    const owner = await query<{ id: string }>('select id from users where email = $1', [ownerUsername])
-    if (!owner.rows[0]) {
-      response.status(404).json({ error: 'Organization owner account not found' })
-      return
-    }
-    const client = await pool.connect()
-    try {
-      await client.query('begin')
-      const created = await client.query<{ id: string }>(
-        `insert into organizations (owner_user_id, name, name_lookup, created_by_user_id)
-         values ($1, $2, $3, $4) returning id`,
-        [Number(owner.rows[0].id), encryptText(name), blindIndex(name), session.userId],
-      )
-      const organizationId = Number(created.rows[0].id)
-      await client.query(
-        `insert into user_roles (user_id, role)
-         values ($1, 'organization_admin')
-         on conflict (user_id, role) do nothing`,
-        [Number(owner.rows[0].id)],
-      )
-      await client.query(
-        `insert into organization_memberships
-          (organization_id, user_id, access_role, status, weekly_report_required,
-           invited_by_user_id)
-         values ($1, $2, 'owner', 'active', $4, $3)`,
-        [organizationId, Number(owner.rows[0].id), session.userId, ownerUsername !== 'admin'],
-      )
-      await writeAudit(client, organizationId, session.userId, 'organization.created', 'organization', String(organizationId), name)
-      await client.query('commit')
-      response.status(201).json(await getOrganizationDetail(organizationId, Number(owner.rows[0].id)))
-    } catch (error) {
-      await client.query('rollback')
-      throw error
-    } finally {
-      client.release()
-    }
   }))
 
   router.get('/organizations/:organizationId', asyncRoute(async (request, response) => {
@@ -1642,54 +1591,10 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
   router.delete('/organizations/:organizationId', asyncRoute(async (request, response) => {
     const session = await requireSession(request, response)
     if (!session) return
-    const organizationId = positiveId(request.params.organizationId)
-    if (!(await requireOrganizationAdmin(response, organizationId, session.userId))) return
-
-    const client = await pool.connect()
-    try {
-      await client.query('begin')
-      await lockOrganizationModuleCatalog(client, organizationId!)
-      await lockOrganizationModuleProjects(client, organizationId!)
-      const organization = await lockManagedOrganization(client, organizationId!, session.userId)
-      if (!organization) {
-        await client.query('rollback')
-        response.status(409).json({ error: 'Organization access changed, reload and try again' })
-        return
-      }
-      const organizationName = decryptText(organization.name)
-      if (!matchesOrganizationDeleteConfirmation(
-        organizationName,
-        request.body?.confirmationName,
-      )) {
-        await client.query('rollback')
-        response.status(400).json({ error: 'Enter the full organization name to confirm deletion' })
-        return
-      }
-
-      await detachOrganizationProjectModules(client, organizationId!)
-      const projects = await client.query(
-        `update projects set organization_id = null, updated_at = now()
-         where organization_id = $1 returning id`,
-        [organizationId],
-      )
-      const testSpaces = await client.query(
-        `update test_spaces set organization_id = null, updated_at = now()
-         where organization_id = $1 returning id`,
-        [organizationId],
-      )
-      await client.query('delete from organizations where id = $1', [organizationId])
-      await client.query('commit')
-      response.json({
-        deleted: true,
-        detachedProjectCount: projects.rowCount ?? 0,
-        detachedTestSpaceCount: testSpaces.rowCount ?? 0,
-      })
-    } catch (error) {
-      await client.query('rollback')
-      throw error
-    } finally {
-      client.release()
-    }
+    response.status(410).json({
+      error: '组织删除已迁移到超级管理员的平台管理。',
+      code: 'ORGANIZATION_DELETE_MOVED',
+    })
   }))
 
   router.post('/organizations/:organizationId/invitations', asyncRoute(async (request, response) => {
@@ -1697,7 +1602,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     if (!session) return
     const organizationId = positiveId(request.params.organizationId)
     if (!(await requireOrganizationAdmin(response, organizationId, session.userId))) return
-    if (String(process.env.FEISHU_DELIVERY_ENABLED ?? 'true').toLowerCase() === 'false') {
+    if (!platformFeishuConfig().deliveryEnabled) {
       response.status(503).json({ error: 'Feishu invitation delivery is disabled' })
       return
     }
@@ -3265,7 +3170,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     const event = body.event && typeof body.event === 'object'
       ? body.event as Record<string, unknown>
       : body
-    const expectedToken = String(process.env.FEISHU_VERIFICATION_TOKEN ?? '')
+    const expectedToken = platformFeishuConfig().verificationToken
     const eventToken = String(header.token ?? body.token ?? '')
     if (!expectedToken || eventToken !== expectedToken) {
       response.status(401).json({ error: 'Invalid Feishu verification token' })
@@ -3623,15 +3528,17 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           respondedByUserId = Number(matchedUsers.rows[0].id)
           await client.query(
             `update users set feishu_user_id = $1, feishu_receive_id_type = 'open_id',
-              feishu_email = case when feishu_email = '' then $2 else feishu_email end
+              feishu_email = case when feishu_email = '' then $2 else feishu_email end,
+              feishu_identity_verified_at = now()
              where id = $3`,
             [operatorOpenId, email, respondedByUserId],
           )
         } else {
           const created = await client.query<{ id: string }>(
             `insert into users
-              (email, password_hash, display_name, feishu_email, feishu_user_id, feishu_receive_id_type)
-             values ($1, '', $2, $1, $3, 'open_id') returning id`,
+              (email, password_hash, display_name, feishu_email, feishu_user_id,
+               feishu_receive_id_type, registration_source, feishu_identity_verified_at)
+             values ($1, '', $2, $1, $3, 'open_id', 'feishu', now()) returning id`,
             [email, email.split('@')[0], operatorOpenId],
           )
           respondedByUserId = Number(created.rows[0].id)
