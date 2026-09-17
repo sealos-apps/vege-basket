@@ -222,6 +222,7 @@ export type TestBugVerificationPackage = {
   arch: string
   channel: 'release' | 'ci'
   channelLabel: string
+  ciBranch?: string
   id: number
   objectKey: string
   objectLastModified?: string

@@ -202,6 +202,7 @@ type WorkbenchTab = 'cases' | 'plans' | 'bugs' | 'weekly_report' | 'notification
 type VerificationPackageSelection = {
   arch: string
   channel: 'release' | 'ci'
+  ciBranch?: string
   objectKey: string
   objectLastModified?: string
   packageName: string
@@ -212,7 +213,6 @@ type VerificationPackageSelection = {
 }
 
 type SelectedVerificationPackage = VerificationPackageSelection & {
-  ciBranch?: string
   selectionKey: string
 }
 
@@ -220,6 +220,7 @@ function verificationPackageSnapshot(item: SelectedVerificationPackage): Verific
   return {
     arch: item.arch,
     channel: item.channel,
+    ciBranch: item.ciBranch,
     objectKey: item.objectKey,
     objectLastModified: item.objectLastModified,
     packageName: item.packageName,
@@ -3738,7 +3739,7 @@ function BugAcceptanceRecord({ bugId, submission }: {
           {packageSelections.map((item) => (
             <li key={item.id}>
               <strong>{item.sourcePackageName || item.packageName}</strong>
-              <span>{item.channelLabel} · {item.arch} · {item.version}</span>
+              <span>{item.channelLabel}{item.channel === 'ci' && item.ciBranch ? ` · ${item.ciBranch}` : ''} · {item.arch} · {item.version}</span>
             </li>
           ))}
         </ul>

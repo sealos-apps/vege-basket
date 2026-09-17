@@ -41,7 +41,9 @@ import {
 import {
   createPackageItemDownloadLink,
   isPackageMarketObjectKeyAllowedForRule,
+  isValidPackageMarketCiBranch,
   listPackageMarketRules,
+  packageMarketCiBranchFromObjectKey,
 } from './package-market.ts'
 import {
   canDeleteTestCase,
@@ -188,6 +190,7 @@ function positiveId(value: unknown) {
 type VerificationPackageInput = {
   arch: string
   channel: 'release' | 'ci'
+  ciBranch?: string
   objectKey: string
   objectLastModified: string
   packageName: string
@@ -224,6 +227,9 @@ function parseVerificationPackages(value: unknown): VerificationPackageInput[] |
     const arch = verificationPackageText(candidate.arch, 40).toLowerCase()
     const version = verificationPackageText(candidate.version, 200)
     const objectKey = verificationPackageText(candidate.objectKey, 1000)
+    const requestedCiBranch = verificationPackageText(candidate.ciBranch, 160)
+    const objectCiBranch = channel === 'ci' ? packageMarketCiBranchFromObjectKey(objectKey) : ''
+    const ciBranch = channel === 'ci' ? requestedCiBranch || objectCiBranch : ''
     const objectLastModified = verificationPackageTimestamp(candidate.objectLastModified)
     const rawSize = candidate.sizeBytes
     const sizeBytes = rawSize == null || rawSize === ''
@@ -233,11 +239,14 @@ function parseVerificationPackages(value: unknown): VerificationPackageInput[] |
         : null
     if (
       !channel || !sourcePackageId || !sourcePackageName || !packageName ||
-      !arch || !version || !objectKey || !objectLastModified || sizeBytes === null || objectKeys.has(objectKey)
+      !arch || !version || !objectKey || !objectLastModified || sizeBytes === null || objectKeys.has(objectKey) ||
+      (requestedCiBranch !== '' && !isValidPackageMarketCiBranch(requestedCiBranch)) ||
+      (channel === 'release' && requestedCiBranch !== '') ||
+      (channel === 'ci' && requestedCiBranch !== '' && objectCiBranch !== requestedCiBranch)
     ) {
       return null
     }
-    const versionKey = `${channel}:${arch}:${version}`
+    const versionKey = `${channel}:${ciBranch}:${arch}:${version}`
     const previousVersionKey = packageVersions.get(sourcePackageId)
     if (previousVersionKey && previousVersionKey !== versionKey) return null
     packageVersions.set(sourcePackageId, versionKey)
@@ -245,6 +254,7 @@ function parseVerificationPackages(value: unknown): VerificationPackageInput[] |
     packages.push({
       arch,
       channel,
+      ciBranch: ciBranch || undefined,
       objectKey,
       objectLastModified,
       packageName,
@@ -1574,6 +1584,7 @@ type VerificationSubmissionRow = {
   package_arch: string | null
   package_channel: 'release' | 'ci' | null
   package_channel_label: string | null
+  package_ci_branch: string | null
   package_id: string | null
   package_name: string | null
   package_object_key: string | null
@@ -1614,6 +1625,7 @@ function mapVerificationSubmissions(rows: readonly VerificationSubmissionRow[]) 
         arch: row.package_arch ?? '',
         channel: row.package_channel,
         channelLabel: row.package_channel_label ?? '',
+        ciBranch: row.package_ci_branch ?? undefined,
         id: Number(row.package_id),
         objectKey: row.package_object_key ?? '',
         objectLastModified: row.package_object_last_modified?.toISOString(),
@@ -2019,7 +2031,8 @@ async function getTestWorkbench(
              package.id as package_id, package.source_package_id as package_source_package_id,
              package.source_package_name as package_source_package_name, package.package_name,
              package.channel as package_channel, package.channel_label as package_channel_label,
-             package.arch as package_arch, package.version as package_version,
+             package.ci_branch as package_ci_branch, package.arch as package_arch,
+             package.version as package_version,
              package.object_key as package_object_key,
              package.object_last_modified as package_object_last_modified,
              package.size_bytes as package_size_bytes,
@@ -5230,7 +5243,8 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
            package.id as package_id, package.source_package_id as package_source_package_id,
            package.source_package_name as package_source_package_name, package.package_name,
            package.channel as package_channel, package.channel_label as package_channel_label,
-           package.arch as package_arch, package.version as package_version,
+           package.ci_branch as package_ci_branch, package.arch as package_arch,
+           package.version as package_version,
            package.object_key as package_object_key,
            package.object_last_modified as package_object_last_modified,
            package.size_bytes as package_size_bytes,
@@ -5819,8 +5833,9 @@ router.post('/test-bugs/:bugId/assigned/verification-submissions', asyncRoute(as
         `
         insert into test_bug_verification_packages (
           test_bug_verification_submission_id, position, source_package_id, source_package_name,
-          package_name, channel, channel_label, arch, version, object_key, object_last_modified, size_bytes
-        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12::bigint)
+          package_name, channel, channel_label, ci_branch, arch, version, object_key,
+          object_last_modified, size_bytes
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::bigint)
         `,
         [
           submissionId,
@@ -5830,6 +5845,7 @@ router.post('/test-bugs/:bugId/assigned/verification-submissions', asyncRoute(as
           item.packageName,
           item.channel,
           item.channel === 'ci' ? '测试包' : '正式包',
+          item.ciBranch ?? null,
           item.arch,
           item.version,
           item.objectKey,

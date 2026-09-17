@@ -445,6 +445,7 @@ export function submitAssignedBugVerification(
   packages: Array<{
     arch: string
     channel: 'release' | 'ci'
+    ciBranch?: string
     objectKey: string
     objectLastModified?: string
     packageName: string
