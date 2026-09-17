@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 const testWorkbenchCss = readFileSync(new URL('../src/components/test-workbench.css', import.meta.url), 'utf8')
+const testWorkbenchSource = readFileSync(new URL('../src/components/test-workbench.tsx', import.meta.url), 'utf8')
 
 function getRule(selector: string) {
   const ruleStart = testWorkbenchCss.indexOf(`${selector} {`)
@@ -31,4 +32,24 @@ test('keeps Bug comment attachment previews fully inside the viewport', () => {
   assert.match(getDeclaration(media, 'max-width'), /100vw/u)
   assert.match(getDeclaration(media, 'max-height'), /100dvh/u)
   assert.equal(getDeclaration(media, 'object-fit'), 'contain')
+})
+
+test('case directory layout responds to its remaining content width', () => {
+  const directoryContent = getRule('.test-directory-content')
+  const splitView = getRule('.test-directory-content .test-cases-split-view')
+
+  assert.equal(getDeclaration(directoryContent, 'container-type'), 'inline-size')
+  assert.equal(getDeclaration(directoryContent, 'container-name'), 'test-case-content')
+  assert.match(getDeclaration(splitView, 'grid-template-columns'), /minmax\(280px,/u)
+  assert.match(getDeclaration(splitView, 'grid-template-columns'), /minmax\(360px,/u)
+  assert.match(testWorkbenchCss, /@container test-case-content \(max-width: 720px\)/u)
+  assert.match(
+    testWorkbenchCss,
+    /@container test-case-content \(max-width: 720px\)\s*\{[\s\S]*?\.test-cases-split-view\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/u,
+  )
+  assert.match(testWorkbenchSource, /className="test-case-filters" aria-label="用例搜索与筛选" role="group"/u)
+  assert.match(testWorkbenchCss, /\.test-directory-batch \{[^}]*color:\s*var\(--muted-text\)/su)
+  assert.match(testWorkbenchCss, /\.test-directory-node > small \{[^}]*color:\s*var\(--muted-text\)/su)
+  assert.match(testWorkbenchCss, /\.test-directory-footnote \{[^}]*color:\s*var\(--muted-text\)/su)
+  assert.match(testWorkbenchCss, /\.test-directory-delete-reason \{[^}]*color:\s*var\(--muted-text\)/su)
 })

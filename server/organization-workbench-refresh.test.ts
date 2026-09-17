@@ -97,3 +97,32 @@ test('organization weekly reports use the previous week until its deadline', () 
   assert.match(workbenchSource, /getWeeklyReportTargetWeekStart\(\{ now, rules, weekStartsOn \}\)/u)
   assert.match(workbenchSource, /const weekStart = reportWeekStart\(/u)
 })
+
+test('organization overview renders every current Bug status as user-facing Chinese', () => {
+  assert.match(workbenchSource, /pending_confirmation: '待确认'/u)
+})
+
+test('organization weekly reminders stay outside the native disclosure trigger', () => {
+  const summaryStart = workbenchSource.indexOf('<summary>')
+  const summaryEnd = workbenchSource.indexOf('</summary>', summaryStart)
+
+  assert.notEqual(summaryStart, -1)
+  assert.notEqual(summaryEnd, -1)
+  assert.doesNotMatch(workbenchSource.slice(summaryStart, summaryEnd), /<Button/u)
+  assert.match(workbenchSource, /className="organization-weekly-reminder"/u)
+})
+
+test('organization workbench uses readable scoped colors for secondary and status text', () => {
+  assert.match(workbenchCssSource, /--organization-muted-readable:\s*var\(--muted-text\)/u)
+  assert.match(workbenchCssSource, /--organization-danger-readable:/u)
+  assert.match(workbenchCssSource, /--organization-positive-readable:/u)
+  assert.match(workbenchCssSource, /--organization-warning-readable:/u)
+  assert.match(
+    workbenchCssSource,
+    /\.organization-package-market-component-status\.available\s*\{[^}]*color:\s*var\(--organization-positive-readable\)/su,
+  )
+  assert.match(
+    workbenchCssSource,
+    /\.organization-package-market-dependency-type\s*\{[^}]*color:\s*var\(--organization-warning-readable\)/su,
+  )
+})

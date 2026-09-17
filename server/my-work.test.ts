@@ -5,6 +5,7 @@ import { parseMyWorkFilters, workBucket, workItemKey } from './my-work-policy.ts
 
 const myWorkSource = readFileSync(new URL('./my-work.ts', import.meta.url), 'utf8')
 const myWorkWorkbenchSource = readFileSync(new URL('../src/components/my-work-workbench.tsx', import.meta.url), 'utf8')
+const myWorkWorkbenchCss = readFileSync(new URL('../src/components/my-work-workbench.css', import.meta.url), 'utf8')
 const apiSource = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8')
 const serverSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
 
@@ -68,6 +69,20 @@ test('renders failed acceptance status in Chinese', () => {
 
 test('renders Bug confirmation status in Chinese', () => {
   assert.match(myWorkWorkbenchSource, /pending_confirmation: '待确认'/u)
+})
+
+test('renders My Work grid rows with valid table descendants', () => {
+  assert.match(myWorkWorkbenchSource, /className="my-work-table-header-group" role="rowgroup"/u)
+  assert.match(myWorkWorkbenchSource, /className="my-work-table-body" role="rowgroup"/u)
+  assert.match(myWorkWorkbenchSource, /role="columnheader"/u)
+  assert.match(myWorkWorkbenchSource, /className="my-work-table-cell my-work-main-cell" role="cell">\s*<button/u)
+  assert.doesNotMatch(myWorkWorkbenchSource, /role="row">\s*<button/u)
+})
+
+test('renders My Work secondary text with the readable workbench token', () => {
+  assert.match(myWorkWorkbenchCss, /--my-work-muted-readable:\s*var\(--muted-text\)/u)
+  assert.match(myWorkWorkbenchCss, /--my-work-positive-readable:/u)
+  assert.doesNotMatch(myWorkWorkbenchCss, /color:\s*var\(--muted-foreground\)/u)
 })
 
 test('marks todos transferred through offboarding', () => {

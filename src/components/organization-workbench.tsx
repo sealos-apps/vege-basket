@@ -263,6 +263,7 @@ const taskStatusLabel: Record<string, string> = {
   new: '新建',
   open: '待处理',
   pending: '待处理',
+  pending_confirmation: '待确认',
   pending_verification: '待验证',
   rejected: '已拒绝',
   reopened: '重新打开',
@@ -1749,39 +1750,39 @@ export function OrganizationWorkbench({
                 <div className="organization-weekly-collection">
                   {weeklyCollectionLoading && !weeklyCollection ? <EmptyRow text="正在加载周报收集状态..." /> : null}
                   {weeklyCollection?.members.map((member) => (
-                    <details className="organization-weekly-member" key={member.userId}>
-                      <summary>
-                        <span>
-                          <UserName departedUserIds={detail.departedUserIds} name={member.memberName} userId={member.userId} />
-                          <small>{member.submittedAt ? `最近提交 ${formatDateTime(member.submittedAt)}` : '尚未提交本周周报'}</small>
-                        </span>
-                        <span className={`organization-weekly-state ${member.state}`}>
-                          {weeklyReportStateLabel[member.state]}
-                        </span>
-                        <span className="organization-weekly-revision">
-                          {member.revision ? `第 ${member.revision} 版` : '无提交版本'}
-                        </span>
-                        {member.revision == null ? (
-                          <Button
-                            disabled={busy || !member.feishuBound}
-                            size="sm"
-                            title={member.feishuBound ? '发送飞书私信提醒' : '该成员未绑定飞书'}
-                            type="button"
-                            variant="outline"
-                            onClick={(event) => {
-                              event.preventDefault()
-                              void remindWeeklyReportUsers([member.userId])
-                            }}
-                          >{member.feishuBound ? '提醒填写' : '未绑定飞书'}</Button>
-                        ) : <span className="organization-row-spacer" />}
-                        <CaretDown size={16} />
-                      </summary>
-                      {member.content ? (
-                        <div className="organization-weekly-content">
-                          <MarkdownPreview content={member.content} />
-                        </div>
-                      ) : <EmptyRow text="该成员还没有可查看的提交版本" />}
-                    </details>
+                    <div className="organization-weekly-member" key={member.userId}>
+                      <details>
+                        <summary>
+                          <span>
+                            <UserName departedUserIds={detail.departedUserIds} name={member.memberName} userId={member.userId} />
+                            <small>{member.submittedAt ? `最近提交 ${formatDateTime(member.submittedAt)}` : '尚未提交本周周报'}</small>
+                          </span>
+                          <span className={`organization-weekly-state ${member.state}`}>
+                            {weeklyReportStateLabel[member.state]}
+                          </span>
+                          <span className="organization-weekly-revision">
+                            {member.revision ? `第 ${member.revision} 版` : '无提交版本'}
+                          </span>
+                          <CaretDown size={16} />
+                        </summary>
+                        {member.content ? (
+                          <div className="organization-weekly-content">
+                            <MarkdownPreview content={member.content} />
+                          </div>
+                        ) : <EmptyRow text="该成员还没有可查看的提交版本" />}
+                      </details>
+                      {member.revision == null ? (
+                        <Button
+                          className="organization-weekly-reminder"
+                          disabled={busy || !member.feishuBound}
+                          size="sm"
+                          title={member.feishuBound ? '发送飞书私信提醒' : '该成员未绑定飞书'}
+                          type="button"
+                          variant="outline"
+                          onClick={() => void remindWeeklyReportUsers([member.userId])}
+                        >{member.feishuBound ? '提醒填写' : '未绑定飞书'}</Button>
+                      ) : null}
+                    </div>
                   ))}
                 </div>
               </>

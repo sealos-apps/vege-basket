@@ -227,45 +227,49 @@ export function MyWorkWorkbench({
       {!loading && error ? <div className="my-work-empty is-error">{error}</div> : null}
       {!loading && !error ? (
         <div className="my-work-table" role="table" aria-label="我的待办列表">
-          <div className="my-work-table-header" role="row">
-            <span role="columnheader">事项</span>
-            <TableFilterMenu label="项目" value={projectId} onChange={setProjectId} options={[{ label: '全部项目', value: 'all' }, ...projects.map((project) => ({ label: project.name, value: String(project.id) }))]} />
-            <TableFilterMenu label="类型" value={kind} onChange={(value) => setKind(value as 'all' | MyWorkKind)} options={[{ label: '全部类型', value: 'all' }, ...Object.entries(kindLabels).map(([value, label]) => ({ label, value }))]} />
-            <TableFilterMenu label="状态" value={status} onChange={setStatus} options={statusOptions} />
-            <div className="my-work-date-heading">
-              <TableFilterMenu label="截止日期" value={dueFilter} onChange={(value) => setDueFilter(value as typeof dueFilter)} options={[{ label: '全部日期', value: 'all' }, ...(['已逾期', '今天', '本周', '更晚', '未排期'] as const).map((value) => ({ label: value, value }))]} />
-              <button
-                aria-label={sort === 'due_desc' ? '当前按截止日期倒序排列，点击切换为正序' : '当前按截止日期正序排列，点击切换为倒序'}
-                className={`my-work-sort-icon${sort === 'due_desc' ? ' is-active' : ''}`}
-                title={sort === 'due_desc' ? '切换为截止日期正序' : '切换为截止日期倒序'}
-                type="button"
-                onClick={() => setSort((current) => current === 'due_desc' ? 'due_asc' : 'due_desc')}
-              >
-                {sort === 'due_desc' ? <SortDescending size={15} /> : <SortAscending size={15} />}
-              </button>
+          <div className="my-work-table-header-group" role="rowgroup">
+            <div className="my-work-table-header" role="row">
+              <span role="columnheader">事项</span>
+              <div role="columnheader"><TableFilterMenu label="项目" value={projectId} onChange={setProjectId} options={[{ label: '全部项目', value: 'all' }, ...projects.map((project) => ({ label: project.name, value: String(project.id) }))]} /></div>
+              <div role="columnheader"><TableFilterMenu label="类型" value={kind} onChange={(value) => setKind(value as 'all' | MyWorkKind)} options={[{ label: '全部类型', value: 'all' }, ...Object.entries(kindLabels).map(([value, label]) => ({ label, value }))]} /></div>
+              <div role="columnheader"><TableFilterMenu label="状态" value={status} onChange={setStatus} options={statusOptions} /></div>
+              <div className="my-work-date-heading" role="columnheader">
+                <TableFilterMenu label="截止日期" value={dueFilter} onChange={(value) => setDueFilter(value as typeof dueFilter)} options={[{ label: '全部日期', value: 'all' }, ...(['已逾期', '今天', '本周', '更晚', '未排期'] as const).map((value) => ({ label: value, value }))]} />
+                <button
+                  aria-label={sort === 'due_desc' ? '当前按截止日期倒序排列，点击切换为正序' : '当前按截止日期正序排列，点击切换为倒序'}
+                  className={`my-work-sort-icon${sort === 'due_desc' ? ' is-active' : ''}`}
+                  title={sort === 'due_desc' ? '切换为截止日期正序' : '切换为截止日期倒序'}
+                  type="button"
+                  onClick={() => setSort((current) => current === 'due_desc' ? 'due_asc' : 'due_desc')}
+                >
+                  {sort === 'due_desc' ? <SortDescending size={15} /> : <SortAscending size={15} />}
+                </button>
+              </div>
+              <div role="columnheader"><TableFilterMenu label="创建人" value={creator} onChange={setCreator} options={creatorOptions} /></div>
             </div>
-            <TableFilterMenu label="创建人" value={creator} onChange={setCreator} options={creatorOptions} />
           </div>
-          <div className="my-work-table-body">
-            {visibleItems.length === 0 ? <div className="my-work-empty" role="row"><CheckCircle size={28} />当前没有需要你推进的事项</div> : null}
+          <div className="my-work-table-body" role="rowgroup">
+            {visibleItems.length === 0 ? <div className="my-work-table-row" role="row"><div className="my-work-empty" role="cell" aria-colspan={6}><CheckCircle size={28} />当前没有需要你推进的事项</div></div> : null}
             {visibleItems.map((item) => (
               <div className="my-work-table-row" key={item.id} role="row">
-                <button className="my-work-row-main" type="button" onClick={() => openItem(item)}>
-                  <span className={`my-work-kind-icon is-${item.kind}`}>
-                    {item.kind === 'bug' ? <Bug size={17} /> : item.kind === 'milestone' ? <Flag size={17} /> : item.kind === 'delivery' ? <FolderSimple size={17} /> : <ListChecks size={17} />}
-                  </span>
-                  <span className="my-work-row-copy">
-                    <span className="my-work-item-title">
-                      <strong>{item.title}</strong>
-                      {item.offboardingTransferredFromName ? <Badge className="my-work-offboarding-badge" variant="outline">{item.offboardingTransferredFromName}-离职转移</Badge> : null}
+                <div className="my-work-table-cell my-work-main-cell" role="cell">
+                  <button className="my-work-row-main" type="button" onClick={() => openItem(item)}>
+                    <span className={`my-work-kind-icon is-${item.kind}`}>
+                      {item.kind === 'bug' ? <Bug size={17} /> : item.kind === 'milestone' ? <Flag size={17} /> : item.kind === 'delivery' ? <FolderSimple size={17} /> : <ListChecks size={17} />}
                     </span>
-                  </span>
-                </button>
-                <span className="my-work-table-cell">{item.projectName ?? item.contextName ?? '未关联项目'}</span>
-                <span className="my-work-table-cell"><Badge variant="outline">{kindLabels[item.kind]}</Badge></span>
-                <span className="my-work-table-cell"><span className={`my-work-status is-${item.status}`}>{statusLabels[item.status] ?? item.status}</span></span>
-                <span className="my-work-table-cell my-work-due"><CalendarBlank size={16} />{formatDueDate(item.dueAt)}</span>
-                <span className="my-work-table-cell">{item.creatorName ?? '未记录'}</span>
+                    <span className="my-work-row-copy">
+                      <span className="my-work-item-title">
+                        <strong>{item.title}</strong>
+                        {item.offboardingTransferredFromName ? <Badge className="my-work-offboarding-badge" variant="outline">{item.offboardingTransferredFromName}-离职转移</Badge> : null}
+                      </span>
+                    </span>
+                  </button>
+                </div>
+                <span className="my-work-table-cell" role="cell">{item.projectName ?? item.contextName ?? '未关联项目'}</span>
+                <span className="my-work-table-cell" role="cell"><Badge variant="outline">{kindLabels[item.kind]}</Badge></span>
+                <span className="my-work-table-cell" role="cell"><span className={`my-work-status is-${item.status}`}>{statusLabels[item.status] ?? item.status}</span></span>
+                <span className="my-work-table-cell my-work-due" role="cell"><CalendarBlank size={16} />{formatDueDate(item.dueAt)}</span>
+                <span className="my-work-table-cell" role="cell">{item.creatorName ?? '未记录'}</span>
               </div>
             ))}
           </div>
