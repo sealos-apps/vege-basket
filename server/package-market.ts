@@ -467,7 +467,7 @@ function ruleAllowsObjectKey(
       const formats = rule.ciFileNameFormats.length > 0 ? rule.ciFileNameFormats : rule.fileNameFormats
       const arch = objectKeyArch(fileName)
       if (
-        isValidCiBranch(branch) &&
+        isValidPackageMarketCiBranch(branch) &&
         hash &&
         fileName &&
         extra.length === 0 &&
@@ -1027,8 +1027,13 @@ function ciBaseRootsForRule(rule: PackageMarketRule) {
   return ciRootsForRule(rule)
 }
 
-function isValidCiBranch(value: string) {
+export function isValidPackageMarketCiBranch(value: string) {
   return /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value) && value !== '.' && value !== '..'
+}
+
+export function packageMarketCiBranchFromObjectKey(objectKey: string) {
+  const branch = objectKey.match(/(?:^|\/)ci\/([^/]+)\/[^/]+\/[^/]+$/u)?.[1] ?? ''
+  return isValidPackageMarketCiBranch(branch) ? branch : ''
 }
 
 function compareCiBranches(left: string, right: string) {
@@ -1043,7 +1048,7 @@ async function listCiBranches(client: OSS, rule: PackageMarketRule): Promise<Pac
     const prefixes = await listCommonPrefixes(client, root)
     for (const prefix of prefixes) {
       const branch = prefix.slice(root.length).replace(/\/$/, '')
-      if (isValidCiBranch(branch) && !branch.includes('/')) branches.add(branch)
+      if (isValidPackageMarketCiBranch(branch) && !branch.includes('/')) branches.add(branch)
     }
   }
   return [...branches]

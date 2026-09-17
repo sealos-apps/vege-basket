@@ -2,6 +2,12 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import {
+  getActiveWorkspaceRole,
+  getSelectableWorkspaceRoles,
+  hasOrganizationAdminRole,
+} from '../src/user-roles.ts'
+import type { AuthUser, UserRole } from '../src/api.ts'
+import {
   canAssumeUserRole,
   getSwitchableUserRoles,
   isUserRole,
@@ -22,10 +28,43 @@ test('organization administrator is an additive capability, not a switchable rol
   )
 })
 
-test('login identity selection contains only switchable business personas', () => {
-  assert.match(roleSelectionSource, /getSwitchableUserRoles\(user\.roles\)\.map/u)
-  assert.doesNotMatch(roleSelectionSource, /organization_admin/u)
-  assert.doesNotMatch(roleSelectionSource, /onOpenOrganization/u)
+test('login and account identity selection share role-based workspace options', () => {
+  assert.match(roleSelectionSource, /getSelectableWorkspaceRoles\(user\.roles\)\.map/u)
+  assert.match(appSource, /getSelectableWorkspaceRoles\(user\.roles\)/u)
+  assert.doesNotMatch(appSource, /onOpenOrganization/u)
+})
+
+test('management identity is available only with the assigned organization administrator role', () => {
+  const cases: [UserRole[], UserRole[]][] = [
+    [['developer'], ['developer']],
+    [['tester'], ['tester']],
+    [['developer', 'tester'], ['developer', 'tester']],
+    [['organization_admin'], ['developer', 'tester', 'organization_admin']],
+    [['tester', 'organization_admin'], ['developer', 'tester', 'organization_admin']],
+    [[], []],
+  ]
+  for (const [roles, expected] of cases) {
+    assert.deepEqual(getSelectableWorkspaceRoles(roles), expected)
+  }
+})
+
+test('system administrator status does not expose an unassigned management identity', () => {
+  const user: Pick<AuthUser, 'activeRole' | 'roles' | 'isSystemAdmin'> = {
+    activeRole: 'developer', roles: ['developer'], isSystemAdmin: true,
+  }
+  assert.equal(hasOrganizationAdminRole(user.roles), false)
+  assert.deepEqual(getSelectableWorkspaceRoles(user.roles), ['developer'])
+  assert.equal(getActiveWorkspaceRole(user, 'organization'), 'developer')
+})
+
+test('management identity follows the authorized view without changing the session persona', () => {
+  for (const activeRole of ['developer', 'tester'] as const) {
+    const user = { activeRole, roles: ['organization_admin'] as UserRole[] }
+    assert.equal(getActiveWorkspaceRole(user, 'organization'), 'organization_admin')
+    assert.equal(getActiveWorkspaceRole(user, 'search'), activeRole)
+    assert.equal(user.activeRole, activeRole)
+    assert.equal(getActiveWorkspaceRole({ ...user, roles: [activeRole] }, 'organization'), activeRole)
+  }
 })
 
 test('organization administrator can assume every business role', () => {

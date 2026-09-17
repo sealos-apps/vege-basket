@@ -1229,6 +1229,10 @@
   gap: 10px;
 }
 
+.test-verification-toolbar.has-branch {
+  grid-template-columns: minmax(0, 1fr) 122px 180px;
+}
+
 .test-verification-field {
   display: grid;
   min-width: 0;
@@ -1238,7 +1242,8 @@
   font-weight: 700;
 }
 
-.test-verification-arch {
+.test-verification-arch,
+.test-verification-branch {
   display: grid;
   min-width: 0;
   gap: 7px;

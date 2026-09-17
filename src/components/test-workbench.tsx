@@ -100,6 +100,7 @@ import {
   type BugFilterJoin,
 } from './bug-filter'
 import {
+  fetchPackageMarketCiBranches,
   fetchPackageMarketDetail,
   fetchPackageMarketCiVersions,
   fetchPackageMarketReleaseVersions,
@@ -194,13 +195,14 @@ import { replaceItemByIdInPlace } from '@/test-workbench-cache'
 import type { OrganizationContext } from '../../shared/organization-context'
 import { containerImageReferenceKey, normalizeContainerImageReference } from '../../shared/container-image-reference'
 import { formatTestSpaceReference } from '../../shared/test-space-reference'
-import type { PackageMarketRule, PackageMarketVersion, Priority } from '@/types'
+import type { PackageMarketCiBranch, PackageMarketRule, PackageMarketVersion, Priority } from '@/types'
 import './test-workbench.css'
 
 type WorkbenchTab = 'cases' | 'plans' | 'bugs' | 'weekly_report' | 'notifications'
 type VerificationPackageSelection = {
   arch: string
   channel: 'release' | 'ci'
+  ciBranch?: string
   objectKey: string
   objectLastModified?: string
   packageName: string
@@ -218,6 +220,7 @@ function verificationPackageSnapshot(item: SelectedVerificationPackage): Verific
   return {
     arch: item.arch,
     channel: item.channel,
+    ciBranch: item.ciBranch,
     objectKey: item.objectKey,
     objectLastModified: item.objectLastModified,
     packageName: item.packageName,
@@ -3733,7 +3736,7 @@ function BugAcceptanceRecord({ bugId, submission }: {
           {packageSelections.map((item) => (
             <li key={item.id}>
               <strong>{item.sourcePackageName || item.packageName}</strong>
-              <span>{item.channelLabel} · {item.arch} · {item.version}</span>
+              <span>{item.channelLabel}{item.channel === 'ci' && item.ciBranch ? ` · ${item.ciBranch}` : ''} · {item.arch} · {item.version}</span>
             </li>
           ))}
         </ul>
@@ -5226,12 +5229,15 @@ function BugVerificationDialog({
   const [category, setCategory] = useState('all')
   const [query, setQuery] = useState('')
   const [rulePage, setRulePage] = useState(0)
+  const [ciBranches, setCiBranches] = useState<PackageMarketCiBranch[]>([])
+  const [ciBranch, setCiBranch] = useState('')
   const [versions, setVersions] = useState<PackageMarketVersion[]>([])
   const [visibleVersionCount, setVisibleVersionCount] = useState(10)
   const [selected, setSelected] = useState<SelectedVerificationPackage[]>([])
   const [containerImages, setContainerImages] = useState([''])
   const [containerImagesTouched, setContainerImagesTouched] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [loadingBranches, setLoadingBranches] = useState(false)
   const [loadingVersions, setLoadingVersions] = useState(false)
   const [loadingVersionKey, setLoadingVersionKey] = useState('')
   const [error, setError] = useState('')
@@ -5266,6 +5272,8 @@ function BugVerificationDialog({
       setCategory('all')
       setQuery('')
       setRulePage(0)
+      setCiBranches([])
+      setCiBranch('')
       setVersions([])
       setVisibleVersionCount(10)
       setError('')
@@ -5287,6 +5295,7 @@ function BugVerificationDialog({
     [rulePage, visibleRules],
   )
   const selectedRule = rules.find((rule) => rule.id === ruleId)
+  const selectedRulePackage = selected.find((item) => item.sourcePackageId === selectedRule?.id)
   const categories = useMemo(() => {
     const result = new Map<string, string>([
       ['all', '全部'],
@@ -5316,7 +5325,43 @@ function BugVerificationDialog({
   useEffect(() => {
     versionSelectionRequestRef.current += 1
     setLoadingVersionKey('')
-  }, [arch, bug?.id, channel, open, selectedRule?.id])
+  }, [arch, bug?.id, channel, ciBranch, open, selectedRule?.id])
+
+  useEffect(() => {
+    if (selectedRulePackage?.arch && selectedRulePackage.arch !== arch) setArch(selectedRulePackage.arch)
+  }, [arch, selectedRulePackage?.arch])
+
+  useEffect(() => {
+    const selectedRuleId = selectedRule?.id
+    if (!selectedRuleId || organizationId == null || !open || channel !== 'ci') {
+      setCiBranches([])
+      setCiBranch('')
+      return
+    }
+    let active = true
+    setLoadingBranches(true)
+    setCiBranches([])
+    setCiBranch('')
+    setVersions([])
+    setError('')
+    fetchPackageMarketCiBranches({ context: { organizationId }, packageId: selectedRuleId })
+      .then((result) => {
+        if (!active) return
+        const requestedBranch = selectedRulePackage?.ciBranch ?? ''
+        const nextBranch = requestedBranch && result.branches.some((item) => item.name === requestedBranch)
+          ? requestedBranch
+          : result.branches[0]?.name ?? ''
+        setCiBranches(result.branches)
+        setCiBranch(nextBranch)
+      })
+      .catch((loadError) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : '测试包分支加载失败')
+      })
+      .finally(() => {
+        if (active) setLoadingBranches(false)
+      })
+    return () => { active = false }
+  }, [channel, open, organizationId, selectedRule?.id, selectedRulePackage?.ciBranch])
 
   useEffect(() => {
     const selectedRuleId = selectedRule?.id
@@ -5331,7 +5376,7 @@ function BugVerificationDialog({
     setError('')
     const request = channel === 'release'
       ? fetchPackageMarketReleaseVersions({ arch, context: { organizationId }, includeAll: true, packageId: selectedRuleId })
-      : fetchPackageMarketCiVersions({ arch, context: { organizationId }, includeAll: true, packageId: selectedRuleId })
+      : fetchPackageMarketCiVersions({ arch, ciBranch: ciBranch || undefined, context: { organizationId }, includeAll: true, packageId: selectedRuleId })
     request
       .then((result) => {
         if (active) setVersions(result.versions)
@@ -5343,7 +5388,7 @@ function BugVerificationDialog({
         if (active) setLoadingVersions(false)
       })
     return () => { active = false }
-  }, [arch, channel, open, organizationId, selectedRule?.id])
+  }, [arch, channel, ciBranch, open, organizationId, selectedRule?.id])
 
   function versionValue(version: PackageMarketVersion) {
     return channel === 'ci' ? (version.hash || version.version || version.label) : (version.version || version.label)
@@ -5351,7 +5396,7 @@ function BugVerificationDialog({
 
   function versionSelectionKey(version: PackageMarketVersion) {
     if (!selectedRule) return ''
-    return `${selectedRule.id}:${channel}:${arch}:${versionValue(version)}`
+    return `${selectedRule.id}:${channel}:${arch}:${ciBranch}:${versionValue(version)}`
   }
 
   function selectedVersionItems(version: PackageMarketVersion) {
@@ -5363,6 +5408,11 @@ function BugVerificationDialog({
   async function toggleVersion(version: PackageMarketVersion) {
     if (!selectedRule || organizationId == null) return
     const value = versionValue(version)
+    const selectedBranch = channel === 'ci' ? ciBranch : ''
+    if (channel === 'ci' && ciBranches.length > 0 && !selectedBranch) {
+      setError('请先选择测试包分支。')
+      return
+    }
     const existing = selectedVersionItems(version)
     if (existing.length > 0) {
       setSelected((current) => current.filter((item) => !existing.some((entry) => entry.objectKey === item.objectKey)))
@@ -5370,11 +5420,11 @@ function BugVerificationDialog({
     }
     const conflictingSelection = selected.find((item) => item.sourcePackageId === selectedRule.id)
     if (conflictingSelection) {
-      setError(`已选择 ${conflictingSelection.sourcePackageName} ${conflictingSelection.version}，请先移除后再选择其他版本。`)
+      setError(`已选择 ${conflictingSelection.sourcePackageName}${conflictingSelection.ciBranch ? `（${conflictingSelection.ciBranch}）` : ''} ${conflictingSelection.version}，请先移除后再选择其他版本。`)
       return
     }
-    const loadingKey = `${selectedRule.id}:${channel}:${arch}:${value}`
-    const selectionKey = `${selectedRule.id}:${channel}:${arch}:${value}`
+    const loadingKey = `${selectedRule.id}:${channel}:${arch}:${selectedBranch}:${value}`
+    const selectionKey = `${selectedRule.id}:${channel}:${arch}:${selectedBranch}:${value}`
     const requestId = ++versionSelectionRequestRef.current
     setLoadingVersionKey(loadingKey)
     setError('')
@@ -5382,6 +5432,7 @@ function BugVerificationDialog({
       const detail = await fetchPackageMarketDetail({
         arch,
         channel,
+        ciBranch: selectedBranch || undefined,
         ciVersion: channel === 'ci' ? value : undefined,
         context: { organizationId },
         includeAll: true,
@@ -5405,6 +5456,7 @@ function BugVerificationDialog({
           next.push({
             arch,
             channel,
+            ciBranch: selectedBranch || undefined,
             objectKey: link.objectKey,
             objectLastModified: link.lastModified,
             packageName: link.name,
@@ -5492,7 +5544,7 @@ function BugVerificationDialog({
               <strong>选择验证包</strong>
               <span>可跨安装包和架构累积选择</span>
             </div>
-            <div className="test-verification-toolbar">
+            <div className={`test-verification-toolbar${channel === 'ci' ? ' has-branch' : ''}`}>
               <div className="test-verification-field">
                 <span>渠道</span>
                 <div className="test-verification-segmented" role="tablist" aria-label="安装包渠道">
@@ -5519,11 +5571,33 @@ function BugVerificationDialog({
                 </div>
               </div>
               <Label className="test-verification-arch">架构
-                <Select value={arch} onValueChange={setArch}>
+                <Select
+                  value={arch}
+                  disabled={Boolean(selectedRulePackage)}
+                  onValueChange={setArch}
+                >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="amd64">amd64</SelectItem><SelectItem value="arm64">arm64</SelectItem></SelectContent>
                 </Select>
               </Label>
+              {channel === 'ci' && (loadingBranches || ciBranches.length > 0) ? (
+                <Label className="test-verification-branch">分支
+                  <Select
+                    value={ciBranch}
+                    disabled={!selectedRule || loadingBranches || Boolean(selectedRulePackage)}
+                    onValueChange={(value) => {
+                      setCiBranch(value)
+                      setVersions([])
+                      setVisibleVersionCount(10)
+                    }}
+                  >
+                    <SelectTrigger><SelectValue placeholder={loadingBranches ? '加载中...' : '选择分支'} /></SelectTrigger>
+                    <SelectContent>
+                      {ciBranches.map((branch) => <SelectItem key={branch.name} value={branch.name}>{branch.label || branch.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Label>
+              ) : null}
             </div>
             {error ? <p className="test-form-error">{error}</p> : null}
             <div className="test-verification-browser">
@@ -5602,7 +5676,7 @@ function BugVerificationDialog({
                 {versions.length > 0 ? <div className="test-verification-version-list">
                   {versions.slice(0, visibleVersionCount).map((version, index) => {
                     const value = versionValue(version)
-                    const versionKey = `${selectedRule?.id}:${channel}:${arch}:${value}`
+                    const versionKey = `${selectedRule?.id}:${channel}:${arch}:${ciBranch}:${value}`
                     const chosen = selectedVersionItems(version).length > 0
                     const versionLabel = version.label || version.version || version.hash || `版本 ${index + 1}`
                     return (
@@ -5617,7 +5691,7 @@ function BugVerificationDialog({
                         <span className="test-verification-version-marker" aria-hidden>{chosen ? <Check size={13} weight="bold" /> : null}</span>
                         <span className="test-verification-version-main">
                           <strong>{versionLabel}</strong>
-                          <small>{version.hash && version.hash !== versionLabel ? version.hash : '点击选择此版本的安装包'}</small>
+                          <small>{channel === 'ci' && ciBranch ? `${ciBranch} · ` : ''}{version.hash && version.hash !== versionLabel ? version.hash : '点击选择此版本的安装包'}</small>
                         </span>
                         <span className="test-verification-version-meta">{formatVerificationDate(version.lastModified)}</span>
                         {loadingVersionKey === versionKey ? <span className="test-verification-version-state">加载中...</span> : chosen ? <span className="test-verification-version-state">已选</span> : null}
@@ -5639,7 +5713,7 @@ function BugVerificationDialog({
                     <span className="test-verification-chip" key={selectionKey}>
                       <span>
                         <strong>{item.sourcePackageName}</strong>
-                        <small>{item.version || '版本未知'} · {item.arch}</small>
+                        <small>{item.channel === 'ci' && item.ciBranch ? `${item.ciBranch} · ` : ''}{item.version || '版本未知'} · {item.arch}</small>
                       </span>
                       <button aria-label={`移除 ${item.sourcePackageName} ${item.version}`} type="button" onClick={() => removeSelected(selectionKey)}>
                         <X size={14} />

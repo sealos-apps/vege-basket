@@ -203,6 +203,14 @@ unique index. Run `db:encrypt-existing` after taking the approved backup to encr
 version labels and populate the lookup; it aborts without writing if duplicate versions already
 exist within one organization.
 
+The Bug verification branch release adds nullable `test_bug_verification_packages.ci_branch`.
+Application startup applies the compatible column and constraint so new CI submissions can store
+their immutable branch snapshot. To display branches on historical records, apply
+`server/migrations/20260917_test_bug_verification_package_branches.sql` only after an approved
+backup; it backfills rows whose object key has the canonical `/ci/<branch>/<hash>/` layout and
+leaves branchless middleware CI rows unchanged. The migration is idempotent and does not rewrite
+package object keys.
+
 The weekly-report assignee release adds
 `organization_memberships.weekly_report_required`. Existing and future memberships default to
 requiring a report, while the reserved `admin` account is excluded. The application startup path

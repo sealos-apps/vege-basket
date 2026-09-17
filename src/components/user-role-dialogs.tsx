@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, Code, Flask, UserMinus, UsersThree } from '@phosphor-icons/react'
+import { Buildings, Check, Code, Flask, UserMinus, UsersThree } from '@phosphor-icons/react'
 import {
   fetchOffboardingPreview,
   fetchManagedUsers,
@@ -12,9 +12,8 @@ import {
   type UserRole,
 } from '@/api'
 import {
-  getSwitchableUserRoles,
+  getSelectableWorkspaceRoles,
   userRoleLabel,
-  type SwitchableUserRole,
 } from '@/user-roles'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -35,24 +34,28 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
-const roleIcon: Record<SwitchableUserRole, typeof Code> = {
+const roleIcon: Record<UserRole, typeof Code> = {
   developer: Code,
   tester: Flask,
+  organization_admin: Buildings,
 }
 
-const roleDescription: Record<SwitchableUserRole, string> = {
+const roleDescription: Record<UserRole, string> = {
   developer: '项目工作区与指派给我的 Bug',
   tester: '用例、测试计划与 Bug 追踪',
+  organization_admin: '组织管理',
 }
 
 export function UserRoleSelectionDialog({
+  activeRole,
   busy,
   onSelect,
   open,
   user,
 }: {
+  activeRole: UserRole
   busy: boolean
-  onSelect: (role: SwitchableUserRole) => void
+  onSelect: (role: UserRole) => void
   open: boolean
   user: AuthUser
 }) {
@@ -64,13 +67,13 @@ export function UserRoleSelectionDialog({
           <DialogDescription>身份决定本次会话中显示的工作区域，可以稍后从账户菜单切换。</DialogDescription>
         </DialogHeader>
         <div className="role-selection-list">
-          {getSwitchableUserRoles(user.roles).map((role) => {
+          {getSelectableWorkspaceRoles(user.roles).map((role) => {
             const Icon = roleIcon[role]
             return (
               <button disabled={busy} key={role} type="button" onClick={() => onSelect(role)}>
                 <Icon size={22} weight="duotone" />
                 <span><strong>{userRoleLabel[role]}</strong><small>{roleDescription[role]}</small></span>
-                {user.activeRole === role ? <Check /> : null}
+                {activeRole === role ? <Check /> : null}
               </button>
             )
           })}

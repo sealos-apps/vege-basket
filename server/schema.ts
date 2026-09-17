@@ -2199,14 +2199,56 @@ create table if not exists test_bug_verification_packages (
   package_name text not null,
   channel text not null check (channel in ('release', 'ci')),
   channel_label text not null,
+  ci_branch text,
   arch text not null,
   version text not null,
   object_key text not null,
   object_last_modified timestamptz,
   size_bytes bigint check (size_bytes is null or size_bytes >= 0),
+  constraint test_bug_verification_packages_ci_branch_check check (
+    (channel = 'release' and ci_branch is null)
+    or (
+      channel = 'ci'
+      and (
+        ci_branch is null
+        or (
+          ci_branch ~ '^[a-zA-Z0-9][a-zA-Z0-9._-]*$'
+          and ci_branch not in ('.', '..')
+        )
+      )
+    )
+  ),
   unique (test_bug_verification_submission_id, position),
   unique (test_bug_verification_submission_id, object_key)
 );
+
+alter table test_bug_verification_packages
+  add column if not exists ci_branch text;
+
+do $$ begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'test_bug_verification_packages_ci_branch_check'
+      and conrelid = 'test_bug_verification_packages'::regclass
+  ) then
+    alter table test_bug_verification_packages
+      add constraint test_bug_verification_packages_ci_branch_check
+      check (
+        (channel = 'release' and ci_branch is null)
+        or (
+          channel = 'ci'
+          and (
+            ci_branch is null
+            or (
+              ci_branch ~ '^[a-zA-Z0-9][a-zA-Z0-9._-]*$'
+              and ci_branch not in ('.', '..')
+            )
+          )
+        )
+      );
+  end if;
+end $$;
 
 create table if not exists test_bug_verification_container_images (
   id bigserial primary key,

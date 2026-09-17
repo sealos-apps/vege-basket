@@ -316,10 +316,10 @@ import {
   UserRoleSelectionDialog,
 } from './components/user-role-dialogs'
 import {
-  getSwitchableUserRoles,
+  getActiveWorkspaceRole,
+  getSelectableWorkspaceRoles,
   hasOrganizationAdminRole,
   userRoleLabel,
-  type SwitchableUserRole,
 } from './user-roles'
 import './App.css'
 
@@ -696,8 +696,8 @@ function getRoleLandingView(role: UserRole): View {
   return 'search'
 }
 
-function canAccessOrganizationManagement(user: Pick<AuthUser, 'isSystemAdmin' | 'roles'>) {
-  return user.isSystemAdmin || hasOrganizationAdminRole(user.roles)
+function canAccessOrganizationManagement(user: Pick<AuthUser, 'roles'>) {
+  return hasOrganizationAdminRole(user.roles)
 }
 
 function canUseViewForUser(view: View, user: AuthUser) {
@@ -2206,7 +2206,7 @@ function App() {
         setAuthUser(data.user)
         if (
           selectRoleAfterSessionLoadRef.current &&
-          getSwitchableUserRoles(data.user.roles).length > 1
+          getSelectableWorkspaceRoles(data.user.roles).length > 1
         ) {
           setRoleSelectionOpen(true)
         }
@@ -3004,7 +3004,7 @@ function App() {
             })
       setAuthToken(result.token)
       setAuthUser(result.user)
-      setRoleSelectionOpen(getSwitchableUserRoles(result.user.roles).length > 1)
+      setRoleSelectionOpen(getSelectableWorkspaceRoles(result.user.roles).length > 1)
       if (result.isNewUser) {
         setDisplayNameOnboardingDraft('')
         setDisplayNameOnboardingError('')
@@ -3114,8 +3114,15 @@ function App() {
     }
   }
 
-  async function changeActiveUserRole(role: SwitchableUserRole, targetView?: View) {
-    if (!authUser) return
+  async function changeActiveUserRole(role: UserRole, targetView?: View) {
+    if (!authUser || roleSelectionBusy || !getSelectableWorkspaceRoles(authUser.roles).includes(role)) return
+
+    if (role === 'organization_admin') {
+      setWorkspaceError('')
+      setRoleSelectionOpen(false)
+      setView('organization')
+      return
+    }
 
     const roleLandingView = targetView ?? getRoleLandingView(role)
     if (authUser.activeRole === role) {
@@ -3270,10 +3277,6 @@ function App() {
       if (!prepared) return
     }
     applyOrganizationContext(nextOrganizationId)
-  }
-
-  function openOrganizationManagement() {
-    setView('organization')
   }
 
   function selectProject(projectId: number) {
@@ -4862,6 +4865,7 @@ ${packageTimelineText}`
 
   const roleSelectionDialog = authUser ? (
     <UserRoleSelectionDialog
+      activeRole={getActiveWorkspaceRole(authUser, view)}
       busy={roleSelectionBusy}
       open={roleSelectionOpen}
       user={authUser}
@@ -4882,7 +4886,7 @@ ${packageTimelineText}`
               onDisconnectFeishu={disconnectFeishuBinding}
               onSaveAccountSettings={updateAccountSettings}
               onRoleChange={(role) => void changeActiveUserRole(role)}
-              onOpenOrganization={openOrganizationManagement}
+              roleSelectionBusy={roleSelectionBusy}
               onOpenChangelog={() => setView('changelog')}
               onSignOut={signOut}
               onToggleTheme={toggleThemeMode}
@@ -5009,7 +5013,7 @@ ${packageTimelineText}`
             onDisconnectFeishu={disconnectFeishuBinding}
             onSaveAccountSettings={updateAccountSettings}
             onRoleChange={(role) => void changeActiveUserRole(role)}
-            onOpenOrganization={openOrganizationManagement}
+            roleSelectionBusy={roleSelectionBusy}
             onOpenChangelog={() => setView('changelog')}
             onSignOut={signOut}
             onToggleTheme={toggleThemeMode}
@@ -5521,7 +5525,7 @@ ${packageTimelineText}`
           />
         )}
 
-        {view === 'organization' && authUser ? (
+        {view === 'organization' && authUser && canAccessOrganizationManagement(authUser) ? (
           <OrganizationWorkbench
             canCreate={canCreateOrganization}
             currentUser={authUser}
@@ -6015,7 +6019,7 @@ function AccountMenu({
   themeMode,
   onSaveAccountSettings,
   onRoleChange,
-  onOpenOrganization,
+  roleSelectionBusy,
   onOpenChangelog,
   onSignOut,
   onToggleTheme,
@@ -6027,8 +6031,8 @@ function AccountMenu({
   onSaveAccountSettings: (payload: {
     displayName: string
   }) => Promise<void>
-  onRoleChange: (role: SwitchableUserRole) => void
-  onOpenOrganization: () => void
+  onRoleChange: (role: UserRole) => void
+  roleSelectionBusy: boolean
   onOpenChangelog: () => void
   onSignOut: () => void
   onToggleTheme: () => void
@@ -6037,10 +6041,10 @@ function AccountMenu({
   const accountTriggerRef = useRef<HTMLButtonElement>(null)
   const [roleManagementDialogOpen, setRoleManagementDialogOpen] = useState(false)
   const displayName = getUserDisplayName(user)
-  const availableRoles = user ? getSwitchableUserRoles(user.roles) : []
-  const canOpenOrganization = user ? canAccessOrganizationManagement(user) : false
-  const accountMeta = user
-    ? userRoleLabel[user.activeRole]
+  const availableRoles = user ? getSelectableWorkspaceRoles(user.roles) : []
+  const activeRole = user ? getActiveWorkspaceRole(user, activeView) : null
+  const accountMeta = activeRole
+    ? userRoleLabel[activeRole]
     : '尚未登录'
 
   return (
@@ -6071,7 +6075,7 @@ function AccountMenu({
           >
             <FileText /> 更新日志
           </DropdownMenuItem>
-          {user && (availableRoles.length > 1 || activeView === 'organization') ? (
+          {user && availableRoles.length > 1 ? (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuSub>
@@ -6083,26 +6087,17 @@ function AccountMenu({
                     <DropdownMenuItem
                       key={role}
                       className="account-menu-item"
-                      data-active={user.activeRole === role ? 'true' : undefined}
+                      disabled={roleSelectionBusy}
+                      data-active={activeRole === role ? 'true' : undefined}
                       onSelect={() => onRoleChange(role)}
                     >
-                      {user.activeRole === role ? <Check /> : <span className="account-role-placeholder" />}
+                      {activeRole === role ? <Check /> : <span className="account-role-placeholder" />}
                       {userRoleLabel[role]}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
             </>
-          ) : null}
-          {canOpenOrganization ? (
-            <DropdownMenuItem
-              className="account-menu-item"
-              data-active={activeView === 'organization' ? 'true' : undefined}
-              aria-current={activeView === 'organization' ? 'page' : undefined}
-              onSelect={onOpenOrganization}
-            >
-              <Buildings /> 组织管理
-            </DropdownMenuItem>
           ) : null}
           {user?.isSystemAdmin ? (
             <DropdownMenuItem
