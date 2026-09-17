@@ -301,8 +301,10 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   bypasses organization visibility.
 - Supported todo images and test-workbench evidence attachments: PNG, JPEG, WebP, GIF images; MP4, WebM, and QuickTime videos.
 - Account roles: `developer`, `tester`, `organization_admin`. `developer` and `tester`
-  are switchable session personas. `organization_admin` is additive, is not shown in the
-  role switcher, and allows the account to assume either business persona.
+  are switchable session personas. `organization_admin` is additive and allows the account
+  to assume either business persona. When assigned, it also appears as a workspace identity
+  in login selection and the account role switcher. Selecting it opens organization management
+  and updates the displayed identity without sending it to `POST /api/auth/active-role`.
   System administrators assign it through user role management.
 - Organization access: `owner`, `admin`, `member`. System administrators create
   organizations; organization owners and administrators rename or delete organizations
@@ -310,8 +312,12 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   an expiring browser invite link; link acceptance activates ordinary member access without
   a Feishu callback. Deletion requires the exact organization name,
   detaches projects and test spaces, and removes organization-only records.
-  Accounts assigned `organization_admin` and recognized system administrators always see
-  the organization management entry; it is independent of the global organization selector.
+  Only accounts assigned `organization_admin` see the organization-management identity in
+  the role switcher; system-administrator status alone does not expose it. The separate
+  organization-management entry is removed. This selection is independent of the global
+  organization selector. Refreshing a stored management view rechecks the assigned role;
+  losing it returns the user to their available business workspace. Server authorization
+  and system-administrator APIs remain unchanged.
   If they also have active `owner` or `admin` membership in an organization, they receive
   access to all attached projects and project records, test spaces and test records, and
   Bugs and comments. That dual authorization may update attached project lifecycle status,

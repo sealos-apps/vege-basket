@@ -711,8 +711,9 @@ textarea:focus {
 }
 
 .account-menu-content {
-  width: var(--radix-dropdown-menu-trigger-width);
-  min-width: var(--radix-dropdown-menu-trigger-width);
+  /* Leave room for the role submenu and viewport gutters on narrow screens. */
+  width: min(var(--radix-dropdown-menu-trigger-width), calc(100vw - 180px));
+  min-width: 140px;
 }
 
 :is(.account-menu-content, .account-role-submenu) .account-menu-item {

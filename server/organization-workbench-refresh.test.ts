@@ -41,7 +41,7 @@ test('organization management replaces the workspace navigation in the existing 
   assert.match(appSource, /sidebarNavigationHost=\{organizationSidebarHost\}/u)
   assert.match(appSource, /ref=\{view === 'organization' \? setOrganizationTopbarHost : undefined\}/u)
   assert.match(appSource, /topbarActionHost=\{organizationTopbarHost\}/u)
-  assert.match(appSource, /onOpenOrganization=\{openOrganizationManagement\}/u)
+  assert.match(appSource, /onRoleChange=\{\(role\) => void changeActiveUserRole\(role\)\}/u)
   assert.doesNotMatch(appSource, /onCloseOrganization/u)
   assert.match(workbenchSource, /createPortal\([\s\S]*?organization-sidebar-panel[\s\S]*?sidebarNavigationHost/u)
   assert.match(workbenchSource, /createPortal\([\s\S]*?organization-topbar-controls[\s\S]*?topbarActionHost/u)

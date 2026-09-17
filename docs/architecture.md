@@ -163,6 +163,12 @@ must resolve `getProjectAccess(projectId, userId)` before reading or mutating ne
 owner-only actions add an explicit role check.
 
 `organization_admin` is an additive account capability rather than a session persona.
+The browser exposes it as a workspace identity in both login selection and the account
+role menu only when it is assigned in `user.roles`; system-administrator status alone
+does not expose it. Selecting it opens organization management without changing the
+session's developer/tester persona. The management view determines the displayed identity
+and selected menu item. There is no separate organization-management menu entry. Restoring
+that view rechecks the assigned role and falls back to the business landing page if revoked.
 It allows the account to assume the developer or tester persona. When that
 account is also an active organization owner or administrator, read routes may expose all
 projects, test spaces, Bugs, comments, and related records attached to that organization.

@@ -1,5 +1,6 @@
 import { OrganizationTestEnvironmentPanel } from './organization-test-environments'
 import { ConfirmActionDialog } from './confirm-action-dialog'
+import { hasOrganizationAdminRole } from '../user-roles'
 import { useConfirmAction } from '../hooks/use-confirm-action'
 import { reconcileAction } from '../confirmed-action'
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
@@ -453,8 +454,7 @@ export function OrganizationWorkbench({
   const [weeklyReportAssigneeUserIds, setWeeklyReportAssigneeUserIds] = useState<number[]>([])
   const [weeklyReportAssigneeQuery, setWeeklyReportAssigneeQuery] = useState('')
   const packageMarketDraftOrganizationId = useRef(0)
-  const canAccessOrganizationManagement = currentUser.isSystemAdmin
-    || currentUser.roles.includes('organization_admin')
+  const canAccessOrganizationManagement = hasOrganizationAdminRole(currentUser.roles)
 
   const loadOrganizations = useCallback(async (preferredId?: number, signal?: AbortSignal) => {
     const result = await fetchOrganizations({ signal })
@@ -1063,7 +1063,7 @@ export function OrganizationWorkbench({
         <div className="organization-state organization-empty-state">
           <Buildings size={30} weight="duotone" />
           <strong>当前账号没有组织管理权限</strong>
-          <span>组织管理看板仅对组织管理员或系统管理员开放。</span>
+          <span>组织管理看板仅对已分配组织管理员角色的账号开放。</span>
         </div>
       </>
     )
