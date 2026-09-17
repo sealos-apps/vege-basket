@@ -15,6 +15,11 @@ import {
 process.env.APP_ENCRYPTION_ACTIVE_KEY_ID = 'new'
 process.env.APP_ENCRYPTION_KEYS = `old:${Buffer.alloc(32, 13).toString('base64')},new:${Buffer.alloc(32, 17).toString('base64')}`
 
+const organizationModulePanelSource = readFileSync(
+  new URL('../src/components/organization-project-modules-panel.tsx', import.meta.url),
+  'utf8',
+)
+
 type Call = { sql: string; values: unknown[] }
 function fakeClient(answer: (call: Call) => object[] = () => []) {
   const calls: Call[] = []
@@ -152,13 +157,28 @@ test('disable reports all todo references with at most five project and title sa
 })
 
 test('organization module switch stays actionable so the server can report current todo blockers', () => {
-  const source = readFileSync(new URL('../src/components/organization-project-modules-panel.tsx', import.meta.url), 'utf8')
-  const switchStart = source.indexOf('<button type="button" role="switch"')
-  const switchEnd = source.indexOf('onClick=', switchStart)
+  const switchStart = organizationModulePanelSource.indexOf('<button type="button" role="switch"')
+  const switchEnd = organizationModulePanelSource.indexOf('onClick=', switchStart)
   assert.ok(switchStart >= 0 && switchEnd > switchStart)
-  const switchProps = source.slice(switchStart, switchEnd)
+  const switchProps = organizationModulePanelSource.slice(switchStart, switchEnd)
   assert.match(switchProps, /disabled=\{busy\}/u)
   assert.doesNotMatch(switchProps, /usageCount/u)
+})
+
+test('organization module catalog paginates five rows and keeps new modules visible', () => {
+  assert.match(organizationModulePanelSource, /const organizationProjectModulePageSize = 5/u)
+  assert.match(organizationModulePanelSource, /const visibleModules = modules\.slice/u)
+  assert.match(organizationModulePanelSource, /visibleModules\.map\(module =>/u)
+  assert.match(organizationModulePanelSource, /aria-label="项目模块分页"/u)
+  assert.match(organizationModulePanelSource, /detail\.projectModules\.length \/ organizationProjectModulePageSize/u)
+})
+
+test('organization module deletion uses the shared confirmation dialog and returns canonical success', () => {
+  assert.match(organizationModulePanelSource, /<ConfirmActionDialog/u)
+  assert.match(organizationModulePanelSource, /organization-project-module-delete:/u)
+  assert.match(organizationModulePanelSource, /onConfirm=\{\(\) => deleteModule\(module\)\}/u)
+  assert.match(organizationModulePanelSource, /function deleteModule\(module: OrganizationProjectModule\)/u)
+  assert.doesNotMatch(organizationModulePanelSource, /window\.confirm/u)
 })
 
 test('disabled modules can be deleted while preserving local history mappings', async () => {

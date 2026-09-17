@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Check, Info, ListChecks, PencilSimple, Plus, Trash, Warning, X } from '@phosphor-icons/react'
+import { CaretLeft, CaretRight, Check, Info, ListChecks, PencilSimple, Plus, Trash, Warning, X } from '@phosphor-icons/react'
 import { createOrganizationProjectModule, deleteOrganizationProjectModule, updateOrganizationProjectModule } from '../api'
 import type { OrganizationDetail, OrganizationProjectModule } from '../organization-types'
 import { normalizeProjectModuleName } from '../../shared/project-modules'
 import { Button } from './ui/button'
+import { ConfirmActionDialog } from './confirm-action-dialog'
 import { Input } from './ui/input'
+
+const organizationProjectModulePageSize = 5
 
 export function OrganizationProjectModulesPanel({ organizationId, modules, disabled = false, onSaved }: {
   organizationId: number
@@ -19,12 +22,23 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [page, setPage] = useState(0)
   const generation = useRef(0)
   const savingRef = useRef(false)
   const busy = disabled || saving
   const enabledCount = modules.filter(module => module.enabled).length
+  const totalPages = Math.max(1, Math.ceil(modules.length / organizationProjectModulePageSize))
+  const safePage = Math.min(page, totalPages - 1)
+  const visibleModules = modules.slice(
+    safePage * organizationProjectModulePageSize,
+    safePage * organizationProjectModulePageSize + organizationProjectModulePageSize,
+  )
 
   useEffect(() => () => { generation.current += 1 }, [])
+
+  useEffect(() => {
+    if (page > totalPages - 1) setPage(Math.max(0, totalPages - 1))
+  }, [page, totalPages])
 
   function validatedName(value: string, exceptId?: number) {
     const name = normalizeProjectModuleName(value)
@@ -39,8 +53,13 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
     return name
   }
 
-  async function save(operation: () => Promise<OrganizationDetail>, success: string, afterSave?: () => void) {
-    if (disabled || savingRef.current) return
+  async function save(
+    operation: () => Promise<OrganizationDetail>,
+    success: string,
+    afterSave?: (detail: OrganizationDetail) => void,
+    showPanelError = true,
+  ): Promise<boolean> {
+    if (disabled || savingRef.current) return false
     savingRef.current = true
     setSaving(true)
     setError('')
@@ -50,13 +69,17 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
       const detail = await operation()
       // Refresh the workspace even if the user closed this dialog during the save.
       onSaved(detail)
-      if (requestGeneration !== generation.current) return
-      afterSave?.()
-      setNotice(success)
+      if (requestGeneration === generation.current) {
+        afterSave?.(detail)
+        setNotice(success)
+      }
+      return true
     } catch (saveError) {
+      if (!showPanelError) throw saveError
       if (requestGeneration === generation.current) {
         setError(saveError instanceof Error ? saveError.message : '模块保存失败，请重试。')
       }
+      return false
     } finally {
       savingRef.current = false
       if (requestGeneration === generation.current) setSaving(false)
@@ -67,7 +90,14 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
     event.preventDefault()
     const name = validatedName(draft)
     if (!name) return
-    void save(() => createOrganizationProjectModule(organizationId, name), '模块已添加，组织下所有项目均可使用。', () => setDraft(''))
+    void save(
+      () => createOrganizationProjectModule(organizationId, name),
+      '模块已添加，组织下所有项目均可使用。',
+      detail => {
+        setDraft('')
+        setPage(Math.max(0, Math.ceil(detail.projectModules.length / organizationProjectModulePageSize) - 1))
+      },
+    )
   }
 
   function renameModule(event: FormEvent, module: OrganizationProjectModule) {
@@ -75,6 +105,23 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
     const name = validatedName(renameDraft, module.id)
     if (!name) return
     void save(() => updateOrganizationProjectModule(organizationId, module.id, { name }), '模块名称已更新，已有待办同步显示新名称。', () => setEditingId(null))
+  }
+
+  function changePage(nextPage: number) {
+    setPage(Math.max(0, Math.min(totalPages - 1, nextPage)))
+    setEditingId(null)
+    setPendingDisable(null)
+    setError('')
+    setNotice('')
+  }
+
+  function deleteModule(module: OrganizationProjectModule) {
+    return save(
+      () => deleteOrganizationProjectModule(organizationId, module.id),
+      `「${module.name}」已删除。`,
+      undefined,
+      false,
+    )
   }
 
   return (
@@ -94,7 +141,7 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
       {modules.length ? (
         <div className="organization-project-modules-list">
           <div className="organization-project-modules-columns"><span>模块名称</span><span>使用次数</span><span>状态</span></div>
-          {modules.map(module => (
+          {visibleModules.map(module => (
             <div className="organization-project-module-row" key={module.id}>
               {editingId === module.id ? (
                 <form className="organization-project-module-edit" onSubmit={event => renameModule(event, module)}>
@@ -118,12 +165,19 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
                     title={`编辑 ${module.name}`} onClick={() => {
                       setEditingId(module.id); setRenameDraft(module.name); setError(''); setNotice(''); setPendingDisable(null)
                   }}><PencilSimple size={16} /></Button>
-                  {!module.enabled ? <Button type="button" size="icon" variant="ghost" disabled={busy}
-                    aria-label={`删除 ${module.name}`} title="删除已停用模块" onClick={() => {
-                      if (window.confirm(`删除已停用模块“${module.name}”？已有任务的历史归属会保留。`)) {
-                        void save(() => deleteOrganizationProjectModule(organizationId, module.id), `「${module.name}」已删除。`)
-                      }
-                    }}><Trash size={16} /></Button> : null}
+                  {!module.enabled ? (
+                    <ConfirmActionDialog
+                      actionKey={`organization-project-module-delete:${organizationId}:${module.id}`}
+                      confirmLabel="删除模块"
+                      description={`删除「${module.name}」后，该模块会从组织目录移除。已有待办及其模块名称会保留，并显示为历史模块；此操作无法撤销。`}
+                      onConfirm={() => deleteModule(module)}
+                      title="确认删除这个项目模块？"
+                      trigger={(
+                        <Button type="button" size="icon" variant="ghost" disabled={busy}
+                          aria-label={`删除 ${module.name}`} title="删除已停用模块"><Trash size={16} /></Button>
+                      )}
+                    />
+                  ) : null}
                 </>
               )}
               <span className="organization-project-module-usage">{module.usageCount} 次</span>
@@ -137,6 +191,17 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
                 }}><span /></button>
             </div>
           ))}
+          {totalPages > 1 ? (
+            <nav className="organization-project-modules-pagination" aria-label="项目模块分页">
+              <span>第 {safePage + 1} / {totalPages} 页，共 {modules.length} 个</span>
+              <div>
+                <Button type="button" size="icon" variant="ghost" disabled={busy || safePage === 0}
+                  aria-label="上一页" title="上一页" onClick={() => changePage(safePage - 1)}><CaretLeft size={16} /></Button>
+                <Button type="button" size="icon" variant="ghost" disabled={busy || safePage >= totalPages - 1}
+                  aria-label="下一页" title="下一页" onClick={() => changePage(safePage + 1)}><CaretRight size={16} /></Button>
+              </div>
+            </nav>
+          ) : null}
         </div>
       ) : (
         <div className="organization-project-modules-empty">
