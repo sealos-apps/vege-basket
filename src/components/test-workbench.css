@@ -1224,9 +1224,13 @@
 
 .test-verification-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 122px 180px;
+  grid-template-columns: minmax(0, 1fr) 122px;
   align-items: end;
   gap: 10px;
+}
+
+.test-verification-toolbar.has-branch {
+  grid-template-columns: minmax(0, 1fr) 122px 180px;
 }
 
 .test-verification-field {

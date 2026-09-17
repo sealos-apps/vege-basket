@@ -202,7 +202,6 @@ type WorkbenchTab = 'cases' | 'plans' | 'bugs' | 'weekly_report' | 'notification
 type VerificationPackageSelection = {
   arch: string
   channel: 'release' | 'ci'
-  ciBranch?: string
   objectKey: string
   objectLastModified?: string
   packageName: string
@@ -213,6 +212,7 @@ type VerificationPackageSelection = {
 }
 
 type SelectedVerificationPackage = VerificationPackageSelection & {
+  ciBranch?: string
   selectionKey: string
 }
 
@@ -220,7 +220,6 @@ function verificationPackageSnapshot(item: SelectedVerificationPackage): Verific
   return {
     arch: item.arch,
     channel: item.channel,
-    ciBranch: item.ciBranch,
     objectKey: item.objectKey,
     objectLastModified: item.objectLastModified,
     packageName: item.packageName,
@@ -5298,6 +5297,7 @@ function BugVerificationDialog({
     [rulePage, visibleRules],
   )
   const selectedRule = rules.find((rule) => rule.id === ruleId)
+  const selectedRulePackage = selected.find((item) => item.sourcePackageId === selectedRule?.id)
   const categories = useMemo(() => {
     const result = new Map<string, string>([
       ['all', '全部'],
@@ -5330,6 +5330,10 @@ function BugVerificationDialog({
   }, [arch, bug?.id, channel, ciBranch, open, selectedRule?.id])
 
   useEffect(() => {
+    if (selectedRulePackage?.arch && selectedRulePackage.arch !== arch) setArch(selectedRulePackage.arch)
+  }, [arch, selectedRulePackage?.arch])
+
+  useEffect(() => {
     const selectedRuleId = selectedRule?.id
     if (!selectedRuleId || organizationId == null || !open || channel !== 'ci') {
       setCiBranches([])
@@ -5345,8 +5349,7 @@ function BugVerificationDialog({
     fetchPackageMarketCiBranches({ context: { organizationId }, packageId: selectedRuleId })
       .then((result) => {
         if (!active) return
-        const selectedPackage = selected.find((item) => item.sourcePackageId === selectedRuleId)
-        const requestedBranch = selectedPackage?.ciBranch ?? ''
+        const requestedBranch = selectedRulePackage?.ciBranch ?? ''
         const nextBranch = requestedBranch && result.branches.some((item) => item.name === requestedBranch)
           ? requestedBranch
           : result.branches[0]?.name ?? ''
@@ -5360,7 +5363,7 @@ function BugVerificationDialog({
         if (active) setLoadingBranches(false)
       })
     return () => { active = false }
-  }, [channel, open, organizationId, selected, selectedRule?.id])
+  }, [channel, open, organizationId, selectedRule?.id, selectedRulePackage?.ciBranch])
 
   useEffect(() => {
     const selectedRuleId = selectedRule?.id
@@ -5543,7 +5546,7 @@ function BugVerificationDialog({
               <strong>选择验证包</strong>
               <span>可跨安装包和架构累积选择</span>
             </div>
-            <div className="test-verification-toolbar">
+            <div className={`test-verification-toolbar${channel === 'ci' ? ' has-branch' : ''}`}>
               <div className="test-verification-field">
                 <span>渠道</span>
                 <div className="test-verification-segmented" role="tablist" aria-label="安装包渠道">
@@ -5572,7 +5575,7 @@ function BugVerificationDialog({
               <Label className="test-verification-arch">架构
                 <Select
                   value={arch}
-                  disabled={selected.some((item) => item.sourcePackageId === selectedRule?.id)}
+                  disabled={Boolean(selectedRulePackage)}
                   onValueChange={setArch}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -5583,7 +5586,7 @@ function BugVerificationDialog({
                 <Label className="test-verification-branch">分支
                   <Select
                     value={ciBranch}
-                    disabled={!selectedRule || loadingBranches || selected.some((item) => item.sourcePackageId === selectedRule?.id)}
+                    disabled={!selectedRule || loadingBranches || Boolean(selectedRulePackage)}
                     onValueChange={(value) => {
                       setCiBranch(value)
                       setVersions([])
