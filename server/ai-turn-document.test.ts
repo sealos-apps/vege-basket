@@ -177,7 +177,7 @@ test('workspace visibility keeps reply documents private to their creator', () =
     /select id, project_id, source_turn_id, type, title, period, content, created_at[\s\S]*?order by created_at desc, id desc/u,
   )?.[0] ?? ''
 
-  assert.match(summariesQuery, /where user_id = \$1/u)
+  assert.match(summariesQuery, /where \(\s*user_id = \$1/u)
   assert.match(
     summariesQuery,
     /type <> 'reply'[\s\S]*?p\.id = summaries\.project_id/u,

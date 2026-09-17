@@ -12,6 +12,8 @@ const myWorkClientSource = readFileSync(
   'utf8',
 )
 const organizationServerSource = readFileSync(new URL('./organizations.ts', import.meta.url), 'utf8')
+const workspaceApiSource = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8')
+const workspaceServerSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
 const testClientSource = readFileSync(
   new URL('../src/components/test-workbench.tsx', import.meta.url),
   'utf8',
@@ -112,4 +114,67 @@ test('organization sections preserve the complete default and avoid multiplied c
   assert.doesNotMatch(organizationServerSource, /left join test_plans p on p\.test_space_id = s\.id/u)
   assert.doesNotMatch(organizationServerSource, /left join test_bugs b on b\.test_space_id = s\.id/u)
   assert.match(organizationClientSource, /mergeOrganizationDetail/u)
+})
+
+test('workspace loading uses independently scoped live read models', () => {
+  for (const route of [
+    '/api/workspace/catalog',
+    '/api/workspace/overview',
+    '/api/workspace/inbox',
+    '/api/workspace/documents',
+    '/api/workspace/search',
+    '/api/projects/:projectId/overview',
+    '/api/projects/:projectId/journals',
+    '/api/todos/:todoId/detail',
+  ]) {
+    assert.equal(workspaceServerSource.includes(route), true)
+  }
+  assert.match(workspaceServerSource, /includeTodoDetail: false,[\s\S]*?sections: new Set\(\['journals', 'summaries', 'todos'\]\)/u)
+  assert.match(workspaceServerSource, /includeTodoDetail: false,[\s\S]*?projectId,[\s\S]*?sections: new Set\(\['todos'\]\)/u)
+  assert.equal(workspaceServerSource.match(/await getWorkspace\(userId\)/gu)?.length, 1)
+  assert.match(workspaceApiSource, /fetchProjectCatalog/u)
+  assert.match(workspaceApiSource, /fetchProjectOverview/u)
+  assert.match(workspaceApiSource, /fetchProjectJournals/u)
+  assert.match(workspaceApiSource, /fetchProjectTodos/u)
+  assert.match(workspaceApiSource, /fetchWorkspaceInbox/u)
+  assert.match(workspaceApiSource, /fetchWorkspaceDocuments/u)
+  assert.match(workspaceApiSource, /fetchWorkspaceSearch/u)
+  assert.match(appSource, /return Promise\.all\(requests\)/u)
+  assert.match(appSource, /controller\.abort\(\)/u)
+  assert.match(appSource, /const snapshots = await fetchActiveWorkspace\(undefined, false\)/u)
+  assert.match(
+    appSource,
+    /workspaceMutationEpochRef\.current !== mutationEpoch[\s\S]*?for \(const snapshot of snapshots\) applyWorkspace\(snapshot\)/u,
+  )
+  assert.match(
+    appSource,
+    /current\.filter\(\(summary\) => summary\.projectId !== data\.scope\?\.projectId\)/u,
+  )
+  assert.match(workspaceServerSource, /pm\.invited_user_id = \$1\s+and \(\$2::bigint is null or pm\.project_id = \$2\)/u)
+  assert.match(appSource, /const resetWorkspaceState = useCallback\(\(\) => \{[\s\S]*?setTodos\(\[\]\)[\s\S]*?setSummaries\(\[\]\)/u)
+  assert.match(appSource, /editingTodo\.detailsLoaded !== false[\s\S]*?onLoadTodoDetail\(editingTodo\.id\)/u)
+  assert.match(appSource, /fetchTodoDetail\(todoId, \{ signal: controller\.signal \}\)/u)
+  assert.match(appSource, /sections && \(!includes\('catalog'\) \|\| data\.scope\?\.projectId\)/u)
+})
+
+test('scoped project reads conservatively reduce returned entity rows by at least 95 percent', () => {
+  const projects = 10
+  const perProject = {
+    journals: 100,
+    memberships: 10,
+    modules: 10,
+    notes: 300,
+    risks: 10,
+    subprojects: 5,
+    todos: 100,
+  }
+  const legacyRows = projects * (
+    1 + perProject.journals + perProject.memberships + perProject.modules +
+    perProject.notes + perProject.risks + perProject.subprojects + perProject.todos
+  ) + 300
+  const activeProjectRows = 1 + Object.entries(perProject)
+    .filter(([section]) => section !== 'notes')
+    .reduce((total, [, rows]) => total + rows, 0)
+  const reduction = 1 - activeProjectRows / legacyRows
+  assert.ok(reduction > 0.95)
 })

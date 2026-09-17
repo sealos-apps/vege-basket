@@ -23,7 +23,6 @@ import { MarkdownWysiwygEditor } from '@/components/markdown-wysiwyg-editor'
 import {
   parseTodoDeepLink,
   removeTodoDeepLink,
-  resolveTodoDeepLinkTarget,
   shouldDeferTodoDeepLinkForInvite,
 } from '@/todo-deep-link'
 import {
@@ -147,7 +146,16 @@ import {
   fetchPackageMarketRules,
   fetchProjectPackageItemDownloadUrl,
   fetchProjectPackageTimeline,
+  fetchProjectCatalog,
+  fetchProjectJournals,
+  fetchProjectOverview,
+  fetchProjectTodos,
+  fetchTodoDetail,
   fetchWorkspace,
+  fetchWorkspaceDocuments,
+  fetchWorkspaceInbox,
+  fetchWorkspaceOverview,
+  fetchWorkspaceSearch,
   fetchAiStatus,
   fetchAiConversations,
   fetchAiConversationTurns,
@@ -271,6 +279,7 @@ import {
 } from './components/project-package-workbench'
 import {
   startVisibleRefreshSchedule,
+  workspaceCatalogRefreshIntervalMs,
   workspaceRefreshIntervalMs,
 } from './refresh-schedule'
 import {
@@ -1732,6 +1741,19 @@ const initialSummaries: Summary[] = [
   },
 ]
 
+function todoDetailWorkspace(todo: Todo): WorkspaceData {
+  return {
+    departedUserIds: [],
+    inbox: [],
+    loadedSections: ['todos'],
+    memberships: [],
+    projects: [],
+    scope: { todoId: todo.id },
+    summaries: [],
+    todos: [todo],
+  }
+}
+
 function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme)
   const [loggedIn, setLoggedIn] = useState(Boolean(getAuthToken()))
@@ -2068,20 +2090,134 @@ function App() {
     }
   }, [canShowDeveloperAssignedBugs, loggedIn, selectedOrganizationId, updateAssignedBugCount])
 
+  const resetWorkspaceState = useCallback(() => {
+    setProjects([])
+    setTodos([])
+    setMemberships([])
+    setDepartedUserIds([])
+    setInbox([])
+    setSummaries([])
+    setProjectPackageTimelines({})
+    setSelectedProjectId(null)
+    setRequestedTodoDetailId(null)
+    setRequestedPackageEventId(null)
+  }, [])
+
   const applyWorkspace = useCallback((data: WorkspaceData) => {
-    setProjects(data.projects)
-    setTodos(data.todos)
-    setMemberships(data.memberships)
-    setDepartedUserIds(data.departedUserIds)
-    setInbox(data.inbox)
-    setSummaries(data.summaries)
+    const sections = data.loadedSections ? new Set(data.loadedSections) : null
+    const includes = (section: NonNullable<WorkspaceData['loadedSections']>[number]) => (
+      !sections || sections.has(section)
+    )
+
+    if (!sections || includes('catalog') || includes('overview') || includes('journals')) {
+      setProjects((current) => {
+        const currentById = new Map(current.map((project) => [project.id, project]))
+        const mergeProject = (project: Project) => {
+          const existing = currentById.get(project.id)
+          if (!existing) return project
+          return {
+            ...existing,
+            ...project,
+            journals: includes('journals') ? project.journals : existing.journals,
+            modules: includes('overview') ? project.modules : existing.modules,
+            risks: includes('journals') ? project.risks : existing.risks,
+            riskJournalEntryIds: includes('journals')
+              ? project.riskJournalEntryIds
+              : existing.riskJournalEntryIds,
+            subprojects: includes('overview') ? project.subprojects : existing.subprojects,
+          }
+        }
+        if (data.scope?.projectId) {
+          const next = data.projects[0]
+          return next
+            ? current.some((project) => project.id === next.id)
+              ? current.map((project) => project.id === next.id ? mergeProject(next) : project)
+              : [mergeProject(next), ...current]
+            : includes('catalog')
+              ? current.filter((project) => project.id !== data.scope?.projectId)
+              : current
+        }
+        return data.projects.map(mergeProject)
+      })
+    }
+
+    if (sections && includes('catalog')) {
+      const removedProjectId = data.scope?.projectId && data.projects.length === 0
+        ? data.scope.projectId
+        : null
+      const accessibleProjectIds = data.scope?.projectId == null
+        ? new Set(data.projects.map((project) => project.id))
+        : null
+      if (removedProjectId != null || accessibleProjectIds) {
+        const keepProjectId = (candidateProjectId: number | undefined) => (
+          candidateProjectId == null || (
+            removedProjectId != null
+              ? candidateProjectId !== removedProjectId
+              : accessibleProjectIds?.has(candidateProjectId) === true
+          )
+        )
+        setTodos((current) => current.filter((todo) => keepProjectId(todo.projectId)))
+        setMemberships((current) => current.filter((membership) => keepProjectId(membership.projectId)))
+        setSummaries((current) => current.filter((summary) => keepProjectId(summary.projectId)))
+      }
+    }
+
+    if (!sections || includes('todos')) {
+      setTodos((current) => {
+        const mergeTodo = (todo: Todo) => {
+          if (todo.detailsLoaded !== false) return todo
+          const existing = current.find((candidate) => candidate.id === todo.id)
+          return existing?.detailsLoaded
+            ? { ...todo, detail: existing.detail, detailsLoaded: true, notes: existing.notes }
+            : todo
+        }
+        if (data.scope?.todoId) {
+          const next = data.todos[0]
+          return next
+            ? current.some((todo) => todo.id === next.id)
+              ? current.map((todo) => todo.id === next.id ? mergeTodo(next) : todo)
+              : [mergeTodo(next), ...current]
+            : current.filter((todo) => todo.id !== data.scope?.todoId)
+        }
+        if (data.scope?.projectId) {
+          return [
+            ...current.filter((todo) => todo.projectId !== data.scope?.projectId),
+            ...data.todos.map(mergeTodo),
+          ]
+        }
+        return data.todos.map(mergeTodo)
+      })
+    }
+
+    if (!sections || includes('overview')) {
+      setMemberships((current) => data.scope?.projectId
+        ? [
+            ...current.filter((membership) => membership.projectId !== data.scope?.projectId),
+            ...data.memberships,
+          ]
+        : data.memberships)
+    }
+    if (!sections || includes('overview')) {
+      setDepartedUserIds(data.departedUserIds)
+    }
+    if (!sections || includes('inbox')) setInbox(data.inbox)
+    if (!sections || includes('summaries')) {
+      setSummaries((current) => data.scope?.projectId
+        ? [
+            ...current.filter((summary) => summary.projectId !== data.scope?.projectId),
+            ...data.summaries,
+          ]
+        : data.summaries)
+    }
     setProjectPackageTimelines((current) => {
+      if (sections && (!includes('catalog') || data.scope?.projectId)) return current
       const next: Record<number, ProjectPackageTimeline> = {}
       for (const project of data.projects) {
         if (current[project.id]) next[project.id] = current[project.id]
       }
       return next
     })
+    if (sections && !includes('catalog')) return
     setSelectedProjectId((current) => {
       const preferredProjectId = current ?? loadStoredSelectedProjectId()
       if (
@@ -2157,6 +2293,41 @@ function App() {
     return promise
   }, [])
 
+  const fetchActiveWorkspace = useCallback(async (
+    signal?: AbortSignal,
+    includeCatalog = true,
+  ) => {
+    const requestOptions = { signal }
+    const requests: Array<Promise<WorkspaceData>> = view === 'search'
+      ? [fetchWorkspaceSearch(requestOptions)]
+      : includeCatalog ? [fetchProjectCatalog(requestOptions)] : []
+
+    if (view === 'project' && selectedProjectId) {
+      requests.push(
+        fetchProjectOverview(selectedProjectId, requestOptions),
+        fetchProjectJournals(selectedProjectId, requestOptions),
+        fetchProjectTodos(selectedProjectId, requestOptions),
+      )
+      if (requestedTodoDetailId) {
+        requests.push(fetchTodoDetail(requestedTodoDetailId, requestOptions).then(({ todo }) => (
+          todoDetailWorkspace(todo)
+        )))
+      }
+    } else if (view === 'inbox') {
+      requests.push(
+        fetchWorkspaceOverview(requestOptions),
+        fetchWorkspaceInbox(requestOptions),
+      )
+    } else if (view === 'ai') {
+      requests.push(
+        fetchWorkspaceOverview(requestOptions),
+        fetchWorkspaceDocuments(requestOptions),
+      )
+    }
+
+    return Promise.all(requests)
+  }, [requestedTodoDetailId, selectedProjectId, view])
+
   const refreshWorkspace = useCallback(async () => {
     const existing = workspaceRefreshPromiseRef.current
     if (existing) return existing
@@ -2167,13 +2338,13 @@ function App() {
     const mutationEpoch = workspaceMutationEpochRef.current
     const promise = (async () => {
       try {
-        const data = await fetchWorkspace()
+        const snapshots = await fetchActiveWorkspace(undefined, false)
         if (
           authSessionGenerationRef.current !== sessionGeneration ||
           workspaceRefreshRequestIdRef.current !== requestId ||
           workspaceMutationEpochRef.current !== mutationEpoch
         ) return false
-        applyWorkspace(data)
+        for (const snapshot of snapshots) applyWorkspace(snapshot)
         return true
       } catch {
         // Background refresh is best-effort; the existing view remains usable.
@@ -2194,7 +2365,7 @@ function App() {
       },
     )
     return promise
-  }, [applyWorkspace])
+  }, [applyWorkspace, fetchActiveWorkspace])
 
   useEffect(() => {
     if (!loggedIn) return
@@ -2203,6 +2374,7 @@ function App() {
     fetchCurrentUser()
       .then((data) => {
         if (authSessionGenerationRef.current !== sessionGeneration) return
+        resetWorkspaceState()
         setAuthUser(data.user)
         if (
           selectRoleAfterSessionLoadRef.current &&
@@ -2221,6 +2393,7 @@ function App() {
         notificationRefreshPromiseRef.current = null
         workspaceRefreshPromiseRef.current = null
         clearAuthToken()
+        resetWorkspaceState()
         setLoggedIn(false)
         setWorkspaceError('')
         setAuthError('登录状态已失效，请重新登录。')
@@ -2228,7 +2401,7 @@ function App() {
       .finally(() => {
         if (authSessionGenerationRef.current === sessionGeneration) setWorkspaceLoaded(true)
       })
-  }, [applyWorkspace, loggedIn, refreshNotifications])
+  }, [applyWorkspace, loggedIn, refreshNotifications, resetWorkspaceState])
 
   useEffect(() => {
     if (!loggedIn || !authUserId) {
@@ -2462,10 +2635,33 @@ function App() {
   }, [loggedIn, refreshNotifications])
 
   useEffect(() => {
+    if (!loggedIn || !workspaceLoaded) return
+    const controller = new AbortController()
+    const sessionGeneration = authSessionGenerationRef.current
+    const mutationEpoch = workspaceMutationEpochRef.current
+    fetchActiveWorkspace(controller.signal, false)
+      .then((snapshots) => {
+        if (
+          controller.signal.aborted ||
+          authSessionGenerationRef.current !== sessionGeneration ||
+          workspaceMutationEpochRef.current !== mutationEpoch
+        ) return
+        for (const snapshot of snapshots) applyWorkspace(snapshot)
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return
+        setWorkspaceError(error instanceof Error && error.message
+          ? error.message
+          : '当前页面数据读取失败，请稍后重试。')
+      })
+    return () => controller.abort()
+  }, [applyWorkspace, fetchActiveWorkspace, loggedIn, workspaceLoaded])
+
+  useEffect(() => {
     if (!loggedIn) return
     return startVisibleRefreshSchedule({
       clearInterval: (handle) => window.clearInterval(handle),
-      intervalMs: workspaceRefreshIntervalMs,
+      intervalMs: workspaceCatalogRefreshIntervalMs,
       isVisible: () => document.visibilityState === 'visible',
       onFocus: (listener) => {
         window.addEventListener('focus', listener)
@@ -2502,6 +2698,39 @@ function App() {
       setInterval: (listener, delay) => window.setInterval(listener, delay),
     })
   }, [loggedIn, refreshWorkspace, workspacePollingActive])
+
+  useEffect(() => {
+    if (!loggedIn) return
+    return startVisibleRefreshSchedule({
+      clearInterval: (handle) => window.clearInterval(handle),
+      intervalMs: workspaceCatalogRefreshIntervalMs,
+      isVisible: () => document.visibilityState === 'visible',
+      onFocus: (listener) => {
+        window.addEventListener('focus', listener)
+        return () => window.removeEventListener('focus', listener)
+      },
+      onVisibilityChange: (listener) => {
+        document.addEventListener('visibilitychange', listener)
+        return () => document.removeEventListener('visibilitychange', listener)
+      },
+      refresh: async () => {
+        const sessionGeneration = authSessionGenerationRef.current
+        const mutationEpoch = workspaceMutationEpochRef.current
+        try {
+          const catalog = await fetchProjectCatalog()
+          if (
+            authSessionGenerationRef.current !== sessionGeneration ||
+            workspaceMutationEpochRef.current !== mutationEpoch
+          ) return false
+          applyWorkspace(catalog)
+          return true
+        } catch {
+          return false
+        }
+      },
+      setInterval: (listener, delay) => window.setInterval(listener, delay),
+    })
+  }, [applyWorkspace, loggedIn])
 
   const activePackageMarketOrganization = selectedOrganizationId == null
     ? null
@@ -2663,9 +2892,11 @@ function App() {
 
   useEffect(() => {
     if (view !== 'project' || requestedTodoDetailId == null) return
+    const requestedTodo = todos.find((todo) => todo.id === requestedTodoDetailId)
+    if (!requestedTodo || requestedTodo.detailsLoaded === false) return
     const frame = window.requestAnimationFrame(() => setRequestedTodoDetailId(null))
     return () => window.cancelAnimationFrame(frame)
-  }, [requestedTodoDetailId, view])
+  }, [requestedTodoDetailId, todos, view])
 
   useEffect(() => {
     if (
@@ -2840,38 +3071,50 @@ function App() {
       pendingTodoDeepLinkId == null
     ) return
 
-    const todo = resolveTodoDeepLinkTarget({
-      projectIds: projects.map((project) => project.id),
-      todoId: pendingTodoDeepLinkId,
-      todos,
-    })
-    setPendingTodoDeepLinkId(null)
-    clearTodoDeepLinkFromUrl()
-    if (!todo) {
-      setWorkspaceError('待办不存在或你无权访问')
-      return
-    }
+    const todoId = pendingTodoDeepLinkId
+    const sessionGeneration = authSessionGenerationRef.current
+    const controller = new AbortController()
+    void fetchTodoDetail(todoId, { signal: controller.signal })
+      .then(({ todo }) => {
+        if (controller.signal.aborted || authSessionGenerationRef.current !== sessionGeneration) return
+        applyWorkspace(todoDetailWorkspace(todo))
+        setPendingTodoDeepLinkId(null)
+        clearTodoDeepLinkFromUrl()
 
-    const targetProject = projects.find((project) => project.id === todo.projectId)
-    if (targetProject) {
-      const targetOrganizationId = targetProject.organizationId ?? null
-      if (
-        targetOrganizationId === null ||
-        organizations.some((organization) => organization.id === targetOrganizationId)
-      ) {
-        setSelectedOrganizationId(targetOrganizationId)
-        persistSelectedOrganizationId(authUser.id, targetOrganizationId)
-      }
-    }
+        const targetProject = projects.find((project) => project.id === todo.projectId)
+        if (targetProject) {
+          const targetOrganizationId = targetProject.organizationId ?? null
+          if (
+            targetOrganizationId === null ||
+            organizations.some((organization) => organization.id === targetOrganizationId)
+          ) {
+            setSelectedOrganizationId(targetOrganizationId)
+            persistSelectedOrganizationId(authUser.id, targetOrganizationId)
+          }
+        }
 
-    setDetailEntrySource('project')
-    setRequestedTodoDetailId(todo.id)
-    setRequestedPackageEventId(null)
-    setSelectedProjectId(todo.projectId)
-    setJournalDraft('')
-    setProjectDetailTab('journal')
-    setView('project')
+        setWorkspaceError('')
+        setDetailEntrySource('project')
+        setRequestedTodoDetailId(todo.id)
+        setRequestedPackageEventId(null)
+        setSelectedProjectId(todo.projectId)
+        setJournalDraft('')
+        setProjectDetailTab('journal')
+        setView('project')
+      })
+      .catch((error) => {
+        if (controller.signal.aborted || authSessionGenerationRef.current !== sessionGeneration) return
+        if (error instanceof ApiError && error.status === 404) {
+          setPendingTodoDeepLinkId(null)
+          clearTodoDeepLinkFromUrl()
+          setWorkspaceError('待办不存在或你无权访问')
+          return
+        }
+        setWorkspaceError('待办详情读取失败，请稍后重试。')
+      })
+    return () => controller.abort()
   }, [
+    applyWorkspace,
     authUser,
     inviteToken,
     loggedIn,
@@ -2880,7 +3123,6 @@ function App() {
     pendingTodoDeepLinkId,
     projects,
     settledInviteToken,
-    todos,
     workspaceLoaded,
   ])
 
@@ -3003,6 +3245,7 @@ function App() {
               organizationInviteToken: organizationInviteToken || undefined,
             })
       setAuthToken(result.token)
+      resetWorkspaceState()
       setAuthUser(result.user)
       setRoleSelectionOpen(getSelectableWorkspaceRoles(result.user.roles).length > 1)
       if (result.isNewUser) {
@@ -3074,6 +3317,7 @@ function App() {
     activeAiTurnRef.current = null
     deletingAiConversationIdsRef.current.clear()
     clearAuthToken()
+    resetWorkspaceState()
     setLoggedIn(false)
     setAuthUser(null)
     setAuthError('')
@@ -3205,6 +3449,7 @@ function App() {
     workspaceMutationEpochRef.current += 1
     try {
       const data = await operation()
+      workspaceMutationEpochRef.current += 1
       applyWorkspace(data)
       void refreshNotifications()
       setWorkspaceError('')
@@ -3226,6 +3471,7 @@ function App() {
     setWorkspaceError('')
     const data = await reconcileAction(operation, fetchWorkspace, matches)
     if (confirmationScopeRef.current !== scope) return false
+    workspaceMutationEpochRef.current += 1
     applyWorkspace(data)
     void refreshNotifications()
     return true
@@ -3660,6 +3906,23 @@ function App() {
     }
     return Boolean(await runMutation(() => updateTodo(todoId, payload)))
   }
+
+  const loadTodoDetails = useCallback(async (todoId: number) => {
+    const sessionGeneration = authSessionGenerationRef.current
+    try {
+      const { todo } = await fetchTodoDetail(todoId)
+      if (authSessionGenerationRef.current !== sessionGeneration) return null
+      applyWorkspace(todoDetailWorkspace(todo))
+      setWorkspaceError('')
+      return todo
+    } catch (error) {
+      if (authSessionGenerationRef.current !== sessionGeneration) return null
+      setWorkspaceError(error instanceof Error && error.message
+        ? error.message
+        : '待办详情读取失败，请稍后重试。')
+      return null
+    }
+  }, [applyWorkspace])
 
   async function addTodoNote(todoId: number, content: string) {
     await runMutation(() => createTodoNote(todoId, { content }))
@@ -5424,6 +5687,7 @@ ${packageTimelineText}`
             onDeleteTodo={deleteTodo}
             onCreateTodoNote={addTodoNote}
             onCreateTodoModule={createModule}
+            onLoadTodoDetail={loadTodoDetails}
             onUpdateTodo={updateTodoDetails}
             onUpdateTodoNote={editTodoNote}
             onTodoCreateDraftClear={clearTodoCreateDraftState}
@@ -6294,6 +6558,7 @@ function ProjectDetail({
   onCreateTodoNote,
   onCreateTodoModule,
   onDeleteTodo,
+  onLoadTodoDetail,
   onUpdateTodo,
   onUpdateTodoNote,
   onTodoCreateDraftClear,
@@ -6414,6 +6679,7 @@ function ProjectDetail({
   onCreateTodoNote: (todoId: number, content: string) => void
   onCreateTodoModule: (projectId: number, name: string) => Promise<ProjectModule | null>
   onDeleteTodo: (todoId: number) => Promise<boolean>
+  onLoadTodoDetail: (todoId: number) => Promise<Todo | null>
   onUpdateTodo: (id: number, payload: TodoUpdatePayload) => Promise<boolean>
   onUpdateTodoNote: (todoId: number, noteId: number, content: string) => void
   onTodoCreateDraftClear: (projectId?: number) => void
@@ -6922,6 +7188,7 @@ function ProjectDetail({
                   memberships={memberships}
                   onCreateTodoNote={canWriteProject ? onCreateTodoNote : undefined}
                   onDeleteTodo={canWriteProject || project.canManageOrganizationTodos ? onDeleteTodo : undefined}
+                  onLoadTodoDetail={onLoadTodoDetail}
                   onDetailModeChange={setIsProjectTodoDetailOpen}
                   onDetailBack={notificationDetailActive ? onReturnToNotifications : undefined}
                   onUpdateTodo={canWriteProject || project.canManageOrganizationTodos || project.canUpdateOrganizationTodoFields ? onUpdateTodo : undefined}
@@ -11864,6 +12131,7 @@ function TodoList({
   onDetailBack,
   onDeleteTodo,
   onDetailModeChange,
+  onLoadTodoDetail,
   onUpdateTodoNote,
   onUpdateTodo,
   memberships,
@@ -11882,6 +12150,7 @@ function TodoList({
   onDetailBack?: () => void
   onDeleteTodo?: (id: number) => Promise<boolean>
   onDetailModeChange?: (active: boolean) => void
+  onLoadTodoDetail?: (id: number) => Promise<Todo | null>
   onUpdateTodoNote?: (todoId: number, noteId: number, content: string) => void
   onUpdateTodo?: (id: number, payload: TodoUpdatePayload) => Promise<boolean>
   memberships: ProjectMembership[]
@@ -11917,6 +12186,10 @@ function TodoList({
     Boolean(storedTodoFilterPreference),
   )
   const [editingTodoId, setEditingTodoId] = useState<number | null>(initialTodo?.id ?? null)
+  const [loadingTodoDetailId, setLoadingTodoDetailId] = useState<number | null>(
+    initialTodo?.detailsLoaded === false ? initialTodo.id : null,
+  )
+  const todoDetailRequestIdRef = useRef(0)
   const [todoEditDraft, setTodoEditDraft] = useState(initialTodo?.title ?? '')
   const [todoEditDetail, setTodoEditDetail] = useState(initialTodo?.detail ?? '')
   const [todoEditCreatedAt, setTodoEditCreatedAt] = useState(initialTodo?.createdAt.slice(0, 10) ?? today)
@@ -12174,6 +12447,8 @@ function TodoList({
   }
 
   function closeEditDialog() {
+    todoDetailRequestIdRef.current += 1
+    setLoadingTodoDetailId(null)
     setEditingTodoId(null)
     setTodoEditDraft('')
     setTodoEditDetail('')
@@ -12201,10 +12476,42 @@ function TodoList({
 
   function openTodoEditDialog(todo: Todo) {
     setEditingTodoId(todo.id)
-    syncTodoEditState(todo)
+    if (todo.detailsLoaded === false) {
+      setLoadingTodoDetailId(todo.id)
+    } else {
+      syncTodoEditState(todo)
+      markTodoNotesRead(todo)
+    }
     setIsTodoDetailEditing(false)
-    markTodoNotesRead(todo)
   }
+
+  useEffect(() => {
+    if (
+      editingTodoId == null ||
+      !editingTodo ||
+      editingTodo.detailsLoaded !== false ||
+      !onLoadTodoDetail
+    ) return
+
+    const requestId = todoDetailRequestIdRef.current + 1
+    todoDetailRequestIdRef.current = requestId
+    setLoadingTodoDetailId(editingTodo.id)
+    void onLoadTodoDetail(editingTodo.id).then((todo) => {
+      if (todoDetailRequestIdRef.current !== requestId) return
+      if (todo) {
+        syncTodoEditState(todo)
+        markTodoNotesRead(todo)
+      } else {
+        setEditingTodoId(null)
+      }
+      setLoadingTodoDetailId(null)
+    })
+    return () => {
+      if (todoDetailRequestIdRef.current === requestId) {
+        todoDetailRequestIdRef.current += 1
+      }
+    }
+  }, [editingTodo, editingTodoId, markTodoNotesRead, onLoadTodoDetail])
 
   function cancelTodoEdit() {
     if (!editingTodo) return
@@ -12232,6 +12539,17 @@ function TodoList({
     })
     if (updated === false) return
     setIsTodoDetailEditing(false)
+  }
+
+  if (editingProject && editingTodo && loadingTodoDetailId === editingTodo.id) {
+    return (
+      <div
+        className={compact ? 'todo-list-shell compact todo-detail-shell' : 'todo-list-shell todo-detail-shell'}
+        ref={containerRef}
+      >
+        <div className="empty-state">正在加载待办详情...</div>
+      </div>
+    )
   }
 
   if (editingProject && editingTodo) {

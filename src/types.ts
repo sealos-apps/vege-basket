@@ -79,6 +79,7 @@ export type Todo = {
   offboardingTransferredFromName?: string
   title: string
   detail: string
+  detailsLoaded?: boolean
   dueDate: string
   priority: Priority
   done: boolean

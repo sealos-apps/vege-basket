@@ -1,5 +1,6 @@
 export const notificationRefreshIntervalMs = 15_000
-export const workspaceRefreshIntervalMs = 30_000
+export const workspaceRefreshIntervalMs = 15_000
+export const workspaceCatalogRefreshIntervalMs = 30_000
 
 const refreshFailureBackoffBaseMs = 1_000
 const refreshFailureBackoffMaxMs = 60_000

@@ -11,6 +11,7 @@ import {
 } from './notification-policy.ts'
 import {
   notificationRefreshIntervalMs,
+  workspaceCatalogRefreshIntervalMs,
   workspaceRefreshIntervalMs,
   startVisibleRefreshSchedule,
 } from '../src/refresh-schedule.ts'
@@ -816,9 +817,9 @@ test('coalesces focus and visibility refreshes fired by the same foreground tran
   stop()
 })
 
-test('keeps workspace polling scoped and separate from workbench invalidation', () => {
+test('refreshes only the active workspace scope and keeps catalog reconciliation separate', () => {
   assert.match(appSource, /const refreshWorkspace = useCallback\(async \(\) =>/u)
-  assert.match(appSource, /fetchWorkspace\(\)/u)
+  assert.match(appSource, /fetchActiveWorkspace\(undefined, false\)/u)
   assert.match(appSource, /intervalMs: workspaceRefreshIntervalMs/u)
   assert.match(appSource, /workspacePollingViews = new Set<View>\(\['project', 'inbox', 'search', 'ai'\]\)/u)
   assert.match(appSource, /const workspacePollingActive = workspacePollingViews\.has\(view\)/u)
@@ -830,6 +831,13 @@ test('keeps workspace polling scoped and separate from workbench invalidation', 
   assert.doesNotMatch(appSource, /\[loggedIn, view, workspaceLoaded, refreshWorkspace\]/u)
   assert.doesNotMatch(appSource, /workspaceRefreshVersion/u)
   assert.doesNotMatch(appSource, /refreshToken=/u)
+  assert.match(appSource, /intervalMs: workspaceCatalogRefreshIntervalMs/u)
+  assert.equal(workspaceRefreshIntervalMs, 15_000)
+  assert.equal(workspaceCatalogRefreshIntervalMs, 30_000)
+  assert.match(
+    appSource,
+    /const catalog = await fetchProjectCatalog\(\)[\s\S]*?workspaceMutationEpochRef\.current !== mutationEpoch[\s\S]*?applyWorkspace\(catalog\)/u,
+  )
 })
 
 test('keeps the application organization directory independently revalidated', () => {

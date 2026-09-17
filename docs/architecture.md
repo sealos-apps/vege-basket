@@ -152,6 +152,22 @@ sections for their active tab; omitting the section parameter preserves the comp
 response used by mutations and compatibility callers. Every section performs the same server-side
 authentication and resource authorization as the complete response.
 
+The application shell no longer uses the legacy complete workspace response for routine loading.
+Authentication returns only the project catalog. Catalog reconciliation runs every 30 seconds,
+while the visible view refreshes its PostgreSQL-backed data every 15 seconds and immediately on
+focus or navigation. Project overview, journals, todos, todo detail, drafts, AI documents, and
+cross-project search have separate authorized routes. Superseded navigation reads are aborted.
+Mutation responses use the narrowest matching read model; only the compatibility
+`GET /api/workspace` route may build the complete legacy response.
+
+For a conservative model of 10 projects with 100 todos, 300 notes, and 100 journals per project,
+the complete response visits about 5,660 entity rows. A current-project refresh visits about 236
+rows because Todo details and notes load only when opened, a 96% reduction in rows serialized and
+encrypted text decrypted. Common project metadata writes fall from 12 workspace queries to 2;
+todo writes fall to 3; document writes fall to 2.
+Actual latency remains data- and database-dependent, so these figures are planning estimates rather
+than production measurements.
+
 Test-workbench content sections are additionally scoped to the active test space. Case reads may
 narrow further to one subject, while Bug list reads omit comments, events, verification submissions,
 and large detail text until a single authorized Bug is selected. Notification rows carry bounded
