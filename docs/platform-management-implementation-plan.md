@@ -106,17 +106,17 @@
 | `server/platform-config-runtime.ts`（新增） | LISTEN、5 秒核对、单次操作快照、客户端生命周期和加载状态 |
 | `server/platform-admins.ts`（新增） | 数据库授权、builtin 保护、平台授权锁和聚合权限服务 |
 | `server/platform-organizations.ts`（新增） | 平台组织目录、创建/预检/删除、阻止项分类；复用现有组织领域校验 |
-| `server/platform-config-tests.ts`、`server/smtp.ts`（新增） | 候选配置测试编排和 SMTP 适配 |
+| `server/platform-config-tests.ts`（新增） | 候选配置测试编排和 Nodemailer SMTP 适配 |
 | `server/platform-config-cli.ts`、`server/platform-legacy-config.ts`（新增） | 明确子命令、一次性导入、只读核对及纯旧配置解析 |
 | `server/init-db.ts`、`server/encrypt-existing.ts` | 正式初始化只应用 schema/必要领域迁移；示例账号和项目移出到显式测试夹具，新增敏感列支持幂等加密 |
 | `server/index.ts`、`roles.ts`、`changelog.ts`、账户治理模块 | 鉴权入口和现有超管能力一起迁移 |
 | AI、OSS、GitHub、飞书、日报、组织邀请、周报等配置消费者 | 显式接收同一操作快照；清理业务 `process.env` 和模块级缓存 |
-| `src/components/platform-management/`（新增目录） | 页面框架、分区表单、用户/组织治理、凭据控件与状态；复用现有设计系统 |
+| `src/components/platform-management-workbench.tsx`、对应 CSS（新增） | 页面框架、分区表单、用户/组织治理、凭据控件与状态；复用现有设计系统 |
 | `src/App.tsx`、`src/api.ts`、`src/types.ts`、现有角色/组织组件 | 管理视图、协议、角色菜单、原入口迁移 |
 
 ## 5. 公共接口契约
 
-所有 `/api/admin/*` 每次验证有效会话、active 账户和数据库平台授权，不从客户端身份选择推断权限。以下路径是待实现契约；保留现有资源 API 的独立授权。
+所有 `/api/admin/*` 每次验证有效会话、active 账户和数据库平台授权，不从客户端身份选择推断权限。以下路径已按此契约实现；保留现有资源 API 的独立授权。
 
 | 接口 | 契约 |
 | --- | --- |
@@ -345,7 +345,7 @@ SMTP 只允许公网 TLS 服务，校验并固定解析地址，禁止 TLS 降�
 
 ## 12. 运维命令与迁移顺序
 
-以下命令已由 `server/platform-config-cli.ts` 实现；只读子命令不得导入自动执行 schema 的入口。
+以下命令统一由 `server/platform-config-cli.ts` 分发；初始化和迁移命令已实现，加密巡检命令保留为后续授权环境运维项。只读子命令不得导入自动执行 schema 的入口。
 
 | 命令 | 行为 |
 | --- | --- |
