@@ -1224,7 +1224,7 @@
 
 .test-verification-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 122px;
+  grid-template-columns: minmax(0, 1fr) 122px 180px;
   align-items: end;
   gap: 10px;
 }
@@ -1238,7 +1238,8 @@
   font-weight: 700;
 }
 
-.test-verification-arch {
+.test-verification-arch,
+.test-verification-branch {
   display: grid;
   min-width: 0;
   gap: 7px;
