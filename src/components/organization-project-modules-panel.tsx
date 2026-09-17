@@ -127,9 +127,9 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
                 </>
               )}
               <span className="organization-project-module-usage">{module.usageCount} 次</span>
-              <button type="button" role="switch" aria-checked={module.enabled} disabled={busy || (module.enabled && module.usageCount > 0)}
+              <button type="button" role="switch" aria-checked={module.enabled} disabled={busy}
                 aria-label={`${module.enabled ? '停用' : '启用'} ${module.name}`} className="organization-project-module-switch"
-                title={module.enabled && module.usageCount > 0 ? `已有 ${module.usageCount} 个任务使用，不能停用` : `${module.enabled ? '停用' : '启用'} ${module.name}`}
+                title={`${module.enabled ? '停用' : '启用'} ${module.name}`}
                 onClick={() => {
                   setEditingId(null); setError(''); setNotice('')
                   if (module.enabled) setPendingDisable(module)

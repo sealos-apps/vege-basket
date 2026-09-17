@@ -146,17 +146,24 @@ export async function updateOrganizationProjectModule(
   const module = existing.rows[0]
   if (!module) throw new ProjectModuleError('PROJECT_MODULE_NOT_FOUND', '项目模块不存在。', 404)
   if (input.enabled === false && module.enabled) {
-    const usage = await client.query<{ usage_count: number }>(
-      `select count(t.id)::int as usage_count
+    const usage = await client.query<{ project_name: string; todo_title: string; usage_count: number }>(
+      `select p.name as project_name, t.title as todo_title,
+              (count(*) over ())::int as usage_count
          from project_modules pm
          join projects p on p.id = pm.project_id and p.organization_id = $2::bigint
-         left join todos t on t.project_module_id = pm.id
-        where pm.organization_module_id = $1::bigint`, [moduleId, organizationId],
+         join todos t on t.project_module_id = pm.id
+        where pm.organization_module_id = $1::bigint
+        order by p.id, t.id
+        limit 5`, [moduleId, organizationId],
     )
     const usageCount = Number(usage.rows[0]?.usage_count ?? 0)
-    if (usageCount > 0) throw new ProjectModuleError(
-      'PROJECT_MODULE_IN_USE', `模块仍被 ${usageCount} 个任务使用，无法停用。请先调整任务归属。`,
-    )
+    if (usageCount > 0) {
+      const samples = usage.rows.map(row => `项目「${decryptText(row.project_name)}」的待办「${decryptText(row.todo_title)}」`)
+      throw new ProjectModuleError(
+        'PROJECT_MODULE_IN_USE',
+        `模块仍被 ${usageCount} 个待办引用，无法停用。引用示例（最多 5 条）：${samples.join('；')}。请先调整待办归属。`,
+      )
+    }
   }
   const lookup = input.name === undefined ? module.name_lookup : projectModuleNameLookup(input.name, await lookupKeyId(client))
   if (lookup !== module.name_lookup) {
