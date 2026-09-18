@@ -186,7 +186,10 @@ diagnostics contain only duration and aggregate connection counts, never SQL tex
 ## Request And Authorization Path
 
 Legacy password sign-in or Feishu sign-in creates a random session token stored in `sessions`
-for 30 days. Only successful Feishu OAuth may create a new ordinary account. Protected endpoints accept `Authorization: Bearer <token>`. Project-scoped routes
+for 30 days. Only successful Feishu OAuth may create a new ordinary account. Feishu returns the
+authorization result to the immutable instance callback; after processing it, the API redirects
+the browser to the configured platform public origin and its validated original application path.
+Protected endpoints accept `Authorization: Bearer <token>`. Project-scoped routes
 must resolve `getProjectAccess(projectId, userId)` before reading or mutating nested IDs;
 owner-only actions add an explicit role check.
 

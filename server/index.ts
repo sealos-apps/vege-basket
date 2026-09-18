@@ -203,6 +203,10 @@ import type { UserAccountStatus } from '../shared/user-lifecycle.ts'
 import { getDepartedUserIds } from './user-lifecycle.ts'
 import { isPlatformAdmin } from './platform-admins.ts'
 import {
+  buildFeishuOAuthBindRedirect,
+  buildFeishuOAuthSigninRedirect,
+} from './feishu-oauth-redirect.ts'
+import {
   platformAiEnvironment,
   platformFeishuConfig,
   platformPublicUrl,
@@ -1058,27 +1062,6 @@ function verifyFeishuOAuthState(value: unknown): FeishuOAuthState | null {
   } catch {
     return null
   }
-}
-
-function buildFeishuOAuthRedirect(returnTo: string, status: 'success' | 'error', message?: string) {
-  const target = new URL(returnTo, 'http://veges.local')
-  target.searchParams.set('feishuBind', status)
-  if (message) target.searchParams.set('feishuBindMessage', message.slice(0, 120))
-  return `${target.pathname}${target.search}${target.hash}`
-}
-
-function buildFeishuOAuthSigninRedirect(
-  returnTo: string,
-  status: 'success' | 'error',
-  options: { message?: string; token?: string } = {},
-) {
-  const target = new URL(returnTo, 'http://veges.local')
-  const fragment = new URLSearchParams()
-  fragment.set('feishuAuth', status)
-  if (options.token) fragment.set('token', options.token)
-  if (options.message) fragment.set('feishuAuthMessage', options.message.slice(0, 120))
-  target.hash = fragment.toString()
-  return `${target.pathname}${target.search}${target.hash}`
 }
 
 function extractTextFromUnknown(value: unknown): string {
@@ -4977,7 +4960,7 @@ app.post('/api/auth/feishu/oauth/url', asyncHandler(async (request, response) =>
 app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response) => {
   const state = verifyFeishuOAuthState(request.query.state)
   if (!state) {
-    response.redirect(buildFeishuOAuthSigninRedirect('/', 'error', {
+    response.redirect(buildFeishuOAuthSigninRedirect(platformPublicUrl(), '/', 'error', {
       message: '飞书授权已失效，请重新操作。',
     }))
     return
@@ -4988,8 +4971,8 @@ app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response
     const message = '飞书没有返回授权码。'
     response.redirect(
       state.intent === 'bind'
-        ? buildFeishuOAuthRedirect(state.returnTo, 'error', message)
-        : buildFeishuOAuthSigninRedirect(state.returnTo, 'error', { message }),
+        ? buildFeishuOAuthBindRedirect(platformPublicUrl(), state.returnTo, 'error', message)
+        : buildFeishuOAuthSigninRedirect(platformPublicUrl(), state.returnTo, 'error', { message }),
     )
     return
   }
@@ -5016,7 +4999,7 @@ app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response
         `,
         [feishuUser.email, feishuUser.openId, state.userId, feishuUser.name],
       )
-      response.redirect(buildFeishuOAuthRedirect(state.returnTo, 'success'))
+      response.redirect(buildFeishuOAuthBindRedirect(platformPublicUrl(), state.returnTo, 'success'))
       return
     }
 
@@ -5027,15 +5010,15 @@ app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response
       state.organizationInviteToken,
     )
     const token = await createSession(Number(user.id))
-    response.redirect(buildFeishuOAuthSigninRedirect(state.returnTo, 'success', { token }))
+    response.redirect(buildFeishuOAuthSigninRedirect(platformPublicUrl(), state.returnTo, 'success', { token }))
   } catch (error) {
     const message = error instanceof Error && error.message
       ? `飞书绑定失败：${error.message}`
       : '飞书绑定失败，请稍后重试。'
     response.redirect(
       state.intent === 'bind'
-        ? buildFeishuOAuthRedirect(state.returnTo, 'error', message)
-        : buildFeishuOAuthSigninRedirect(state.returnTo, 'error', {
+        ? buildFeishuOAuthBindRedirect(platformPublicUrl(), state.returnTo, 'error', message)
+        : buildFeishuOAuthSigninRedirect(platformPublicUrl(), state.returnTo, 'error', {
             message: message.replace('飞书绑定失败', '飞书登录失败'),
           }),
     )

@@ -866,7 +866,7 @@ export function PlatformManagementWorkbench({
 
           {tab === 'general' ? <div className="platform-form-grid">
             <Field label="平台名称"><Input value={draft.general.displayName} onChange={(event) => updateSection('general', { displayName: event.target.value })} /></Field>
-            <Field label="公网地址" hint="用于生成站内链接"><Input placeholder="https://veges.example.com" value={draft.general.publicUrl} onChange={(event) => updateSection('general', { publicUrl: event.target.value })} /></Field>
+            <Field label="公网地址" hint="用于登录完成后的回跳和生成站内链接"><Input placeholder="https://veges.example.com" value={draft.general.publicUrl} onChange={(event) => updateSection('general', { publicUrl: event.target.value })} /></Field>
           </div> : null}
 
           {tab === 'ai' ? <div className="platform-form-grid">

@@ -456,6 +456,9 @@ encrypted record, and the workflow that triggered rollback.
   or loopback local development; invalid values intentionally fall back to plain titles.
 - Feishu callback returns 401: verify the saved verification token matches the Feishu application;
   challenge payloads are authenticated too.
+- Feishu sign-in finishes on the callback host: verify the platform public URL is configured as
+  the intended browser origin. The fixed OAuth callback remains registered with Feishu, while the
+  completed sign-in redirects from that callback to the platform public URL.
 - Unexpected users can complete Feishu OAuth: narrow the company custom application's
   availability scope before re-enabling sign-in; Veges does not maintain a second tenant
   or email-domain allowlist.

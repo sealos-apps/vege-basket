@@ -140,6 +140,11 @@ expose `subprojectName`. Name encryption reuses the retained lookup key in
 Protected JSON endpoints use `Authorization: Bearer <session-token>`. The primary route
 families are:
 
+Feishu always sends OAuth results to the fixed callback URL. After the callback is processed,
+sign-in and account binding return to the configured platform public address while preserving the
+validated in-app path. If no public address is configured, the callback retains the relative-path
+compatibility behavior.
+
 | Family | Routes |
 | --- | --- |
 | Health | `GET /api/health` (public) |
