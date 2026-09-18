@@ -2,7 +2,11 @@ import type { PoolClient } from 'pg'
 import { blindIndex, decryptText, encryptText } from './crypto.ts'
 import { pool, query } from './db.ts'
 import { normalizeOrganizationName } from './organization-policy.ts'
-import { lockPlatformAdministration, requirePlatformAdminWithClient } from './platform-admins.ts'
+import {
+  hasVerifiedFeishuIdentity,
+  lockPlatformAdministration,
+  requirePlatformAdminWithClient,
+} from './platform-admins.ts'
 import { platformMutationDigest } from './platform-config-store.ts'
 import {
   lockOrganizationModuleCatalog,
@@ -192,15 +196,19 @@ export async function createPlatformOrganization(input: {
       feishu_identity_verified_at: Date | null
       feishu_user_id: string
       is_builtin_admin: boolean
+      registration_source: 'builtin' | 'feishu' | 'legacy_unknown'
     }>(
-      `select account_status, feishu_user_id, feishu_identity_verified_at, is_builtin_admin
+      `select account_status, feishu_user_id, feishu_identity_verified_at, is_builtin_admin, registration_source
          from users where id = $1 for update`,
       [input.ownerUserId],
     )
     const ownerRow = owner.rows[0]
-    if (!ownerRow || ownerRow.account_status !== 'active' || (!ownerRow.is_builtin_admin && (
-      !ownerRow.feishu_identity_verified_at || !ownerRow.feishu_user_id.startsWith('ou_')
-    ))) throw new PlatformOrganizationError('ORGANIZATION_OWNER_INELIGIBLE', '所有者必须是有效的飞书用户或内置 admin。')
+    if (!ownerRow || ownerRow.account_status !== 'active' || (!ownerRow.is_builtin_admin &&
+      !hasVerifiedFeishuIdentity({
+        feishuUserId: ownerRow.feishu_user_id,
+        registrationSource: ownerRow.registration_source,
+        verifiedAt: ownerRow.feishu_identity_verified_at,
+      }))) throw new PlatformOrganizationError('ORGANIZATION_OWNER_INELIGIBLE', '所有者必须是有效的飞书用户或内置 admin。')
     const created = await client.query<{ id: string }>(
       `insert into organizations (owner_user_id, name, name_lookup, created_by_user_id)
        values ($1, $2, $3, $4) returning id`,

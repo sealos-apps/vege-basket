@@ -73,6 +73,7 @@ test('masked config never serializes secret values', () => {
   assert.equal('oauthStateSecret' in masked.feishu, false)
   assert.equal('aiChatEnabled' in masked.feishu, false)
   assert.equal('legacyMiddlewareRoots' in masked.packages, false)
+  assert.equal('enabled' in masked.github, false)
   assert.equal(serialized.includes('ai-secret'), false)
   assert.equal(serialized.includes('hidden-state-secret'), false)
 })
@@ -128,8 +129,10 @@ test('section updates keep, replace, and clear secrets explicitly', () => {
   })
   assert.equal(revealPlatformSecret(replaced, 'github.token'), 'new-token')
 
+  const cleared = mergePlatformConfigSection(replaced, 'github', {}, { token: { action: 'clear' } })
+  assert.equal(cleared.github.token, '')
   assert.throws(
-    () => mergePlatformConfigSection(replaced, 'github', {}, { token: { action: 'clear' } }),
+    () => mergePlatformConfigSection(cleared, 'github', { enabled: false }, {}),
     PlatformConfigValidationError,
   )
 })

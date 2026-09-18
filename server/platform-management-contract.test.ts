@@ -65,6 +65,12 @@ test('platform user controls protect the builtin administrator', () => {
   assert.doesNotMatch(workbenchSource, /返回工作台/u)
 })
 
+test('platform administrator candidates come from the server eligibility policy', () => {
+  assert.match(workbenchSource, /users\.filter\(\(user\) => user\.platformAdminEligible\)/u)
+  assert.match(workbenchSource, /历史飞书账号会按已有 Open ID 识别/u)
+  assert.match(apiSource, /platformAdminEligible: boolean/u)
+})
+
 test('account disabling reports the canonical mutation result to the confirmation dialog', () => {
   assert.match(workbenchSource, /const result = await updateManagedUserStatus\(user, status\)/u)
   assert.match(workbenchSource, /accountStatus: result\.accountStatus/u)
@@ -104,6 +110,11 @@ test('platform configuration history exposes safe change and restore previews', 
   assert.match(workbenchSource, /当前配置没有变化，未生成新版本/u)
   assert.match(workbenchSource, />还原<\/Button>/u)
   assert.doesNotMatch(workbenchSource, /撤销修改/u)
+})
+
+test('GitHub Actions configuration has no enable switch', () => {
+  assert.doesNotMatch(workbenchSource, /启用 GitHub Actions/u)
+  assert.doesNotMatch(workbenchSource, /draft\.github\.enabled/u)
 })
 
 test('platform secrets use the prototype replacement dialog contract', () => {

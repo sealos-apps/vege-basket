@@ -249,6 +249,12 @@ projects and todos and may update only a todo's due date, priority, module, assi
 or reviewer. This does not make the project writable and does not grant access to unscoped
 projects or other todo fields.
 
+Managed platform-administrator grants accept active users with a verified Feishu identity. For
+accounts created before registration provenance was recorded, an existing canonical `ou_` Open ID
+is retained as compatible verification evidence; newer Feishu accounts require the OAuth
+verification timestamp. The server returns grant eligibility so the browser does not duplicate
+this policy.
+
 The update log is a global authenticated read surface. Its create and update routes require
 the database-backed platform administrator check; an
 `organization_admin` role does not grant global update-log write access.

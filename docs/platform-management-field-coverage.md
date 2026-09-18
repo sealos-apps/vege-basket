@@ -48,7 +48,7 @@
 | 30 | PACKAGE_MARKET_BASE_OBJECT_TEMPLATE | 是 | 无独立输入 | 移除输入；旧路径/历史下载所需模板存后台兼容快照，不判定为死代码 |
 | 31 | PACKAGE_MARKET_BASE_LIST_PREFIX_TEMPLATE | 是 | 无独立输入 | 移除输入；旧列表和授权语义存后台兼容快照，不静默改变目录结构 |
 | 32 | PACKAGE_MARKET_DOWNLOAD_EXPIRE_SECONDS | 否 | 包市场 / 默认下载签名有效期 | 补齐精确字段，不与 GitHub 产物时长合并 |
-| 33 | GITHUB_ACTIONS_TOKEN | 是 | GitHub / 访问令牌 | 迁移；新增可编辑仓库地址、工作流文件、分支，逐项可用性检查 |
+| 33 | GITHUB_ACTIONS_TOKEN | 是 | GitHub / 访问令牌 | 迁移；新增可编辑仓库地址、工作流文件、分支，逐项可用性检查；不提供启停开关，是否可用由完整配置和测试结果决定 |
 | 34 | IMAGE_SYNC_DOWNLOAD_EXPIRE_SECONDS | 否 | GitHub / 镜像同步产物下载签名有效期 | 补齐精确字段，与包市场默认时长独立 |
 
 所有配置具有明确去向：可见项有页面操作，隐藏项保留后台且不被页面保存覆盖，兼容项保留必要迁移和历史读取。普通用户永远不能获得凭据；私有配置不能通过平台信息公共接口泄露。页面优先中文，保留品牌、URL、模型标识、文件名和规则键原文。

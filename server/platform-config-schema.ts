@@ -80,7 +80,7 @@ export type MaskedPlatformConfig = Omit<PlatformConfig, 'ai' | 'email' | 'feishu
     appSecret: ConfiguredSecret
     verificationToken: ConfiguredSecret
   }
-  github: Omit<PlatformConfig['github'], 'token'> & { token: ConfiguredSecret }
+  github: Omit<PlatformConfig['github'], 'enabled' | 'token'> & { token: ConfiguredSecret }
   packages: Pick<PlatformConfig['packages'], 'downloadExpireSeconds' | 'rulesYaml'>
   storage: Omit<PlatformConfig['storage'], 'accessKeyId' | 'accessKeySecret' | 'urlSecret'> & {
     accessKeyId: ConfiguredSecret
@@ -96,7 +96,7 @@ const editableSectionFields: Record<PlatformConfigSection, readonly string[]> = 
   storage: ['endpoint', 'bucket', 'uploadMaxBytes', 'objectPrefix'],
   packages: ['downloadExpireSeconds', 'rulesYaml'],
   feishu: ['appId', 'deliveryEnabled'],
-  github: ['enabled', 'repositoryUrl', 'workflowFile', 'branch', 'downloadExpireSeconds'],
+  github: ['repositoryUrl', 'workflowFile', 'branch', 'downloadExpireSeconds'],
 }
 
 export const corruptedOAuthStateSecret = '[object Object]'
@@ -358,7 +358,6 @@ export function parsePlatformConfig(value: unknown): PlatformConfig {
   const github = objectValue(root.github, 'github', issues)
   strictKeys(github, ['enabled', 'token', 'repositoryUrl', 'workflowFile', 'branch', 'downloadExpireSeconds'], 'github', issues)
   const githubEnabled = booleanValue(github.enabled, 'github.enabled', issues)
-  if (githubEnabled && !stringValue(github.token)) issues.push('启用 GitHub 集成时必须配置访问令牌。')
 
   const config: PlatformConfig = {
     schemaVersion: platformConfigSchemaVersion,
@@ -444,7 +443,13 @@ export function maskPlatformConfig(config: PlatformConfig): MaskedPlatformConfig
       deliveryEnabled: config.feishu.deliveryEnabled,
       verificationToken: secretState(config.feishu.verificationToken),
     },
-    github: { ...config.github, token: secretState(config.github.token) },
+    github: {
+      branch: config.github.branch,
+      downloadExpireSeconds: config.github.downloadExpireSeconds,
+      repositoryUrl: config.github.repositoryUrl,
+      token: secretState(config.github.token),
+      workflowFile: config.github.workflowFile,
+    },
     packages: {
       downloadExpireSeconds: config.packages.downloadExpireSeconds,
       rulesYaml: config.packages.rulesYaml,

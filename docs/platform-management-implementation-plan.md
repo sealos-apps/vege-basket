@@ -94,7 +94,7 @@
 
 在 `project_package_items` 和 `test_bug_verification_packages` 增加 `source_config_revision` 外键，记录下载授权的规则版本；新写入由服务端验证选包后赋值，不接受客户端可信版本。旧行按初次导入的有效规则验证并回填，无法匹配的行在报告中逐项列出，禁止猜测。GitHub 运行表同样记录规范化目标与创建时配置版本。组织级规则 ID 引用在全局规则修改时一起检查，不能因删除规则静默扩大组织可见范围。
 
-`users` 增加 `is_builtin_admin`、`registration_source`（builtin/feishu/legacy_unknown）及历史用户飞书身份核实时间。新注册来源由服务器创建路径写入。旧账号仅有绑定 ID 不足以证明最初注册来源，保持 legacy_unknown；其后成功完成官方飞书 OAuth、校验绑定唯一性和 active 状态，可标记身份已核实并纳入现有飞书用户选择器，不伪造原始注册来源。已有 env 导入授权保留，即使来源尚未核实；撤销后重新授予必须满足当前资格。
+`users` 增加 `is_builtin_admin`、`registration_source`（builtin/feishu/legacy_unknown）及历史用户飞书身份核实时间。新注册来源由服务器创建路径写入。迁移前已经保存合法 `ou_` Open ID 的 legacy_unknown 账号视为既有飞书绑定，可纳入现有飞书用户选择器，但不伪造原始注册来源；新来源账号仍必须成功完成官方飞书 OAuth、校验绑定唯一性和 active 状态，并写入身份核实时间。已有 env 导入授权继续保留，重新授予必须满足同一资格规则。
 
 内置用户 CHECK 约束 active 状态、规范化登录名 admin 和非空密码哈希，部分唯一索引保证唯一。触发器禁止取消 builtin 标记、改登录名、禁用/离职、删除用户或删除 builtin 授权；延迟约束确保用户与授权一致。初始化完成后服务就绪检查必须发现该账号与授权，不自动补写掩盖损坏。数据库约束保护普通 DML，不承诺防止数据库所有者删除约束。
 

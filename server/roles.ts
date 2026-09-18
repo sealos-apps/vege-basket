@@ -6,7 +6,12 @@ import {
   updateManagedAccountStatus,
 } from './account-offboarding.ts'
 import { query } from './db.ts'
-import { isPlatformAdmin, PlatformAdminError, updateManagedUserPermissions } from './platform-admins.ts'
+import {
+  hasVerifiedFeishuIdentity,
+  isPlatformAdmin,
+  PlatformAdminError,
+  updateManagedUserPermissions,
+} from './platform-admins.ts'
 import type { UserAccountStatus } from '../shared/user-lifecycle.ts'
 
 export const userRoles = ['developer', 'tester', 'organization_admin'] as const
@@ -215,6 +220,7 @@ roleRouter.get('/admin/users', async (request, response, next) => {
       id: string
       account_status: UserAccountStatus
       feishu_identity_verified_at: Date | null
+      feishu_user_id: string
       grant_kind: 'builtin' | 'managed' | null
       is_builtin_admin: boolean
       permission_version: string
@@ -223,7 +229,7 @@ roleRouter.get('/admin/users', async (request, response, next) => {
     }>(
       `
       select u.id, u.email, u.display_name, u.account_status,
-        u.is_builtin_admin, u.registration_source, u.feishu_identity_verified_at,
+        u.is_builtin_admin, u.registration_source, u.feishu_identity_verified_at, u.feishu_user_id,
         grant_row.grant_kind, coalesce(version.revision, 0)::text as permission_version,
         coalesce(array_agg(ur.role order by ur.role) filter (where ur.role is not null), '{}') as roles
       from users u
@@ -235,19 +241,28 @@ roleRouter.get('/admin/users', async (request, response, next) => {
       `,
     )
     response.json({
-      users: result.rows.map((row) => ({
-        displayName: row.display_name || row.email,
-        id: Number(row.id),
-        accountStatus: row.account_status,
-        feishuIdentityVerified: Boolean(row.feishu_identity_verified_at),
-        isBuiltinAdmin: row.is_builtin_admin,
-        permissionVersion: Number(row.permission_version),
-        platformAdmin: Boolean(row.grant_kind),
-        platformAdminKind: row.grant_kind,
-        registrationSource: row.registration_source,
-        roles: row.roles,
-        username: row.email,
-      })),
+      users: result.rows.map((row) => {
+        const feishuIdentityVerified = hasVerifiedFeishuIdentity({
+          feishuUserId: row.feishu_user_id,
+          registrationSource: row.registration_source,
+          verifiedAt: row.feishu_identity_verified_at,
+        })
+        return {
+          displayName: row.display_name || row.email,
+          id: Number(row.id),
+          accountStatus: row.account_status,
+          feishuIdentityVerified,
+          isBuiltinAdmin: row.is_builtin_admin,
+          permissionVersion: Number(row.permission_version),
+          platformAdmin: Boolean(row.grant_kind),
+          platformAdminEligible: row.account_status === 'active' && !row.grant_kind &&
+            (row.is_builtin_admin || feishuIdentityVerified),
+          platformAdminKind: row.grant_kind,
+          registrationSource: row.registration_source,
+          roles: row.roles,
+          username: row.email,
+        }
+      }),
     })
   } catch (error) {
     next(error)

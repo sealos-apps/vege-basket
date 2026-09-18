@@ -3,8 +3,18 @@ import { pool, query } from './db.ts'
 import { encryptText, keyedDigest } from './crypto.ts'
 
 type AssignableRole = 'developer' | 'tester' | 'organization_admin'
+type RegistrationSource = 'builtin' | 'feishu' | 'legacy_unknown'
 
 export const platformAdministrationLockKey = 'veges:platform-administration'
+
+export function hasVerifiedFeishuIdentity(input: {
+  feishuUserId: string
+  registrationSource: RegistrationSource
+  verifiedAt: Date | null
+}) {
+  if (!input.feishuUserId.startsWith('ou_')) return false
+  return Boolean(input.verifiedAt) || input.registrationSource === 'legacy_unknown'
+}
 
 export class PlatformAdminError extends Error {
   readonly code: string
@@ -127,10 +137,11 @@ export async function setManagedPlatformAdmin(input: {
       feishu_identity_verified_at: Date | null
       feishu_user_id: string
       is_builtin_admin: boolean
+      registration_source: RegistrationSource
       revision: string
     }>(
       `select users.account_status, users.feishu_user_id,
-              users.feishu_identity_verified_at, users.is_builtin_admin,
+              users.feishu_identity_verified_at, users.is_builtin_admin, users.registration_source,
               coalesce(version.revision, 0)::text as revision
          from users
          left join platform_user_permission_versions version on version.user_id = users.id
@@ -147,7 +158,11 @@ export async function setManagedPlatformAdmin(input: {
       throw new PlatformAdminError('BUILTIN_ADMIN_PROTECTED', '内置 admin 的超级管理员权限不可移除。')
     }
     if (input.enabled && !row.is_builtin_admin && (
-      row.account_status !== 'active' || !row.feishu_identity_verified_at || !row.feishu_user_id.startsWith('ou_')
+      row.account_status !== 'active' || !hasVerifiedFeishuIdentity({
+        feishuUserId: row.feishu_user_id,
+        registrationSource: row.registration_source,
+        verifiedAt: row.feishu_identity_verified_at,
+      })
     )) {
       throw new PlatformAdminError('PLATFORM_ADMIN_TARGET_INELIGIBLE', '只能授权已核实飞书身份的有效用户。')
     }
@@ -257,10 +272,11 @@ export async function updateManagedUserPermissions(input: {
       feishu_user_id: string
       grant_kind: 'builtin' | 'managed' | null
       is_builtin_admin: boolean
+      registration_source: RegistrationSource
       revision: string
     }>(
       `select users.account_status, users.feishu_user_id,
-              users.feishu_identity_verified_at, users.is_builtin_admin,
+              users.feishu_identity_verified_at, users.is_builtin_admin, users.registration_source,
               grant_row.grant_kind, coalesce(version.revision, 0)::text as revision
          from users
          left join platform_admin_grants grant_row on grant_row.user_id = users.id
@@ -277,7 +293,11 @@ export async function updateManagedUserPermissions(input: {
       throw new PlatformAdminError('BUILTIN_ADMIN_PROTECTED', '内置 admin 的超级管理员权限不可移除。')
     }
     if (input.platformAdmin && !row.is_builtin_admin && (
-      row.account_status !== 'active' || !row.feishu_identity_verified_at || !row.feishu_user_id.startsWith('ou_')
+      row.account_status !== 'active' || !hasVerifiedFeishuIdentity({
+        feishuUserId: row.feishu_user_id,
+        registrationSource: row.registration_source,
+        verifiedAt: row.feishu_identity_verified_at,
+      })
     )) {
       throw new PlatformAdminError('PLATFORM_ADMIN_TARGET_INELIGIBLE', '只能授权已核实飞书身份的有效用户。')
     }

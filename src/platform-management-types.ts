@@ -57,7 +57,6 @@ export type PlatformConfig = {
     deliveryEnabled: boolean
   }
   github: {
-    enabled: boolean
     token: SecretState
     repositoryUrl: string
     workflowFile: string

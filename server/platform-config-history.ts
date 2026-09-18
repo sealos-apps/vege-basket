@@ -85,7 +85,6 @@ const fields: FieldDefinition[] = [
   { section: 'feishu', field: 'appSecret', label: 'App Secret', kind: 'secret' },
   { section: 'feishu', field: 'verificationToken', label: '验证令牌', kind: 'secret' },
   { section: 'feishu', field: 'deliveryEnabled', label: '启用业务通知', format: enabled },
-  { section: 'github', field: 'enabled', label: '启用 GitHub Actions', format: enabled },
   { section: 'github', field: 'repositoryUrl', label: '仓库地址' },
   { section: 'github', field: 'workflowFile', label: '工作流文件' },
   { section: 'github', field: 'branch', label: '默认分支' },
@@ -99,6 +98,7 @@ const hiddenFields = [
   'packages.legacyBaseListPrefixTemplate',
   'feishu.aiChatEnabled',
   'feishu.oauthStateSecret',
+  'github.enabled',
 ] as const
 
 function rawValue(config: PlatformConfig, section: PlatformConfigSection, field: string) {

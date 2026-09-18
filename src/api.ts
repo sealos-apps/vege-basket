@@ -157,6 +157,7 @@ export type ManagedUser = {
   isBuiltinAdmin: boolean
   permissionVersion: number
   platformAdmin: boolean
+  platformAdminEligible: boolean
   platformAdminKind: 'builtin' | 'managed' | null
   registrationSource: 'builtin' | 'feishu' | 'legacy_unknown'
   roles: UserRole[]
