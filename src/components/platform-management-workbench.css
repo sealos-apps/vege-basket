@@ -43,8 +43,14 @@
 .platform-subtab-action { margin-left: auto; color: var(--strong) !important; background: var(--surface) !important; border: 1px solid var(--line) !important; }
 .platform-toggle { display: flex; min-height: 56px; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--border); font-size: .84rem; font-weight: 600; }
 .platform-always-on { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; border-left: 3px solid var(--platform-accent); padding: 9px 12px; background: color-mix(in srgb, var(--platform-accent) 8%, var(--background)); color: var(--platform-accent); font-size: .84rem; font-weight: 650; }
-.platform-secret-input,
-.platform-copy-field { display: grid; grid-template-columns: minmax(0, 1fr) 32px 32px; align-items: center; gap: 3px; }
+.platform-secret-locked,
+.platform-secret-entry,
+.platform-copy-field { display: grid; align-items: center; gap: 4px; }
+.platform-secret-locked { grid-template-columns: minmax(0, 1fr) 32px auto 32px; }
+.platform-secret-cleared { grid-template-columns: minmax(0, 1fr) auto; }
+.platform-secret-editor { display: grid; gap: 5px; min-width: 0; }
+.platform-secret-entry { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px auto; }
+.platform-secret-error { color: var(--destructive) !important; }
 .platform-copy-field { grid-template-columns: minmax(0, 1fr) 32px; }
 .platform-rules-editor { min-height: 360px; resize: vertical; font-family: var(--font-mono, monospace); font-size: .8rem; line-height: 1.55; }
 
@@ -108,6 +114,8 @@
 
 @media (max-width: 620px) {
   .platform-form-grid { grid-template-columns: 1fr; }
+  .platform-secret-entry { grid-template-columns: minmax(0, 1fr) 32px auto; }
+  .platform-secret-entry > input:first-child { grid-column: 1 / -1; }
   .platform-runtime-summary { grid-template-columns: 1fr; }
   .platform-runtime-summary > div { border-right: 0; border-bottom: 1px solid var(--border); }
   .platform-runtime-row,

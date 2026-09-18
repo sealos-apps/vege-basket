@@ -54,6 +54,7 @@ import type {
   PlatformSecurityStatus,
   SecretState,
 } from '@/platform-management-types'
+import { validatePlatformSecretDraft } from '@/platform-secret-draft'
 import { userRoleLabel } from '@/user-roles'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -80,7 +81,13 @@ import { Textarea } from '@/components/ui/textarea'
 import './platform-management-workbench.css'
 
 type Tab = PlatformConfigSection | 'users' | 'organizations' | 'security' | 'runtime' | 'history'
-type SecretDrafts = Record<string, string>
+type SecretDraft = {
+  confirmation: string
+  editing: boolean
+  touched: boolean
+  value: string
+}
+type SecretDrafts = Record<string, SecretDraft | undefined>
 type UserTab = 'users' | 'admins'
 
 const tabs: Array<{ group: string; icon: typeof GearSix; id: Tab; label: string }> = [
@@ -132,35 +139,50 @@ function ToggleField({ checked, label, onChange }: { checked: boolean; label: st
 }
 
 function SecretField({
+  cleared,
+  draft,
   field,
   label,
+  onBeginReplace,
+  onCancel,
   onChange,
   onClear,
   onError,
   onReveal,
+  onRestore,
   state,
-  value,
 }: {
+  cleared: boolean
+  draft?: SecretDraft
   field: string
   label: string
-  onChange: (value: string) => void
+  onBeginReplace: () => void
+  onCancel: () => void
+  onChange: (patch: Partial<Pick<SecretDraft, 'confirmation' | 'value'>>) => void
   onClear: () => void
   onError: (error: unknown) => void
   onReveal: () => Promise<string>
+  onRestore: () => void
   state: SecretState
-  value: string
 }) {
   const [shown, setShown] = useState(false)
   const [revealed, setRevealed] = useState('')
   const [busy, setBusy] = useState(false)
   const revealRequest = useRef(0)
-  const displayValue = value || revealed
+  const editing = !state.configured || Boolean(draft?.editing)
+  const validationError = validatePlatformSecretDraft({
+    configured: state.configured,
+    editing,
+    touched: Boolean(draft?.touched),
+    value: draft?.value ?? '',
+    confirmation: draft?.confirmation ?? '',
+  })
 
   useEffect(() => {
     revealRequest.current += 1
     setShown(false)
     setRevealed('')
-  }, [field, state.configured])
+  }, [cleared, editing, field, state.configured])
 
   useEffect(() => {
     const clear = () => {
@@ -183,7 +205,7 @@ function SecretField({
       setRevealed('')
       return
     }
-    if (!value && state.configured && state.revealable) {
+    if (state.configured && state.revealable) {
       setBusy(true)
       const requestId = ++revealRequest.current
       try {
@@ -209,30 +231,76 @@ function SecretField({
     return () => window.clearTimeout(timer)
   }, [revealed])
 
-  return (
-    <Field label={label} hint={state.configured && !value ? '已保存' : undefined}>
-      <div className="platform-secret-input">
-        <Input
-          autoComplete="new-password"
-          type={shown ? 'text' : 'password'}
-          placeholder={state.configured ? '保留已保存值' : '尚未配置'}
-          value={displayValue}
-          onBlur={() => {
-            revealRequest.current += 1
-            if (revealed) {
+  if (cleared) {
+    return (
+      <Field label={label} hint="保存后将清除当前值">
+        <div className="platform-secret-locked platform-secret-cleared">
+          <Input readOnly value="待清除" />
+          <Button type="button" variant="outline" onClick={onRestore}>撤销清除</Button>
+        </div>
+      </Field>
+    )
+  }
+
+  if (!editing) {
+    return (
+      <Field label={label} hint="已保存">
+        <div className="platform-secret-locked">
+          <Input
+            readOnly
+            value={shown ? revealed : '已保存'}
+            onBlur={() => {
+              revealRequest.current += 1
               setRevealed('')
               setShown(false)
-            }
-          }}
-          onChange={(event) => {
-            setRevealed('')
-            onChange(event.target.value)
-          }}
-        />
-        <Button size="icon" variant="ghost" type="button" disabled={busy || (!value && !state.revealable)} title={shown ? '隐藏' : '显示'} onMouseDown={(event) => event.preventDefault()} onClick={() => void toggle()}>
-          {busy ? <SpinnerGap className="animate-spin" /> : shown ? <EyeSlash /> : <Eye />}
-        </Button>
-        <Button size="icon" variant="ghost" type="button" disabled={!value && !state.configured} title="清除凭据" onClick={onClear}><Trash /></Button>
+            }}
+          />
+          <Button
+            size="icon"
+            variant="ghost"
+            type="button"
+            disabled={busy || !state.revealable}
+            title={shown ? '隐藏明文' : '显示明文'}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => void toggle()}
+          >
+            {busy ? <SpinnerGap className="animate-spin" /> : shown ? <EyeSlash /> : <Eye />}
+          </Button>
+          <Button type="button" variant="outline" onClick={onBeginReplace}>替换</Button>
+          <Button size="icon" variant="ghost" type="button" title="清除凭据" onClick={onClear}><Trash /></Button>
+        </div>
+      </Field>
+    )
+  }
+
+  return (
+    <Field label={label} hint={state.configured ? '输入并确认新值后保存' : '尚未配置时可以留空'}>
+      <div className="platform-secret-editor">
+        <div className="platform-secret-entry">
+          <Input
+            aria-invalid={Boolean(validationError)}
+            aria-label={`新${label}`}
+            autoComplete="new-password"
+            type={shown ? 'text' : 'password'}
+            placeholder={`新${label}`}
+            value={draft?.value ?? ''}
+            onChange={(event) => onChange({ value: event.target.value })}
+          />
+          <Input
+            aria-invalid={Boolean(validationError)}
+            aria-label={`确认${label}`}
+            autoComplete="new-password"
+            type={shown ? 'text' : 'password'}
+            placeholder={`确认${label}`}
+            value={draft?.confirmation ?? ''}
+            onChange={(event) => onChange({ confirmation: event.target.value })}
+          />
+          <Button size="icon" variant="ghost" type="button" title={shown ? '隐藏明文' : '显示明文'} onClick={() => setShown((current) => !current)}>
+            {shown ? <EyeSlash /> : <Eye />}
+          </Button>
+          {state.configured ? <Button type="button" variant="outline" onClick={onCancel}>取消替换</Button> : null}
+        </div>
+        {validationError ? <small className="platform-secret-error" role="alert">{validationError}</small> : null}
       </div>
     </Field>
   )
@@ -351,9 +419,50 @@ export function PlatformManagementWorkbench({
     setTestResult('')
   }
 
-  function updateSecret(section: PlatformConfigSection, field: string, value: string) {
+  function beginSecretReplacement(section: PlatformConfigSection, field: string) {
     const path = `${section}.${field}`
-    setSecrets((current) => ({ ...current, [path]: value }))
+    setSecrets((current) => ({
+      ...current,
+      [path]: { confirmation: '', editing: true, touched: false, value: '' },
+    }))
+    setClearedSecrets((current) => {
+      const next = new Set(current)
+      next.delete(path)
+      return next
+    })
+  }
+
+  function updateSecret(
+    section: PlatformConfigSection,
+    field: string,
+    patch: Partial<Pick<SecretDraft, 'confirmation' | 'value'>>,
+  ) {
+    const path = `${section}.${field}`
+    setSecrets((current) => ({
+      ...current,
+      [path]: {
+        confirmation: '',
+        editing: true,
+        touched: true,
+        value: '',
+        ...current[path],
+        ...patch,
+      },
+    }))
+    setClearedSecrets((current) => {
+      const next = new Set(current)
+      next.delete(path)
+      return next
+    })
+  }
+
+  function cancelSecretChange(section: PlatformConfigSection, field: string) {
+    const path = `${section}.${field}`
+    setSecrets((current) => {
+      const next = { ...current }
+      delete next[path]
+      return next
+    })
     setClearedSecrets((current) => {
       const next = new Set(current)
       next.delete(path)
@@ -363,21 +472,60 @@ export function PlatformManagementWorkbench({
 
   function clearSecret(section: PlatformConfigSection, field: string) {
     const path = `${section}.${field}`
-    setSecrets((current) => ({ ...current, [path]: '' }))
+    setSecrets((current) => {
+      const next = { ...current }
+      delete next[path]
+      return next
+    })
     setClearedSecrets((current) => new Set(current).add(path))
+  }
+
+  function restoreSecret(section: PlatformConfigSection, field: string) {
+    const path = `${section}.${field}`
+    setClearedSecrets((current) => {
+      const next = new Set(current)
+      next.delete(path)
+      return next
+    })
+  }
+
+  function secretValidationError(section: PlatformConfigSection, field: string) {
+    if (!draft) return ''
+    const path = `${section}.${field}`
+    if (clearedSecrets.has(path)) return ''
+    const state = (draft[section] as unknown as Record<string, SecretState>)[field]
+    const secretDraft = secrets[path]
+    return validatePlatformSecretDraft({
+      configured: state.configured,
+      editing: !state.configured || Boolean(secretDraft?.editing),
+      touched: Boolean(secretDraft?.touched),
+      value: secretDraft?.value ?? '',
+      confirmation: secretDraft?.confirmation ?? '',
+    })
+  }
+
+  function sectionHasInvalidSecrets(section: PlatformConfigSection) {
+    return (sectionSecretFields[section] ?? []).some((field) => Boolean(secretValidationError(section, field)))
   }
 
   function secretActions(section: PlatformConfigSection) {
     return Object.fromEntries((sectionSecretFields[section] ?? []).map((field) => {
       const path = `${section}.${field}`
       if (clearedSecrets.has(path)) return [field, { action: 'clear' as const }]
-      if (secrets[path]) return [field, { action: 'replace' as const, value: secrets[path] }]
+      const secretDraft = secrets[path]
+      if (secretDraft?.editing && secretDraft.value) {
+        return [field, { action: 'replace' as const, value: secretDraft.value }]
+      }
       return [field, { action: 'keep' as const }]
     }))
   }
 
   async function saveSection(section: PlatformConfigSection) {
     if (!draft || !loaded) return
+    if (sectionHasInvalidSecrets(section)) {
+      setError('请先完整填写并确认需要替换的凭据。')
+      return
+    }
     setBusy(true)
     setError('')
     setNotice('')
@@ -388,6 +536,8 @@ export function PlatformManagementWorkbench({
         requestId: crypto.randomUUID(),
         secrets: secretActions(section),
       })
+      setSecrets({})
+      setClearedSecrets(new Set())
       await loadConfig()
       setNotice(`配置已保存为版本 ${result.revision}，服务正在自动加载。`)
       await loadRuntime()
@@ -400,6 +550,10 @@ export function PlatformManagementWorkbench({
 
   async function testSection(section: PlatformConfigSection, action: 'connect' | 'send-email' = 'connect') {
     if (!draft || !loaded) return
+    if (sectionHasInvalidSecrets(section)) {
+      setError('请先完整填写并确认需要替换的凭据。')
+      return
+    }
     setBusy(true)
     setError('')
     setTestResult('')
@@ -447,17 +601,40 @@ export function PlatformManagementWorkbench({
     }
   }
 
-  async function setUserStatus(user: ManagedUser, status: 'active' | 'disabled') {
+  async function setUserStatus(user: ManagedUser, status: 'active' | 'disabled'): Promise<boolean> {
     setBusy(true)
     setError('')
     try {
-      await updateManagedUserStatus(user, status)
-      await loadUsers()
-      setNotice(status === 'active' ? '账号已启用。' : '账号已禁用。')
-    } catch (saveError) {
-      handleError(saveError, '账号状态更新失败。')
+      const result = await updateManagedUserStatus(user, status)
+      setUsers((current) => current.map((item) => item.id === user.id ? {
+        ...item,
+        accountStatus: result.accountStatus,
+        permissionVersion: result.permissionVersion,
+      } : item))
+      setNotice(status === 'active' ? '账号已启用。' : '账号已停用，现有登录会话已失效。')
+      return true
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function enableUser(user: ManagedUser) {
+    try {
+      await setUserStatus(user, 'active')
+    } catch (saveError) {
+      handleError(saveError, '账号状态更新失败。')
+    }
+  }
+
+  async function disableUser(user: ManagedUser) {
+    try {
+      return await setUserStatus(user, 'disabled')
+    } catch (saveError) {
+      if (saveError instanceof ApiError && (saveError.status === 401 || saveError.status === 403)) {
+        handleError(saveError, '账号状态更新失败。')
+        return false
+      }
+      throw saveError
     }
   }
 
@@ -564,14 +741,18 @@ export function PlatformManagementWorkbench({
   const secret = (section: PlatformConfigSection, field: string, label: string, state: SecretState) => (
     <SecretField
       key={`${section}.${field}:${loaded.revision}`}
+      cleared={clearedSecrets.has(`${section}.${field}`)}
+      draft={secrets[`${section}.${field}`]}
       field={`${section}.${field}`}
       label={label}
       state={state}
-      value={secrets[`${section}.${field}`] ?? ''}
-      onChange={(value) => updateSecret(section, field, value)}
+      onBeginReplace={() => beginSecretReplacement(section, field)}
+      onCancel={() => cancelSecretChange(section, field)}
+      onChange={(patch) => updateSecret(section, field, patch)}
       onClear={() => clearSecret(section, field)}
       onError={(revealError) => handleError(revealError, '凭据读取失败。')}
       onReveal={() => reveal(section, field)}
+      onRestore={() => restoreSecret(section, field)}
     />
   )
 
@@ -592,6 +773,7 @@ export function PlatformManagementWorkbench({
                   variant="ghost"
                   onClick={() => {
                     setTab(item.id)
+                    setSecrets({})
                     setError('')
                     setNotice('')
                     setTestResult('')
@@ -664,7 +846,7 @@ export function PlatformManagementWorkbench({
             <Field label="发件人名称"><Input value={draft.email.fromName} onChange={(event) => updateSection('email', { fromName: event.target.value })} /></Field>
             <Field label="发件地址"><Input type="email" value={draft.email.fromAddress} onChange={(event) => updateSection('email', { fromAddress: event.target.value })} /></Field>
             <Field label="测试收件地址" hint="只用于本次测试，不会保存"><Input type="email" value={testEmailRecipient} onChange={(event) => setTestEmailRecipient(event.target.value)} /></Field>
-            <Button variant="outline" type="button" disabled={busy || !testEmailRecipient.trim()} onClick={() => void testSection('email', 'send-email')}><PaperPlaneTilt />发送测试邮件</Button>
+            <Button variant="outline" type="button" disabled={busy || !testEmailRecipient.trim() || sectionHasInvalidSecrets('email')} onClick={() => void testSection('email', 'send-email')}><PaperPlaneTilt />发送测试邮件</Button>
           </div> : null}
 
           {tab === 'storage' ? <div className="platform-form-grid">
@@ -711,7 +893,54 @@ export function PlatformManagementWorkbench({
               <Button type="button" variant="ghost" className={userTab === 'admins' ? 'active' : ''} onClick={() => setUserTab('admins')}>超级管理员 <Badge variant="outline">{users.filter((user) => user.platformAdmin).length}</Badge></Button>
               {userTab === 'admins' ? <Button className="platform-subtab-action" type="button" onClick={() => setGrantAdminOpen(true)}><Plus />授予超级管理员</Button> : null}
             </div>
-            <div className="platform-table-list">{users.filter((user) => userTab === 'users' || user.platformAdmin).map((user) => <article key={user.id} className="platform-user-row"><div className="platform-user-name"><strong>{user.displayName}{user.isBuiltinAdmin ? <Badge>内置</Badge> : null}</strong><small>{user.username} · {user.registrationSource === 'feishu' ? '飞书注册' : user.registrationSource === 'builtin' ? '内置账号' : '历史账号'} · {user.accountStatus === 'active' ? '正常' : user.accountStatus === 'disabled' ? '已禁用' : '已离职'}</small></div>{userTab === 'users' ? <div className="platform-role-options">{roleValues.map((role) => <label key={role}><Checkbox checked={user.roles.includes(role)} disabled={busy || user.accountStatus === 'departed'} onCheckedChange={() => setUsers((current) => current.map((item) => item.id === user.id ? { ...item, roles: item.roles.includes(role) ? item.roles.filter((value) => value !== role) : [...item.roles, role] } : item))} />{userRoleLabel[role]}</label>)}</div> : <div className="platform-admin-source"><ShieldCheck />{user.isBuiltinAdmin ? '系统内置' : '平台授权'}</div>}<label className="platform-admin-option">{user.platformAdmin ? <Badge variant="secondary">超级管理员</Badge> : null}</label><div className="platform-user-actions">{userTab === 'users' ? <Button size="sm" variant="outline" disabled={busy || user.roles.length === 0 || user.accountStatus === 'departed'} onClick={() => void saveUser(user)}>保存权限</Button> : user.isBuiltinAdmin ? <span className="platform-locked-admin"><ShieldCheck />不可移除</span> : <ConfirmActionDialog actionKey={`platform-admin-revoke:${user.id}`} title={`移除“${user.displayName}”的超级管理员权限？`} description="移除后该账号仍可使用已有职业角色，但不能进入平台管理。" confirmLabel="确认移除" trigger={<Button size="sm" variant="destructive" disabled={busy}>移除权限</Button>} onConfirm={() => revokePlatformAdmin(user)} />}{userTab === 'users' ? (user.accountStatus === 'disabled' ? <Button size="sm" variant="outline" disabled={busy || user.isBuiltinAdmin} onClick={() => void setUserStatus(user, 'active')}>启用</Button> : <ConfirmActionDialog actionKey={`platform-user-disable:${user.id}`} title={`禁用账号“${user.displayName}”？`} description="账号会立即退出登录；再次启用后才能访问平台。" confirmLabel="确认禁用" trigger={<Button size="sm" variant="outline" disabled={busy || user.isBuiltinAdmin || user.accountStatus !== 'active'}>禁用</Button>} onConfirm={async () => { await setUserStatus(user, 'disabled'); return true }} />) : null}{userTab === 'users' && user.accountStatus !== 'departed' ? <Button size="sm" variant="destructive" disabled={busy || user.isBuiltinAdmin || user.id === currentUserId} onClick={() => void openOffboarding(user)}><UserMinus />离职</Button> : null}</div></article>)}</div>
+            <div className="platform-table-list">
+              {users.filter((user) => userTab === 'users' || user.platformAdmin).map((user) => (
+                <article key={user.id} className="platform-user-row">
+                  <div className="platform-user-name">
+                    <strong>{user.displayName}{user.isBuiltinAdmin ? <Badge>内置</Badge> : null}</strong>
+                    <small>
+                      {user.username} · {user.registrationSource === 'feishu' ? '飞书注册' : user.registrationSource === 'builtin' ? '内置账号' : '历史账号'} · {user.accountStatus === 'active' ? '正常' : user.accountStatus === 'disabled' ? '已停用' : '已离职'}
+                    </small>
+                  </div>
+                  {userTab === 'users' ? (
+                    <div className="platform-role-options">
+                      {roleValues.map((role) => (
+                        <label key={role}>
+                          <Checkbox
+                            checked={user.roles.includes(role)}
+                            disabled={busy || user.accountStatus === 'departed'}
+                            onCheckedChange={() => setUsers((current) => current.map((item) => item.id === user.id ? {
+                              ...item,
+                              roles: item.roles.includes(role)
+                                ? item.roles.filter((value) => value !== role)
+                                : [...item.roles, role],
+                            } : item))}
+                          />
+                          {userRoleLabel[role]}
+                        </label>
+                      ))}
+                    </div>
+                  ) : <div className="platform-admin-source"><ShieldCheck />{user.isBuiltinAdmin ? '系统内置' : '平台授权'}</div>}
+                  <label className="platform-admin-option">{user.platformAdmin ? <Badge variant="secondary">超级管理员</Badge> : null}</label>
+                  <div className="platform-user-actions">
+                    {userTab === 'users' ? <Button size="sm" variant="outline" disabled={busy || user.roles.length === 0 || user.accountStatus === 'departed'} onClick={() => void saveUser(user)}>保存权限</Button> : user.isBuiltinAdmin ? <span className="platform-locked-admin"><ShieldCheck />不可移除</span> : <ConfirmActionDialog actionKey={`platform-admin-revoke:${user.id}`} title={`移除“${user.displayName}”的超级管理员权限？`} description="移除后该账号仍可使用已有职业角色，但不能进入平台管理。" confirmLabel="确认移除" trigger={<Button size="sm" variant="destructive" disabled={busy}>移除权限</Button>} onConfirm={() => revokePlatformAdmin(user)} />}
+                    {userTab === 'users' ? (user.accountStatus === 'disabled' ? (
+                      <Button size="sm" variant="outline" disabled={busy || user.isBuiltinAdmin} onClick={() => void enableUser(user)}>启用</Button>
+                    ) : (
+                      <ConfirmActionDialog
+                        actionKey={`platform-user-disable:${user.id}`}
+                        title={`停用账号“${user.displayName}”？`}
+                        description="停用后现有登录会话立即失效；再次启用后才能访问平台。"
+                        confirmLabel="确认停用"
+                        trigger={<Button size="sm" variant="outline" disabled={busy || user.isBuiltinAdmin || user.accountStatus !== 'active'}>停用账号</Button>}
+                        onConfirm={() => disableUser(user)}
+                      />
+                    )) : null}
+                    {userTab === 'users' && user.accountStatus !== 'departed' ? <Button size="sm" variant="destructive" disabled={busy || user.isBuiltinAdmin || user.id === currentUserId} onClick={() => void openOffboarding(user)}><UserMinus />离职</Button> : null}
+                  </div>
+                </article>
+              ))}
+            </div>
           </> : null}
 
           {tab === 'organizations' ? <div className="platform-organizations"><div className="platform-list-tools"><div className="platform-search"><MagnifyingGlass /><Input placeholder="搜索组织或所有者" value={organizationSearch} onChange={(event) => setOrganizationSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void loadOrganizations() }} /></div><Button variant="outline" onClick={() => void loadOrganizations()} disabled={busy}>查询</Button><Button onClick={() => setCreateOpen(true)} disabled={busy}><Plus />新建组织</Button></div><div className="platform-table-list">{organizations.map((organization) => <article className="platform-organization-row" key={organization.id}><div><strong>{organization.name}</strong><small>所有者：{organization.owner.displayName}</small></div><div className="platform-counts"><span>{organization.memberCount} 成员</span><span>{organization.projectCount} 项目</span><span>{organization.testSpaceCount} 测试空间</span></div><Badge variant={organization.canDelete ? 'secondary' : 'outline'}>{organization.canDelete ? '空组织' : `${organization.blockers.reduce((sum, item) => sum + item.count, 0)} 项关联数据`}</Badge><ConfirmActionDialog actionKey={`platform-organization-delete:${organization.id}`} title={`删除组织“${organization.name}”？`} description={organization.canDelete ? '仅删除组织壳和唯一所有者关系，操作不可恢复。' : '该组织仍有关联业务或历史数据，当前不能删除。'} confirmationName={organization.name} confirmLabel="删除组织" confirmDisabled={!organization.canDelete} trigger={<Button size="icon" variant="destructive" title="删除组织"><Trash /></Button>} onConfirm={async () => { await deletePlatformOrganization(organization.id, organization.name); await loadOrganizations(); return true }} /></article>)}</div></div> : null}
@@ -721,7 +950,7 @@ export function PlatformManagementWorkbench({
           {tab === 'runtime' ? <div className="platform-runtime"><div className="platform-runtime-summary"><div><span>数据库当前版本</span><strong>v{runtime?.activeRevision ?? loaded.revision}</strong></div><div><span>API 实例</span><strong>{runtime?.instances.length ?? 0}</strong></div><div><span>定时任务</span><strong>运行时加载</strong></div></div><section><h4>服务实例</h4>{runtime?.instances.map((instance) => <div className="platform-runtime-row" key={instance.instanceId}><span className={`platform-runtime-dot ${instance.status}`} /><code>{instance.instanceId.slice(0, 8)}</code><span>{instance.status === 'applied' ? '已生效' : instance.status === 'error' ? '加载异常' : '状态未知'}</span><strong>{instance.appliedRevision ? `v${instance.appliedRevision}` : '未加载'}</strong><time>{new Date(instance.heartbeatAt).toLocaleString('zh-CN')}</time></div>)}</section></div> : null}
           {tab === 'history' ? <div className="platform-runtime"><section><h4>配置历史</h4>{history.map((item) => <div className="platform-history-row" key={item.revision}><strong>v{item.revision}</strong><span>{item.createdBy}</span><time>{new Date(item.createdAt).toLocaleString('zh-CN')}</time><ConfirmActionDialog title={`恢复到版本 v${item.revision}？`} description="恢复会创建一个新版本并自动热更新，不会改变固定回调、用户权限或组织数据。" confirmLabel="确认恢复" trigger={<Button size="sm" variant="outline" disabled={item.revision === loaded.revision}>恢复</Button>} onConfirm={async () => { await restorePlatformConfigRevision(item.revision, loaded.revision); await Promise.all([loadConfig(), loadRuntime()]); return true }} /></div>)}</section></div> : null}
 
-          {(['general', 'ai', 'email', 'storage', 'packages', 'feishu', 'github'] as Tab[]).includes(tab) ? <footer className="platform-savebar"><Button variant="outline" type="button" disabled={busy} onClick={() => { setDraft(cloneConfig(loaded.config)); setSecrets({}); setClearedSecrets(new Set()); setTestResult('') }}>撤销修改</Button>{(['ai', 'email', 'storage', 'feishu', 'github'] as Tab[]).includes(tab) ? <Button variant="outline" type="button" disabled={busy} onClick={() => void testSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}{tab === 'email' ? '测试连接' : '测试可用性'}</Button> : null}<Button type="button" disabled={busy} onClick={() => void saveSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}保存更改</Button></footer> : null}
+          {(['general', 'ai', 'email', 'storage', 'packages', 'feishu', 'github'] as Tab[]).includes(tab) ? <footer className="platform-savebar"><Button variant="outline" type="button" disabled={busy} onClick={() => { setDraft(cloneConfig(loaded.config)); setSecrets({}); setClearedSecrets(new Set()); setTestResult('') }}>撤销修改</Button>{(['ai', 'email', 'storage', 'feishu', 'github'] as Tab[]).includes(tab) ? <Button variant="outline" type="button" disabled={busy || sectionHasInvalidSecrets(tab as PlatformConfigSection)} onClick={() => void testSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}{tab === 'email' ? '测试连接' : '测试可用性'}</Button> : null}<Button type="button" disabled={busy || sectionHasInvalidSecrets(tab as PlatformConfigSection)} onClick={() => void saveSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}保存更改</Button></footer> : null}
         </section>
       </div>
 

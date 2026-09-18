@@ -63,6 +63,23 @@ test('platform user controls protect the builtin administrator', () => {
   assert.doesNotMatch(workbenchSource, /返回工作台/u)
 })
 
+test('account disabling reports the canonical mutation result to the confirmation dialog', () => {
+  assert.match(workbenchSource, /const result = await updateManagedUserStatus\(user, status\)/u)
+  assert.match(workbenchSource, /accountStatus: result\.accountStatus/u)
+  assert.match(workbenchSource, /permissionVersion: result\.permissionVersion/u)
+  assert.match(workbenchSource, /onConfirm=\{\(\) => disableUser\(user\)\}/u)
+  assert.doesNotMatch(workbenchSource, /await setUserStatus\(user, 'disabled'\); return true/u)
+})
+
+test('successful platform configuration writes clear plaintext drafts before refresh', () => {
+  const saveStart = workbenchSource.indexOf('async function saveSection')
+  const saveEnd = workbenchSource.indexOf('async function testSection', saveStart)
+  const saveSource = workbenchSource.slice(saveStart, saveEnd)
+
+  assert.ok(saveSource.indexOf('await savePlatformConfigSection') < saveSource.indexOf('setSecrets({})'))
+  assert.ok(saveSource.indexOf('setSecrets({})') < saveSource.indexOf('await loadConfig()'))
+})
+
 test('builtin administrator bootstrap validates the complete existing account', () => {
   const bootstrapStart = cliSource.indexOf('async function bootstrapAdmin')
   const bootstrapEnd = cliSource.indexOf('async function initializeFreshInstall', bootstrapStart)
