@@ -100,6 +100,12 @@ export type NotificationResponse = {
   notifications: NotificationCenterData
 }
 
+export type NavigationCounts = {
+  assignedBugCount: number
+  openTodoCount: number
+  organizationId: OrganizationContext
+}
+
 export type PackageMarketRulesResponse = {
   expireMinutes: number
   organizationId: number | null
@@ -474,6 +480,14 @@ export function deleteImageSyncRun(runId: number) {
 
 export function fetchNotifications() {
   return request<NotificationResponse>('/api/notifications')
+}
+
+export function fetchNavigationCounts(
+  organizationId: OrganizationContext,
+  options: RequestInit = {},
+) {
+  const params = new URLSearchParams({ organizationId: serializeOrganizationContext(organizationId) })
+  return request<NavigationCounts>(`/api/navigation-counts?${params.toString()}`, options)
 }
 
 export function markAllNotificationsRead() {

@@ -159,7 +159,7 @@ import {
   fetchAiStatus,
   fetchAiConversations,
   fetchAiConversationTurns,
-  fetchMyWork,
+  fetchNavigationCounts,
   fetchOrganization,
   fetchOrganizations,
   fetchTodoProposalBatch,
@@ -305,7 +305,6 @@ import { getBugShareTokenFromPath } from './bug-share-deep-link'
 import { TodoShareDialog } from './components/todo-share-dialog'
 import { TodoShareView } from './components/todo-share-view'
 import { getTodoShareTokenFromPath } from './todo-share-deep-link'
-import { fetchAssignedTestBugs } from './test-workbench-api'
 import type { TestBug } from './test-workbench-types'
 import { OrganizationWorkbench } from './components/organization-workbench'
 import { ProjectSubprojectsPanel } from './components/project-subprojects-panel'
@@ -2070,26 +2069,6 @@ function App() {
     }
   }, [authUser, view])
 
-  useEffect(() => {
-    if (!loggedIn || !canShowDeveloperAssignedBugs || selectedOrganizationId === null) {
-      setAssignedBugCount(0)
-      return
-    }
-
-    let alive = true
-    fetchAssignedTestBugs(selectedOrganizationId)
-      .then((result) => {
-        if (alive) updateAssignedBugCount(result.bugs)
-      })
-      .catch(() => {
-        if (alive) setAssignedBugCount(0)
-      })
-
-    return () => {
-      alive = false
-    }
-  }, [canShowDeveloperAssignedBugs, loggedIn, selectedOrganizationId, updateAssignedBugCount])
-
   const resetWorkspaceState = useCallback(() => {
     setProjects([])
     setTodos([])
@@ -3182,23 +3161,40 @@ function App() {
       notifications.packageEventCommentMentions.filter((item) => !item.dismissedAt && !item.readAt).length,
     [notifications],
   )
-  useEffect(() => {
-    if (!loggedIn || !workspaceLoaded || !authUser?.id) {
+  const navigationCountsRequestIdRef = useRef(0)
+  const refreshNavigationCounts = useCallback(async (signal?: AbortSignal) => {
+    const requestId = navigationCountsRequestIdRef.current + 1
+    navigationCountsRequestIdRef.current = requestId
+    try {
+      const result = await fetchNavigationCounts(selectedOrganizationId, { signal })
+      if (navigationCountsRequestIdRef.current !== requestId) return
+      setOpenTodoCount(result.openTodoCount)
+      setAssignedBugCount(result.assignedBugCount)
+    } catch {
+      if (navigationCountsRequestIdRef.current !== requestId || signal?.aborted) return
       setOpenTodoCount(0)
+      setAssignedBugCount(0)
+    }
+  }, [selectedOrganizationId])
+
+  useEffect(() => {
+    if (!loggedIn || !authUser?.id || !organizationContextReady) {
+      navigationCountsRequestIdRef.current += 1
+      setOpenTodoCount(0)
+      setAssignedBugCount(0)
       return
     }
-    let active = true
-    void fetchMyWork(selectedOrganizationId, { kind: 'todo', limit: 500, status: 'open' })
-      .then((result) => {
-        if (active) setOpenTodoCount(result.items.length)
-      })
-      .catch(() => {
-        if (active) setOpenTodoCount(0)
-      })
+    const controller = new AbortController()
+    void refreshNavigationCounts(controller.signal)
+    const interval = window.setInterval(() => {
+      void refreshNavigationCounts(controller.signal)
+    }, 15_000)
     return () => {
-      active = false
+      controller.abort()
+      navigationCountsRequestIdRef.current += 1
+      window.clearInterval(interval)
     }
-  }, [authUser?.id, loggedIn, selectedOrganizationId, todos, workspaceLoaded])
+  }, [authUser?.id, loggedIn, organizationContextReady, refreshNavigationCounts])
   async function submitInvitePassword() {
     if (!inviteToken) return
     const password = invitePasswordDraft.trim()
@@ -3451,6 +3447,7 @@ function App() {
       const data = await operation()
       workspaceMutationEpochRef.current += 1
       applyWorkspace(data)
+      void refreshNavigationCounts()
       void refreshNotifications()
       setWorkspaceError('')
       return data
@@ -3473,6 +3470,7 @@ function App() {
     if (confirmationScopeRef.current !== scope) return false
     workspaceMutationEpochRef.current += 1
     applyWorkspace(data)
+    void refreshNavigationCounts()
     void refreshNotifications()
     return true
   }

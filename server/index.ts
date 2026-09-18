@@ -9455,6 +9455,73 @@ app.get('/api/my-work', asyncHandler(async (request, response) => {
   ))
 }))
 
+app.get('/api/navigation-counts', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  const organizationId = parseOrganizationContext(request.query.organizationId)
+  if (organizationId === undefined) {
+    response.status(400).json({ error: '有效的组织上下文是必填项' })
+    return
+  }
+  if (organizationId !== null) {
+    const membership = await query(
+      `select 1 from organization_memberships
+       where organization_id = $1 and user_id = $2 and status = 'active'`,
+      [organizationId, userId],
+    )
+    if (!membership.rows[0]) {
+      response.status(404).json({ error: '组织不存在或无权访问' })
+      return
+    }
+  }
+  const result = await query<{
+    assigned_bug_count: string
+    open_todo_count: string
+  }>(
+    `
+    select
+      (
+        select count(*)
+        from todos t
+        join projects p on p.id = t.project_id
+        left join project_memberships mine
+          on mine.project_id = p.id and mine.invited_user_id = $1::bigint and mine.status = 'active'
+        where p.organization_id is not distinct from $2::bigint
+          and (
+            (
+              t.assignee_user_id = $1::bigint
+              and t.confirmation_status <> 'pending_review'
+            )
+            or t.reviewer_user_id = $1::bigint
+          )
+          and (${managedOrganizationReadScopeSql('p.organization_id')} or p.user_id = $1::bigint or mine.id is not null)
+          and not t.done
+          and t.confirmation_status <> 'rejected'
+      ) as open_todo_count,
+      (
+        select count(*)
+        from test_bugs b
+        join test_spaces space on space.id = b.test_space_id
+        where space.organization_id is not distinct from $2::bigint
+          and (
+            (
+              b.assignee_user_id = $1::bigint
+              and b.status not in ('closed', 'rejected')
+            )
+            or ${managedOrganizationReadScopeSql('space.organization_id')}
+          )
+      ) as assigned_bug_count
+    `,
+    [userId, organizationId],
+  )
+  const row = result.rows[0]
+  response.json({
+    assignedBugCount: Number(row?.assigned_bug_count ?? 0),
+    openTodoCount: Number(row?.open_todo_count ?? 0),
+    organizationId,
+  })
+}))
+
 app.patch('/api/notifications/:kind/:sourceId/read', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return

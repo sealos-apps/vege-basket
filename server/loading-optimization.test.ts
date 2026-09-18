@@ -157,6 +157,17 @@ test('workspace loading uses independently scoped live read models', () => {
   assert.match(appSource, /sections && \(!includes\('catalog'\) \|\| data\.scope\?\.projectId\)/u)
 })
 
+test('navigation badges use a scoped count endpoint instead of loading work entities', () => {
+  assert.match(workspaceServerSource, /app\.get\('\/api\/navigation-counts'/u)
+  assert.match(workspaceServerSource, /select count\(\*\)[\s\S]*?from todos t/u)
+  assert.match(workspaceServerSource, /select count\(\*\)[\s\S]*?from test_bugs b/u)
+  assert.match(workspaceServerSource, /organization_memberships[\s\S]*?status = 'active'/u)
+  assert.match(workspaceApiSource, /fetchNavigationCounts/u)
+  assert.match(appSource, /fetchNavigationCounts\(selectedOrganizationId/u)
+  assert.match(appSource, /15_000/u)
+  assert.doesNotMatch(appSource, /fetchMyWork\(selectedOrganizationId, \{ kind: 'todo'/u)
+})
+
 test('scoped project reads conservatively reduce returned entity rows by at least 95 percent', () => {
   const projects = 10
   const perProject = {
