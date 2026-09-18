@@ -71,6 +71,18 @@ test('platform administrator candidates come from the server eligibility policy'
   assert.match(apiSource, /platformAdminEligible: boolean/u)
 })
 
+test('active sessions refresh platform administrator grants without reloading the workspace', () => {
+  assert.match(appSource, /app\.get\('\/api\/auth\/context'/u)
+  assert.match(appSource, /request\.path === '\/auth\/context'/u)
+  assert.match(apiSource, /export function fetchCurrentAuthContext\(\)/u)
+  assert.match(apiSource, /request<\{ user: AuthUser \}>\('\/api\/auth\/context'\)/u)
+
+  const clientSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+  assert.match(clientSource, /fetchCurrentAuthContext\(\)/u)
+  assert.match(clientSource, /sameAuthContext\(current, result\.user\)/u)
+  assert.match(clientSource, /authContextRefreshIntervalMs/u)
+})
+
 test('account disabling reports the canonical mutation result to the confirmation dialog', () => {
   assert.match(workbenchSource, /const result = await updateManagedUserStatus\(user, status\)/u)
   assert.match(workbenchSource, /accountStatus: result\.accountStatus/u)

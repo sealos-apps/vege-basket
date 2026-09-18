@@ -163,6 +163,7 @@ import {
   fetchOrganization,
   fetchOrganizations,
   fetchTodoProposalBatch,
+  fetchCurrentAuthContext,
   fetchCurrentUser,
   fetchNotifications,
   ApiError,
@@ -277,6 +278,7 @@ import {
   type ProjectPackageWorkbenchHandle,
 } from './components/project-package-workbench'
 import {
+  authContextRefreshIntervalMs,
   startVisibleRefreshSchedule,
   workspaceCatalogRefreshIntervalMs,
   workspaceRefreshIntervalMs,
@@ -715,6 +717,19 @@ function canUseViewForUser(view: View, user: AuthUser) {
   if (view === 'organization') return canAccessOrganizationManagement(user)
   if (view === 'platform') return user.isSystemAdmin
   return true
+}
+
+function sameAuthContext(current: AuthUser | null, next: AuthUser) {
+  return current?.id === next.id &&
+    current.accountStatus === next.accountStatus &&
+    current.activeRole === next.activeRole &&
+    current.displayName === next.displayName &&
+    current.feishuEmail === next.feishuEmail &&
+    current.feishuLinked === next.feishuLinked &&
+    current.isSystemAdmin === next.isSystemAdmin &&
+    current.username === next.username &&
+    current.roles.length === next.roles.length &&
+    current.roles.every((role, index) => role === next.roles[index])
 }
 
 function clearInviteTokenFromUrl() {
@@ -3282,7 +3297,7 @@ function App() {
     }
   }
 
-  function signOut() {
+  const signOut = useCallback(() => {
     authSessionGenerationRef.current += 1
     notificationRefreshRequestIdRef.current += 1
     workspaceRefreshRequestIdRef.current += 1
@@ -3316,7 +3331,45 @@ function App() {
     setAiBusy(false)
     setAiError('')
     setAiMobilePane(getDefaultAiPane())
-  }
+  }, [resetWorkspaceState])
+
+  useEffect(() => {
+    if (!loggedIn || !authUserId) return
+    return startVisibleRefreshSchedule({
+      clearInterval: (handle) => window.clearInterval(handle),
+      intervalMs: authContextRefreshIntervalMs,
+      isVisible: () => document.visibilityState === 'visible',
+      minRefreshGapMs: 1_000,
+      onFocus: (listener) => {
+        window.addEventListener('focus', listener)
+        return () => window.removeEventListener('focus', listener)
+      },
+      onVisibilityChange: (listener) => {
+        document.addEventListener('visibilitychange', listener)
+        return () => document.removeEventListener('visibilitychange', listener)
+      },
+      refresh: async () => {
+        const sessionGeneration = authSessionGenerationRef.current
+        try {
+          const result = await fetchCurrentAuthContext()
+          if (authSessionGenerationRef.current !== sessionGeneration) return false
+          setAuthUser((current) => sameAuthContext(current, result.user) ? current : result.user)
+          return true
+        } catch (error) {
+          if (
+            authSessionGenerationRef.current === sessionGeneration &&
+            error instanceof ApiError && error.status === 401
+          ) {
+            signOut()
+            setAuthError('登录状态已失效，请重新登录。')
+            return true
+          }
+          return false
+        }
+      },
+      setInterval: (listener, delay) => window.setInterval(listener, delay),
+    })
+  }, [authUserId, loggedIn, signOut])
 
   async function updateAccountSettings(payload: {
     displayName: string

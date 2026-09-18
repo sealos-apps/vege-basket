@@ -533,6 +533,10 @@ export function fetchCurrentUser() {
   return request<{ user: AuthUser; workspace: WorkspaceData }>('/api/auth/me')
 }
 
+export function fetchCurrentAuthContext() {
+  return request<{ user: AuthUser }>('/api/auth/context')
+}
+
 export function registerAccount(payload: {
   invitePassword?: string
   inviteToken?: string

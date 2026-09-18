@@ -586,7 +586,8 @@ app.use(express.json({
 app.use('/api', platformManagementRouter)
 app.use('/api', (request, response, next) => {
   if (request.path === '/health' || request.path === '/auth/login' ||
-      (request.path === '/auth/me' && request.method === 'GET')) {
+      (request.path === '/auth/me' && request.method === 'GET') ||
+      (request.path === '/auth/context' && request.method === 'GET')) {
     next()
     return
   }
@@ -4900,6 +4901,19 @@ app.get('/api/auth/me', asyncHandler(async (request, response) => {
   response.json({
     user: await serializeUserWithRoleContext(user.rows[0], getTokenFromRequest(request)),
     workspace: await getWorkspace(userId, { sections: new Set(['catalog']) }),
+  })
+}))
+
+app.get('/api/auth/context', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+
+  const user = await query<UserRow>(
+    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status from users where id = $1',
+    [userId],
+  )
+  response.json({
+    user: await serializeUserWithRoleContext(user.rows[0], getTokenFromRequest(request)),
   })
 }))
 

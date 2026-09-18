@@ -63,7 +63,7 @@ npm run platform:config -- import --env-file /secure/path/legacy.env \
 ```
 
 `bootstrap-admin` prompts for a password and creates or upgrades the immutable built-in `admin`.
-在平台配置尚未初始化时，健康检查、`admin` 登录和当前用户读取仍可用，便于通过“平台管理”保存首个配置版本；其他业务接口会返回配置未初始化错误。
+在平台配置尚未初始化时，健康检查、`admin` 登录、当前用户读取和轻量权限上下文读取仍可用，便于通过“平台管理”保存首个配置版本；其他业务接口会返回配置未初始化错误。登录后的浏览器每 15 秒及重新回到前台时读取一次权限上下文，超级管理员授权、撤销和账号停用无需重新登录即可生效。
 `import` runs once, encrypts business settings into PostgreSQL, imports
 `VEGES_ADMIN_USERNAMES` as managed grants, and fixes both callback URLs. It refuses to overwrite
 an existing platform configuration. Retain the complete application encryption key ring for every

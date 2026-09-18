@@ -155,7 +155,10 @@ authentication and resource authorization as the complete response.
 The application shell no longer uses the legacy complete workspace response for routine loading.
 Authentication returns only the project catalog. Catalog reconciliation runs every 30 seconds,
 while the visible view refreshes its PostgreSQL-backed data every 15 seconds and immediately on
-focus or navigation. Project overview, journals, todos, todo detail, drafts, AI documents, and
+focus or navigation. The application shell refreshes the authenticated account and role context
+through a separate lightweight endpoint on the same 15-second cadence and on focus, so platform
+administrator grants, revocations, and account disabling take effect without reloading workspace
+data. Project overview, journals, todos, todo detail, drafts, AI documents, and
 cross-project search have separate authorized routes. Superseded navigation reads are aborted.
 Mutation responses use the narrowest matching read model; only the compatibility
 `GET /api/workspace` route may build the complete legacy response.
