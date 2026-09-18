@@ -503,7 +503,10 @@ export function mergePlatformConfigSection(
       sectionTarget[key] = ''
       continue
     }
-    if (action.action === 'replace' && typeof action.value === 'string' && action.value.length > 0) {
+    if (action.action === 'replace') {
+      if (typeof action.value !== 'string' || action.value.length < 8) {
+        throw new PlatformConfigValidationError([`${field} 的凭据替换值必须至少 8 位。`])
+      }
       sectionTarget[key] = action.value
       continue
     }

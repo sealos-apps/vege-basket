@@ -133,3 +133,14 @@ test('section updates keep, replace, and clear secrets explicitly', () => {
     PlatformConfigValidationError,
   )
 })
+
+test('platform secret replacements require at least eight characters', () => {
+  const config = createDefaultPlatformConfig()
+  assert.throws(
+    () => mergePlatformConfigSection(config, 'github', {}, {
+      token: { action: 'replace', value: 'short' },
+    }),
+    (error: unknown) => error instanceof PlatformConfigValidationError &&
+      error.issues.includes('github.token 的凭据替换值必须至少 8 位。'),
+  )
+})

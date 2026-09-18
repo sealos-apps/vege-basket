@@ -47,6 +47,12 @@ test('disabling a managed platform administrator preserves the grant and revokes
   const statusSource = source.slice(statusStart)
 
   assert.match(statusSource, /delete from sessions where user_id = \$1/u)
+  assert.match(statusSource, /account_status = \$1::text/u)
+  assert.match(
+    statusSource,
+    /disabled_by_user_id = case when \$1::text = 'disabled' then \$2::bigint else null::bigint end/u,
+  )
+  assert.match(statusSource, /where id = \$3::bigint/u)
   assert.doesNotMatch(statusSource, /delete from platform_admin_grants/u)
   assert.match(statusSource, /lockPlatformAdministration/u)
   assert.match(statusSource, /requirePlatformAdminWithClient/u)

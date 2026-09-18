@@ -712,10 +712,10 @@ export async function updateManagedAccountStatus(input: {
     }
     const result = await client.query<{ account_status: UserAccountStatus }>(
       `update users
-       set account_status = $1,
-           disabled_at = case when $1 = 'disabled' then coalesce(disabled_at, now()) else null end,
-           disabled_by_user_id = case when $1 = 'disabled' then $2 else null end
-       where id = $3
+       set account_status = $1::text,
+           disabled_at = case when $1::text = 'disabled' then coalesce(disabled_at, now()) else null::timestamptz end,
+           disabled_by_user_id = case when $1::text = 'disabled' then $2::bigint else null::bigint end
+       where id = $3::bigint
        returning account_status`,
       [input.status, input.actorUserId, input.userId],
     )

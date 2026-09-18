@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Buildings,
@@ -54,7 +54,6 @@ import type {
   PlatformSecurityStatus,
   SecretState,
 } from '@/platform-management-types'
-import { validatePlatformSecretDraft } from '@/platform-secret-draft'
 import { userRoleLabel } from '@/user-roles'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -81,13 +80,7 @@ import { Textarea } from '@/components/ui/textarea'
 import './platform-management-workbench.css'
 
 type Tab = PlatformConfigSection | 'users' | 'organizations' | 'security' | 'runtime' | 'history'
-type SecretDraft = {
-  confirmation: string
-  editing: boolean
-  touched: boolean
-  value: string
-}
-type SecretDrafts = Record<string, SecretDraft | undefined>
+type SecretDrafts = Record<string, string | undefined>
 type UserTab = 'users' | 'admins'
 
 const tabs: Array<{ group: string; icon: typeof GearSix; id: Tab; label: string }> = [
@@ -138,63 +131,64 @@ function ToggleField({ checked, label, onChange }: { checked: boolean; label: st
   return <label className="platform-toggle"><span>{label}</span><Checkbox checked={checked} onCheckedChange={(value) => onChange(value === true)} /></label>
 }
 
+function generateRandomSecret() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)), (value) => (
+    value.toString(16).padStart(2, '0')
+  )).join('')
+}
+
 function SecretField({
-  cleared,
-  draft,
+  allowGenerate,
+  draftValue,
   field,
   label,
-  onBeginReplace,
-  onCancel,
   onChange,
-  onClear,
   onError,
   onReveal,
-  onRestore,
   state,
 }: {
-  cleared: boolean
-  draft?: SecretDraft
+  allowGenerate: boolean
+  draftValue: string
   field: string
   label: string
-  onBeginReplace: () => void
-  onCancel: () => void
-  onChange: (patch: Partial<Pick<SecretDraft, 'confirmation' | 'value'>>) => void
-  onClear: () => void
+  onChange: (value: string) => void
   onError: (error: unknown) => void
   onReveal: () => Promise<string>
-  onRestore: () => void
   state: SecretState
 }) {
   const [shown, setShown] = useState(false)
   const [revealed, setRevealed] = useState('')
   const [busy, setBusy] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editorValue, setEditorValue] = useState('')
+  const [editorShown, setEditorShown] = useState(false)
+  const [editorError, setEditorError] = useState('')
   const revealRequest = useRef(0)
-  const editing = !state.configured || Boolean(draft?.editing)
-  const validationError = validatePlatformSecretDraft({
-    configured: state.configured,
-    editing,
-    touched: Boolean(draft?.touched),
-    value: draft?.value ?? '',
-    confirmation: draft?.confirmation ?? '',
-  })
+  const editorInputId = useId()
+  const configured = state.configured || Boolean(draftValue)
 
   useEffect(() => {
     revealRequest.current += 1
     setShown(false)
     setRevealed('')
-  }, [cleared, editing, field, state.configured])
+  }, [draftValue, field, state.configured])
 
   useEffect(() => {
-    const clear = () => {
-      if (document.visibilityState !== 'hidden') return
+    const hide = () => {
       revealRequest.current += 1
       setRevealed('')
       setShown(false)
+      setEditorShown(false)
     }
-    document.addEventListener('visibilitychange', clear)
+    const hideWhenDocumentLeaves = () => {
+      if (document.visibilityState === 'hidden') hide()
+    }
+    document.addEventListener('visibilitychange', hideWhenDocumentLeaves)
+    window.addEventListener('blur', hide)
     return () => {
       revealRequest.current += 1
-      document.removeEventListener('visibilitychange', clear)
+      document.removeEventListener('visibilitychange', hideWhenDocumentLeaves)
+      window.removeEventListener('blur', hide)
     }
   }, [])
 
@@ -205,7 +199,7 @@ function SecretField({
       setRevealed('')
       return
     }
-    if (state.configured && state.revealable) {
+    if (!draftValue && state.configured && state.revealable) {
       setBusy(true)
       const requestId = ++revealRequest.current
       try {
@@ -223,86 +217,114 @@ function SecretField({
   }
 
   useEffect(() => {
-    if (!revealed) return
+    if (!shown) return
     const timer = window.setTimeout(() => {
       setRevealed('')
       setShown(false)
     }, 30_000)
     return () => window.clearTimeout(timer)
-  }, [revealed])
+  }, [shown])
 
-  if (cleared) {
-    return (
-      <Field label={label} hint="保存后将清除当前值">
-        <div className="platform-secret-locked platform-secret-cleared">
-          <Input readOnly value="待清除" />
-          <Button type="button" variant="outline" onClick={onRestore}>撤销清除</Button>
-        </div>
-      </Field>
-    )
+  function resetEditor() {
+    setEditorValue('')
+    setEditorShown(false)
+    setEditorError('')
   }
 
-  if (!editing) {
-    return (
-      <Field label={label} hint="已保存">
-        <div className="platform-secret-locked">
-          <Input
-            readOnly
-            value={shown ? revealed : '已保存'}
-            onBlur={() => {
-              revealRequest.current += 1
-              setRevealed('')
-              setShown(false)
-            }}
-          />
+  function changeEditorOpen(open: boolean) {
+    if (!open) resetEditor()
+    setEditorOpen(open)
+  }
+
+  function openEditor() {
+    revealRequest.current += 1
+    setRevealed('')
+    setShown(false)
+    resetEditor()
+    setEditorOpen(true)
+  }
+
+  function submitEditor(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (editorValue.length < 8) {
+      setEditorError('请输入至少 8 位的新值。')
+      return
+    }
+    onChange(editorValue)
+    setEditorOpen(false)
+    resetEditor()
+  }
+
+  return (
+    <>
+      <div className="platform-field">
+        <span>{label}</span>
+        <div className="platform-secret-control">
+          <span className={shown ? 'platform-secret-plain' : 'platform-secret-dots'}>
+            {shown ? draftValue || revealed : configured ? '••••••••••••' : '未配置'}
+          </span>
+          {configured ? <span className="platform-secret-state">{draftValue ? '待保存' : '已配置'}</span> : null}
           <Button
+            aria-pressed={shown}
             size="icon"
             variant="ghost"
             type="button"
-            disabled={busy || !state.revealable}
-            title={shown ? '隐藏明文' : '显示明文'}
-            onMouseDown={(event) => event.preventDefault()}
+            disabled={busy || (!draftValue && (!state.configured || !state.revealable))}
+            title={shown ? `隐藏${label}` : `显示${label}`}
             onClick={() => void toggle()}
           >
             {busy ? <SpinnerGap className="animate-spin" /> : shown ? <EyeSlash /> : <Eye />}
           </Button>
-          <Button type="button" variant="outline" onClick={onBeginReplace}>替换</Button>
-          <Button size="icon" variant="ghost" type="button" title="清除凭据" onClick={onClear}><Trash /></Button>
+          <Button type="button" variant="ghost" onClick={openEditor}>{configured ? '替换' : '设置'}</Button>
         </div>
-      </Field>
-    )
-  }
-
-  return (
-    <Field label={label} hint={state.configured ? '输入并确认新值后保存' : '尚未配置时可以留空'}>
-      <div className="platform-secret-editor">
-        <div className="platform-secret-entry">
-          <Input
-            aria-invalid={Boolean(validationError)}
-            aria-label={`新${label}`}
-            autoComplete="new-password"
-            type={shown ? 'text' : 'password'}
-            placeholder={`新${label}`}
-            value={draft?.value ?? ''}
-            onChange={(event) => onChange({ value: event.target.value })}
-          />
-          <Input
-            aria-invalid={Boolean(validationError)}
-            aria-label={`确认${label}`}
-            autoComplete="new-password"
-            type={shown ? 'text' : 'password'}
-            placeholder={`确认${label}`}
-            value={draft?.confirmation ?? ''}
-            onChange={(event) => onChange({ confirmation: event.target.value })}
-          />
-          <Button size="icon" variant="ghost" type="button" title={shown ? '隐藏明文' : '显示明文'} onClick={() => setShown((current) => !current)}>
-            {shown ? <EyeSlash /> : <Eye />}
-          </Button>
-          {state.configured ? <Button type="button" variant="outline" onClick={onCancel}>取消替换</Button> : null}
-        </div>
-        {validationError ? <small className="platform-secret-error" role="alert">{validationError}</small> : null}
       </div>
-    </Field>
+      <Dialog open={editorOpen} onOpenChange={changeEditorOpen}>
+        <DialogContent>
+          <form className="platform-secret-dialog" onSubmit={submitEditor}>
+            <DialogHeader>
+              <DialogTitle>{configured ? '替换' : '设置'}{label}</DialogTitle>
+              <DialogDescription>新值将先加入当前页草稿，点击页面底部的“保存更改”后才会生效。</DialogDescription>
+            </DialogHeader>
+            <Label className="platform-secret-dialog-field" htmlFor={editorInputId}>
+              <span>新值</span>
+              <div className="platform-secret-dialog-input">
+                <Input
+                  autoFocus
+                  aria-describedby={editorError ? `${editorInputId}-error` : undefined}
+                  aria-invalid={Boolean(editorError)}
+                  autoComplete="new-password"
+                  id={editorInputId}
+                  type={editorShown ? 'text' : 'password'}
+                  placeholder={`输入新的${label}`}
+                  value={editorValue}
+                  onChange={(event) => {
+                    setEditorValue(event.target.value)
+                    setEditorError('')
+                  }}
+                />
+                <Button
+                  aria-label={editorShown ? '隐藏新值' : '显示新值'}
+                  aria-pressed={editorShown}
+                  size="icon"
+                  title={editorShown ? '隐藏新值' : '显示新值'}
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setEditorShown((current) => !current)}
+                >
+                  {editorShown ? <EyeSlash /> : <Eye />}
+                </Button>
+              </div>
+            </Label>
+            {allowGenerate ? <Button className="platform-secret-generate" type="button" variant="link" onClick={() => { setEditorValue(generateRandomSecret()); setEditorError('') }}>生成随机密钥</Button> : null}
+            {editorError ? <p className="form-error" id={`${editorInputId}-error`} role="alert">{editorError}</p> : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => changeEditorOpen(false)}>取消</Button>
+              <Button type="submit">更新草稿</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
@@ -322,7 +344,6 @@ export function PlatformManagementWorkbench({
   const [loaded, setLoaded] = useState<PlatformConfigResponse>()
   const [draft, setDraft] = useState<PlatformConfig>()
   const [secrets, setSecrets] = useState<SecretDrafts>({})
-  const [clearedSecrets, setClearedSecrets] = useState<Set<string>>(new Set())
   const [users, setUsers] = useState<ManagedUser[]>([])
   const [organizations, setOrganizations] = useState<PlatformOrganization[]>([])
   const [runtime, setRuntime] = useState<PlatformRuntimeStatus>()
@@ -346,7 +367,6 @@ export function PlatformManagementWorkbench({
   function handleError(value: unknown, fallback: string) {
     if (value instanceof ApiError && (value.status === 401 || value.status === 403)) {
       setSecrets({})
-      setClearedSecrets(new Set())
       onAuthorizationLost()
       return
     }
@@ -358,7 +378,6 @@ export function PlatformManagementWorkbench({
     setLoaded(response)
     setDraft(cloneConfig(response.config))
     setSecrets({})
-    setClearedSecrets(new Set())
   }
 
   async function loadUsers() {
@@ -419,113 +438,23 @@ export function PlatformManagementWorkbench({
     setTestResult('')
   }
 
-  function beginSecretReplacement(section: PlatformConfigSection, field: string) {
+  function updateSecret(section: PlatformConfigSection, field: string, value: string) {
     const path = `${section}.${field}`
-    setSecrets((current) => ({
-      ...current,
-      [path]: { confirmation: '', editing: true, touched: false, value: '' },
-    }))
-    setClearedSecrets((current) => {
-      const next = new Set(current)
-      next.delete(path)
-      return next
-    })
-  }
-
-  function updateSecret(
-    section: PlatformConfigSection,
-    field: string,
-    patch: Partial<Pick<SecretDraft, 'confirmation' | 'value'>>,
-  ) {
-    const path = `${section}.${field}`
-    setSecrets((current) => ({
-      ...current,
-      [path]: {
-        confirmation: '',
-        editing: true,
-        touched: true,
-        value: '',
-        ...current[path],
-        ...patch,
-      },
-    }))
-    setClearedSecrets((current) => {
-      const next = new Set(current)
-      next.delete(path)
-      return next
-    })
-  }
-
-  function cancelSecretChange(section: PlatformConfigSection, field: string) {
-    const path = `${section}.${field}`
-    setSecrets((current) => {
-      const next = { ...current }
-      delete next[path]
-      return next
-    })
-    setClearedSecrets((current) => {
-      const next = new Set(current)
-      next.delete(path)
-      return next
-    })
-  }
-
-  function clearSecret(section: PlatformConfigSection, field: string) {
-    const path = `${section}.${field}`
-    setSecrets((current) => {
-      const next = { ...current }
-      delete next[path]
-      return next
-    })
-    setClearedSecrets((current) => new Set(current).add(path))
-  }
-
-  function restoreSecret(section: PlatformConfigSection, field: string) {
-    const path = `${section}.${field}`
-    setClearedSecrets((current) => {
-      const next = new Set(current)
-      next.delete(path)
-      return next
-    })
-  }
-
-  function secretValidationError(section: PlatformConfigSection, field: string) {
-    if (!draft) return ''
-    const path = `${section}.${field}`
-    if (clearedSecrets.has(path)) return ''
-    const state = (draft[section] as unknown as Record<string, SecretState>)[field]
-    const secretDraft = secrets[path]
-    return validatePlatformSecretDraft({
-      configured: state.configured,
-      editing: !state.configured || Boolean(secretDraft?.editing),
-      touched: Boolean(secretDraft?.touched),
-      value: secretDraft?.value ?? '',
-      confirmation: secretDraft?.confirmation ?? '',
-    })
-  }
-
-  function sectionHasInvalidSecrets(section: PlatformConfigSection) {
-    return (sectionSecretFields[section] ?? []).some((field) => Boolean(secretValidationError(section, field)))
+    setSecrets((current) => ({ ...current, [path]: value }))
+    setNotice('')
+    setTestResult('')
   }
 
   function secretActions(section: PlatformConfigSection) {
     return Object.fromEntries((sectionSecretFields[section] ?? []).map((field) => {
       const path = `${section}.${field}`
-      if (clearedSecrets.has(path)) return [field, { action: 'clear' as const }]
-      const secretDraft = secrets[path]
-      if (secretDraft?.editing && secretDraft.value) {
-        return [field, { action: 'replace' as const, value: secretDraft.value }]
-      }
+      if (secrets[path]) return [field, { action: 'replace' as const, value: secrets[path] }]
       return [field, { action: 'keep' as const }]
     }))
   }
 
   async function saveSection(section: PlatformConfigSection) {
     if (!draft || !loaded) return
-    if (sectionHasInvalidSecrets(section)) {
-      setError('请先完整填写并确认需要替换的凭据。')
-      return
-    }
     setBusy(true)
     setError('')
     setNotice('')
@@ -537,7 +466,6 @@ export function PlatformManagementWorkbench({
         secrets: secretActions(section),
       })
       setSecrets({})
-      setClearedSecrets(new Set())
       await loadConfig()
       setNotice(`配置已保存为版本 ${result.revision}，服务正在自动加载。`)
       await loadRuntime()
@@ -550,10 +478,6 @@ export function PlatformManagementWorkbench({
 
   async function testSection(section: PlatformConfigSection, action: 'connect' | 'send-email' = 'connect') {
     if (!draft || !loaded) return
-    if (sectionHasInvalidSecrets(section)) {
-      setError('请先完整填写并确认需要替换的凭据。')
-      return
-    }
     setBusy(true)
     setError('')
     setTestResult('')
@@ -741,18 +665,14 @@ export function PlatformManagementWorkbench({
   const secret = (section: PlatformConfigSection, field: string, label: string, state: SecretState) => (
     <SecretField
       key={`${section}.${field}:${loaded.revision}`}
-      cleared={clearedSecrets.has(`${section}.${field}`)}
-      draft={secrets[`${section}.${field}`]}
+      allowGenerate={section === 'storage' && field === 'urlSecret'}
+      draftValue={secrets[`${section}.${field}`] ?? ''}
       field={`${section}.${field}`}
       label={label}
       state={state}
-      onBeginReplace={() => beginSecretReplacement(section, field)}
-      onCancel={() => cancelSecretChange(section, field)}
-      onChange={(patch) => updateSecret(section, field, patch)}
-      onClear={() => clearSecret(section, field)}
+      onChange={(value) => updateSecret(section, field, value)}
       onError={(revealError) => handleError(revealError, '凭据读取失败。')}
       onReveal={() => reveal(section, field)}
-      onRestore={() => restoreSecret(section, field)}
     />
   )
 
@@ -846,7 +766,7 @@ export function PlatformManagementWorkbench({
             <Field label="发件人名称"><Input value={draft.email.fromName} onChange={(event) => updateSection('email', { fromName: event.target.value })} /></Field>
             <Field label="发件地址"><Input type="email" value={draft.email.fromAddress} onChange={(event) => updateSection('email', { fromAddress: event.target.value })} /></Field>
             <Field label="测试收件地址" hint="只用于本次测试，不会保存"><Input type="email" value={testEmailRecipient} onChange={(event) => setTestEmailRecipient(event.target.value)} /></Field>
-            <Button variant="outline" type="button" disabled={busy || !testEmailRecipient.trim() || sectionHasInvalidSecrets('email')} onClick={() => void testSection('email', 'send-email')}><PaperPlaneTilt />发送测试邮件</Button>
+            <Button variant="outline" type="button" disabled={busy || !testEmailRecipient.trim()} onClick={() => void testSection('email', 'send-email')}><PaperPlaneTilt />发送测试邮件</Button>
           </div> : null}
 
           {tab === 'storage' ? <div className="platform-form-grid">
@@ -950,7 +870,7 @@ export function PlatformManagementWorkbench({
           {tab === 'runtime' ? <div className="platform-runtime"><div className="platform-runtime-summary"><div><span>数据库当前版本</span><strong>v{runtime?.activeRevision ?? loaded.revision}</strong></div><div><span>API 实例</span><strong>{runtime?.instances.length ?? 0}</strong></div><div><span>定时任务</span><strong>运行时加载</strong></div></div><section><h4>服务实例</h4>{runtime?.instances.map((instance) => <div className="platform-runtime-row" key={instance.instanceId}><span className={`platform-runtime-dot ${instance.status}`} /><code>{instance.instanceId.slice(0, 8)}</code><span>{instance.status === 'applied' ? '已生效' : instance.status === 'error' ? '加载异常' : '状态未知'}</span><strong>{instance.appliedRevision ? `v${instance.appliedRevision}` : '未加载'}</strong><time>{new Date(instance.heartbeatAt).toLocaleString('zh-CN')}</time></div>)}</section></div> : null}
           {tab === 'history' ? <div className="platform-runtime"><section><h4>配置历史</h4>{history.map((item) => <div className="platform-history-row" key={item.revision}><strong>v{item.revision}</strong><span>{item.createdBy}</span><time>{new Date(item.createdAt).toLocaleString('zh-CN')}</time><ConfirmActionDialog title={`恢复到版本 v${item.revision}？`} description="恢复会创建一个新版本并自动热更新，不会改变固定回调、用户权限或组织数据。" confirmLabel="确认恢复" trigger={<Button size="sm" variant="outline" disabled={item.revision === loaded.revision}>恢复</Button>} onConfirm={async () => { await restorePlatformConfigRevision(item.revision, loaded.revision); await Promise.all([loadConfig(), loadRuntime()]); return true }} /></div>)}</section></div> : null}
 
-          {(['general', 'ai', 'email', 'storage', 'packages', 'feishu', 'github'] as Tab[]).includes(tab) ? <footer className="platform-savebar"><Button variant="outline" type="button" disabled={busy} onClick={() => { setDraft(cloneConfig(loaded.config)); setSecrets({}); setClearedSecrets(new Set()); setTestResult('') }}>撤销修改</Button>{(['ai', 'email', 'storage', 'feishu', 'github'] as Tab[]).includes(tab) ? <Button variant="outline" type="button" disabled={busy || sectionHasInvalidSecrets(tab as PlatformConfigSection)} onClick={() => void testSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}{tab === 'email' ? '测试连接' : '测试可用性'}</Button> : null}<Button type="button" disabled={busy || sectionHasInvalidSecrets(tab as PlatformConfigSection)} onClick={() => void saveSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}保存更改</Button></footer> : null}
+          {(['general', 'ai', 'email', 'storage', 'packages', 'feishu', 'github'] as Tab[]).includes(tab) ? <footer className="platform-savebar"><Button variant="outline" type="button" disabled={busy} onClick={() => { setDraft(cloneConfig(loaded.config)); setSecrets({}); setTestResult('') }}>撤销修改</Button>{(['ai', 'email', 'storage', 'feishu', 'github'] as Tab[]).includes(tab) ? <Button variant="outline" type="button" disabled={busy} onClick={() => void testSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}{tab === 'email' ? '测试连接' : '测试可用性'}</Button> : null}<Button type="button" disabled={busy} onClick={() => void saveSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}保存更改</Button></footer> : null}
         </section>
       </div>
 

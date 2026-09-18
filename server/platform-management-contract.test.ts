@@ -80,6 +80,16 @@ test('successful platform configuration writes clear plaintext drafts before ref
   assert.ok(saveSource.indexOf('setSecrets({})') < saveSource.indexOf('await loadConfig()'))
 })
 
+test('platform secrets use the prototype replacement dialog contract', () => {
+  assert.match(workbenchSource, /editorValue\.length < 8/u)
+  assert.match(workbenchSource, />更新草稿</u)
+  assert.match(workbenchSource, /allowGenerate=\{section === 'storage' && field === 'urlSecret'\}/u)
+  assert.match(workbenchSource, /生成随机密钥/u)
+  assert.match(workbenchSource, /setEditorValue\(''\)/u)
+  assert.doesNotMatch(workbenchSource, /确认新/u)
+  assert.doesNotMatch(workbenchSource, /confirmation:/u)
+})
+
 test('builtin administrator bootstrap validates the complete existing account', () => {
   const bootstrapStart = cliSource.indexOf('async function bootstrapAdmin')
   const bootstrapEnd = cliSource.indexOf('async function initializeFreshInstall', bootstrapStart)
