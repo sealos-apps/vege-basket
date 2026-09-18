@@ -21,6 +21,7 @@ import {
   UserGear,
   UserMinus,
   WarningCircle,
+  Wrench,
 } from '@phosphor-icons/react'
 import {
   createPlatformOrganization,
@@ -33,6 +34,8 @@ import {
   fetchPlatformOrganizations,
   fetchPlatformRuntimeStatus,
   fetchPlatformSecurityStatus,
+  fetchPlatformMaintenance,
+  fetchApplicationMigrations,
   offboardManagedUser,
   revealPlatformSecret,
   restorePlatformConfigRevision,
@@ -41,6 +44,7 @@ import {
   testPlatformConfigSection,
   updateManagedUserPermissions,
   updateManagedUserStatus,
+  updatePlatformMaintenance,
   validatePlatformPackageRules,
   ApiError,
   type ManagedUser,
@@ -57,6 +61,8 @@ import type {
   PlatformOrganization,
   PlatformRuntimeStatus,
   PlatformSecurityStatus,
+  PlatformStatus,
+  ApplicationMigration,
   SecretState,
 } from '@/platform-management-types'
 import {
@@ -90,7 +96,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import './platform-management-workbench.css'
 
-type Tab = PlatformConfigSection | 'users' | 'organizations' | 'security' | 'runtime' | 'history'
+type Tab = PlatformConfigSection | 'users' | 'organizations' | 'maintenance' | 'security' | 'runtime' | 'history'
 type SecretDrafts = Record<string, string | undefined>
 type UserTab = 'users' | 'admins'
 
@@ -98,6 +104,7 @@ const tabs: Array<{ group: string; icon: typeof GearSix; id: Tab; label: string 
   { group: '平台', icon: GearSix, id: 'general', label: '平台信息' },
   { group: '平台', icon: UserGear, id: 'users', label: '用户与角色' },
   { group: '平台', icon: Buildings, id: 'organizations', label: '组织管理' },
+  { group: '平台', icon: Wrench, id: 'maintenance', label: '维护模式' },
   { group: '服务配置', icon: Cpu, id: 'ai', label: '全局 AI' },
   { group: '服务配置', icon: PaperPlaneTilt, id: 'email', label: '邮箱配置' },
   { group: '服务配置', icon: Cloud, id: 'storage', label: '对象存储' },
@@ -390,6 +397,9 @@ export function PlatformManagementWorkbench({
   const [users, setUsers] = useState<ManagedUser[]>([])
   const [organizations, setOrganizations] = useState<PlatformOrganization[]>([])
   const [runtime, setRuntime] = useState<PlatformRuntimeStatus>()
+  const [maintenance, setMaintenance] = useState<PlatformStatus>()
+  const [maintenanceMessage, setMaintenanceMessage] = useState('')
+  const [migrations, setMigrations] = useState<ApplicationMigration[]>([])
   const [security, setSecurity] = useState<PlatformSecurityStatus>()
   const [history, setHistory] = useState<PlatformConfigHistoryItem[]>([])
   const [historyDetail, setHistoryDetail] = useState<PlatformConfigHistoryDetail>()
@@ -438,11 +448,14 @@ export function PlatformManagementWorkbench({
   }
 
   async function loadRuntime() {
-    const [runtimeResponse, historyResponse] = await Promise.all([
+    const [runtimeResponse, historyResponse, maintenanceResponse] = await Promise.all([
       fetchPlatformRuntimeStatus(),
       fetchPlatformConfigHistory(),
+      fetchPlatformMaintenance(),
     ])
     setRuntime(runtimeResponse)
+    setMaintenance(maintenanceResponse)
+    setMaintenanceMessage(maintenanceResponse.maintenance.message)
     setRuntimeCheckFailed(false)
     setHistory(historyResponse.history)
   }
@@ -454,6 +467,7 @@ export function PlatformManagementWorkbench({
       loadUsers(),
       fetchPlatformOrganizations().then((response) => setOrganizations(response.organizations)),
       fetchPlatformSecurityStatus().then(setSecurity),
+      fetchApplicationMigrations().then((response) => setMigrations(response.migrations)),
       loadRuntime(),
     ])
       .catch((loadError) => handleError(loadError, '平台信息读取失败。'))
@@ -468,10 +482,11 @@ export function PlatformManagementWorkbench({
     if (!loaded?.revision) return
     let active = true
     const timer = window.setInterval(() => {
-      void fetchPlatformRuntimeStatus()
-        .then((response) => {
+      void Promise.all([fetchPlatformRuntimeStatus(), fetchPlatformMaintenance()])
+        .then(([response, maintenanceResponse]) => {
           if (active) {
             setRuntime(response)
+            setMaintenance(maintenanceResponse)
             setRuntimeCheckFailed(false)
           }
         })
@@ -482,6 +497,35 @@ export function PlatformManagementWorkbench({
       window.clearInterval(timer)
     }
   }, [loaded?.revision, rolloutRevision])
+
+  async function changeMaintenance(enabled: boolean) {
+    if (!maintenance) return false
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      await updatePlatformMaintenance(
+        enabled,
+        enabled ? maintenanceMessage : '',
+        maintenance.maintenance.revision,
+      )
+      const next = await fetchPlatformMaintenance()
+      setMaintenance(next)
+      setMaintenanceMessage(next.maintenance.message)
+      setNotice(enabled ? '平台已进入维护模式。' : '维护模式已结束，业务访问已恢复。')
+      return true
+    } catch (changeError) {
+      if (changeError instanceof ApiError && changeError.responseBody && typeof changeError.responseBody === 'object' &&
+          'blockers' in changeError.responseBody && Array.isArray(changeError.responseBody.blockers)) {
+        setError(`当前还不能结束维护：${changeError.responseBody.blockers.join('、')}`)
+      } else {
+        handleError(changeError, '维护状态更新失败。')
+      }
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
 
   function updateSection<K extends PlatformConfigSection>(section: K, patch: Partial<PlatformConfig[K]>) {
     setDraft((current) => current ? { ...current, [section]: { ...current[section], ...patch } } : current)
@@ -826,6 +870,10 @@ export function PlatformManagementWorkbench({
     ),
   )
   const runtimeStatus = runtime ? platformConfigRuntimeOverallStatus(runtime) : 'loading'
+  const onlineInstances = runtime?.instances.filter((instance) => instance.status !== 'offline') ?? []
+  const maintenanceAppliedCount = maintenance
+    ? onlineInstances.filter((instance) => instance.operationalRevision === maintenance.maintenance.revision).length
+    : 0
   const rollout = runtime && rolloutRevision
     ? platformConfigRevisionProgress(runtime, rolloutRevision)
     : null
@@ -987,6 +1035,38 @@ export function PlatformManagementWorkbench({
           </> : null}
 
           {tab === 'organizations' ? <div className="platform-organizations"><div className="platform-list-tools"><div className="platform-search"><MagnifyingGlass /><Input placeholder="搜索组织或所有者" value={organizationSearch} onChange={(event) => setOrganizationSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void loadOrganizations() }} /></div><Button variant="outline" onClick={() => void loadOrganizations()} disabled={busy}>查询</Button><Button onClick={() => setCreateOpen(true)} disabled={busy}><Plus />新建组织</Button></div><div className="platform-table-list">{organizations.map((organization) => <article className="platform-organization-row" key={organization.id}><div><strong>{organization.name}</strong><small>所有者：{organization.owner.displayName}</small></div><div className="platform-counts"><span>{organization.memberCount} 成员</span><span>{organization.projectCount} 项目</span><span>{organization.testSpaceCount} 测试空间</span></div><Badge variant={organization.canDelete ? 'secondary' : 'outline'}>{organization.canDelete ? '空组织' : `${organization.blockers.reduce((sum, item) => sum + item.count, 0)} 项关联数据`}</Badge><ConfirmActionDialog actionKey={`platform-organization-delete:${organization.id}`} title={`删除组织“${organization.name}”？`} description={organization.canDelete ? '仅删除组织壳和唯一所有者关系，操作不可恢复。' : '该组织仍有关联业务或历史数据，当前不能删除。'} confirmationName={organization.name} confirmLabel="删除组织" confirmDisabled={!organization.canDelete} trigger={<Button size="icon" variant="destructive" title="删除组织"><Trash /></Button>} onConfirm={async () => { await deletePlatformOrganization(organization.id, organization.name); await loadOrganizations(); return true }} /></article>)}</div></div> : null}
+
+          {tab === 'maintenance' ? <div className="platform-runtime">
+            <div className="platform-runtime-summary">
+              <div><span>当前状态</span><strong>{maintenance?.maintenance.active ? '维护中' : '正常运行'}</strong></div>
+              <div><span>数据库迁移</span><strong>{maintenance?.migration.phase === 'completed' ? '已完成' : maintenance?.migration.phase === 'failed' ? '失败' : '进行中'}</strong></div>
+              <div><span>状态版本</span><strong>v{maintenance?.maintenance.revision ?? 0}</strong></div>
+              <div><span>实例已加载</span><strong>{maintenanceAppliedCount}/{onlineInstances.length}</strong></div>
+            </div>
+            {maintenance?.maintenance.systemForced ? <div className="platform-alert error" role="status"><WarningCircle />系统正在强制维护：{maintenance.maintenance.systemReasons.join('、')}</div> : null}
+            <section>
+              <h4>访问控制</h4>
+              <p>维护期间只保留健康检查、admin 登录和平台配置，其他业务接口返回 503。</p>
+              <Field label="维护说明" hint="用户在维护期间看到的提示"><Textarea disabled={busy} maxLength={500} value={maintenanceMessage} onChange={(event) => setMaintenanceMessage(event.target.value)} /></Field>
+              {maintenance?.maintenance.manual && maintenanceMessage !== maintenance.maintenance.message ? <Button type="button" variant="outline" disabled={busy} onClick={() => void changeMaintenance(true)}><CheckCircle />更新说明</Button> : null}
+              {maintenance?.maintenance.manual ? <ConfirmActionDialog
+                actionKey={`platform-maintenance-disable:${maintenance.maintenance.revision}`}
+                title="结束维护模式？"
+                description="系统会检查数据库迁移、必填平台配置和所有在线 API 实例的加载状态。"
+                confirmLabel="结束维护"
+                trigger={<Button disabled={busy || maintenance.maintenance.systemForced}><CheckCircle />结束维护</Button>}
+                onConfirm={() => changeMaintenance(false)}
+              /> : <ConfirmActionDialog
+                actionKey={`platform-maintenance-enable:${maintenance?.maintenance.revision ?? 0}`}
+                title="进入维护模式？"
+                description="普通用户的现有业务请求将被立即拒绝，超级管理员仍可登录并调整平台配置。"
+                confirmLabel="进入维护"
+                trigger={<Button disabled={busy} variant="destructive"><Wrench />进入维护</Button>}
+                onConfirm={() => changeMaintenance(true)}
+              />}
+            </section>
+            <section><h4>自动迁移记录</h4>{migrations.length > 0 ? migrations.map((migration) => <div className="platform-runtime-row" key={migration.id}><span className="platform-runtime-dot applied" /><code>{migration.id}</code><span>{migration.name}</span><strong>{migration.durationMs} ms</strong><time>{new Date(migration.appliedAt).toLocaleString('zh-CN')}</time></div>) : <p>暂无已完成的迁移。</p>}</section>
+          </div> : null}
 
           {tab === 'security' ? <div className="platform-security"><div className="platform-runtime-summary"><div><span>应用加密</span><strong>{security?.configured ? '已启用' : '配置异常'}</strong></div><div><span>加密算法</span><strong>{security?.algorithm ?? '未知'}</strong></div><div><span>活动密钥标识</span><strong>{security?.activeKeyId || '未配置'}</strong></div></div><section><h4>密钥保留状态</h4><p>现有密文引用的旧密钥必须继续保留。这里只显示标识，不显示密钥材料。</p><div className="platform-key-list">{security?.retainedKeyIds.map((keyId) => <Badge key={keyId} variant={keyId === security.activeKeyId ? 'default' : 'outline'}>{keyId}{keyId === security.activeKeyId ? '（当前）' : ''}</Badge>)}</div></section><section><h4>加密覆盖</h4><div className="platform-security-check"><CheckCircle /><span>平台配置与历史版本使用应用层加密存储</span></div><div className="platform-security-check"><CheckCircle /><span>敏感业务文本使用应用层加密存储</span></div></section><section><h4>最近巡检</h4>{security?.lastInspection ? <div className="platform-inspection"><Badge variant={security.lastInspection.status === 'passed' ? 'secondary' : 'destructive'}>{security.lastInspection.status === 'passed' ? '通过' : '失败'}</Badge><span>{security.lastInspection.result.summary || '巡检已记录'}</span><time>{new Date(security.lastInspection.createdAt).toLocaleString('zh-CN')}</time></div> : <p>尚无巡检记录。迁移或密钥轮换后应运行已授权的数据加密巡检。</p>}</section></div> : null}
 

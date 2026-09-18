@@ -166,6 +166,7 @@ import {
   fetchCurrentAuthContext,
   fetchCurrentUser,
   fetchNotifications,
+  fetchPlatformStatus,
   ApiError,
   AiTurnStreamTerminalError,
   fetchProjectInviteLinkInfo,
@@ -222,6 +223,7 @@ import {
   type UserRole,
   type WorkspaceData,
 } from './api'
+import type { PlatformStatus } from './platform-management-types'
 import type { OrganizationListItem, OrganizationMember } from './organization-types'
 import type {
   InboxItem,
@@ -1772,6 +1774,7 @@ function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme)
   const [loggedIn, setLoggedIn] = useState(Boolean(getAuthToken()))
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
+  const [platformStatus, setPlatformStatus] = useState<PlatformStatus>()
   const authUserId = authUser?.id
   const bugShareToken = getBugShareTokenFromPath()
   const todoShareToken = getTodoShareTokenFromPath(window.location.pathname)
@@ -1802,6 +1805,25 @@ function App() {
   const [changelogCanManage, setChangelogCanManage] = useState(false)
   const [changelogEditorOpen, setChangelogEditorOpen] = useState(false)
   const [changelogCreateRequest, setChangelogCreateRequest] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    const refresh = () => {
+      void fetchPlatformStatus().then((status) => {
+        if (active) setPlatformStatus(status)
+      }).catch(() => undefined)
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 5_000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (platformStatus?.maintenance.active && authUser?.isSystemAdmin) setView('platform')
+  }, [authUser?.isSystemAdmin, platformStatus?.maintenance.active])
 
   useEffect(() => {
     if (view === 'changelog') return
@@ -5090,6 +5112,7 @@ ${packageTimelineText}`
         }}
         onVerifyInvitePassword={submitInvitePassword}
         onSignIn={signIn}
+        maintenanceMessage={platformStatus?.maintenance.active ? (platformStatus.maintenance.message || '当前只允许超级管理员登录。') : undefined}
       />
     )
   }
@@ -5126,6 +5149,7 @@ ${packageTimelineText}`
         onVerifyInvitePassword={submitInvitePassword}
         onSignIn={signIn}
         shareBackLabel="返回待办分享"
+        maintenanceMessage={platformStatus?.maintenance.active ? (platformStatus.maintenance.message || '当前只允许超级管理员登录。') : undefined}
       />
     )
   }
@@ -5161,11 +5185,17 @@ ${packageTimelineText}`
           }}
           onVerifyInvitePassword={submitInvitePassword}
           onSignIn={signIn}
+          maintenanceMessage={platformStatus?.maintenance.active ? (platformStatus.maintenance.message || '当前只允许超级管理员登录。') : undefined}
         />
     )
   }
 
-  if (!workspaceLoaded || !organizationContextReady) {
+  if (platformStatus?.maintenance.active && authUser && !authUser.isSystemAdmin) {
+    return <MaintenanceScreen message={platformStatus.maintenance.message} onSignOut={signOut} />
+  }
+
+  const maintenanceAdmin = Boolean(platformStatus?.maintenance.active && authUser?.isSystemAdmin)
+  if ((!workspaceLoaded && !maintenanceAdmin) || (!organizationContextReady && !authUser?.isSystemAdmin)) {
     return <WorkspaceBootScreen message={organizationContextError || undefined} />
   }
 
@@ -5991,6 +6021,22 @@ function WorkspaceBootScreen({ message }: { message?: string }) {
   )
 }
 
+function MaintenanceScreen({ message, onSignOut }: { message: string; onSignOut: () => void }) {
+  return (
+    <main className="workspace-boot-screen">
+      <div className="workspace-boot-panel maintenance-screen-panel">
+        <WarningCircle size={32} aria-hidden />
+        <div>
+          <p className="eyebrow">Veges 平台维护</p>
+          <h1>平台正在维护</h1>
+          <p>{message || '管理员正在更新平台配置，请稍后再试。'}</p>
+          <Button type="button" variant="outline" onClick={onSignOut}><SignOut />退出登录</Button>
+        </div>
+      </div>
+    </main>
+  )
+}
+
 function OrganizationSwitcher({
   error,
   organizations,
@@ -6046,6 +6092,7 @@ function LoginScreen({
   onInvitePasswordChange,
   onVerifyInvitePassword,
   onSignIn,
+  maintenanceMessage,
   shareBackLabel = '返回 Bug 分享',
 }: {
   error: string
@@ -6062,6 +6109,7 @@ function LoginScreen({
   onInvitePasswordChange: (value: string) => void
   onVerifyInvitePassword: () => Promise<void>
   onSignIn: (username: string, password: string) => void
+  maintenanceMessage?: string
   shareBackLabel?: string
 }) {
   const [username, setUsername] = useState('')
@@ -6115,9 +6163,10 @@ function LoginScreen({
             onSignIn(username, password)
           }}
         >
+          {maintenanceMessage ? <div className="login-maintenance-notice" role="status"><WarningCircle /> <span><strong>平台维护中</strong>{maintenanceMessage || '只允许超级管理员登录。'}</span></div> : null}
           <div className="login-form-heading">
             <strong>登录</strong>
-            <span>新用户请使用飞书登录；历史账号可以继续使用用户名和密码。</span>
+            <span>{maintenanceMessage ? '当前只允许超级管理员使用密码登录。' : '新用户请使用飞书登录；历史账号可以继续使用用户名和密码。'}</span>
           </div>
           {hasProjectInvite && (
             <div className="login-invite-note">
@@ -6199,7 +6248,7 @@ function LoginScreen({
           <Button className="solid-button wide" type="submit">
             <SignIn size={18} /> 进入驾驶舱
           </Button>
-          <div className="auth-divider">
+          {!maintenanceMessage ? <><div className="auth-divider">
             <span>或</span>
           </div>
           <Button
@@ -6211,7 +6260,7 @@ function LoginScreen({
           >
             <LinkSimple size={18} /> {feishuBusy ? '正在打开飞书...' : '用飞书继续'}
           </Button>
-          <p className="form-note">首次使用请通过公司飞书账号自动注册。</p>
+          <p className="form-note">首次使用请通过公司飞书账号自动注册。</p></> : null}
             </>
           )}
         </form>

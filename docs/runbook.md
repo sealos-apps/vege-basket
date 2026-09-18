@@ -50,8 +50,9 @@ GitHub Actions, pulls an external image, and writes a tar plus checksum to OSS.
 ## Platform Configuration Rollout
 
 The runtime environment contains only database, connection-pool, port, and application
-encryption settings. For an existing deployment, preserve the old environment file outside Git,
-apply the reviewed schema in an authorized maintenance window, then run:
+encryption settings. The built-in admin bootstrap password is mounted as a Secret file. Application
+startup does not import business values from an old environment file. For an existing deployment,
+preserve that file outside Git only if an operator explicitly chooses the compatibility workflow:
 
 ```bash
 npm run platform:config -- inspect --env-file /secure/path/legacy.env
@@ -61,22 +62,28 @@ npm run platform:config -- import --env-file /secure/path/legacy.env
 ```
 
 `bootstrap-admin` prompts for a password and creates or upgrades the immutable built-in `admin`.
-在平台配置尚未初始化时，健康检查、`admin` 登录、当前用户读取和轻量权限上下文读取仍可用，便于通过“平台管理”保存首个配置版本；其他业务接口会返回配置未初始化错误。登录后的浏览器每 15 秒及重新回到前台时读取一次权限上下文，超级管理员授权、撤销和账号停用无需重新登录即可生效。
-`import` runs once, encrypts business settings into PostgreSQL, and imports
+`import` is an explicit one-time compatibility action; it encrypts business settings into PostgreSQL and imports
 `VEGES_ADMIN_USERNAMES` as managed grants. The Feishu event callback and OAuth redirect URL are
 derived from the imported `APP_PUBLIC_URL`; legacy `FEISHU_OAUTH_REDIRECT_URI` is ignored. It refuses to overwrite
 an existing platform configuration. Retain the complete application encryption key ring for every
-stored config version. After import, remove business values from the workload environment and use
-the Platform Management page for all changes.
+stored config version. Normal deployment omits this workflow: the application enters forced
+maintenance, creates or validates the built-in admin, and waits for that administrator to save the
+first configuration in Platform Management.
+
+Startup opens `/api/health` and `/api/platform-status` first. Both application replicas compete for
+the PostgreSQL migration advisory lock; one applies the current schema/data baseline and writes its
+checksum to `application_migrations`, while the other waits and then verifies the same receipt.
+`/api/ready` returns 503 until this completes. A migration or bootstrap failure leaves the process
+alive in system-forced maintenance so its status remains inspectable.
+
+在平台配置尚未初始化时，系统保持强制维护。迁移完成后只开放 `admin` 登录、当前用户/权限上下文和平台配置、数据安全、运行状态、迁移记录、维护状态接口。管理员逐项保存公网地址、对象存储、飞书登录和包市场规则；AI、邮箱和 GitHub Actions 可暂不配置。只有必填项有效且所有在线 API 实例都已加载当前配置版本时，才能手动结束维护。普通业务接口在维护期间统一返回 `503 PLATFORM_MAINTENANCE`。
 
 平台配置保存后，管理页按目标版本轮询在线 API 实例：全部实例加载目标版本后显示“加载完成”，实例报错、没有在线实例或目标版本已被新版本替代时显示明确状态。配置历史按版本展示字段级差异，密钥只显示“已设置、已替换、已清除”等状态；恢复前会展示目标版本相对当前配置的差异。规范化后的配置没有变化时，服务端只记录幂等回执，不创建配置版本、审计事件或热更新通知。
 
-Fresh Sealos installations run `db:init` and `platform:config -- initialize` in an init container.
-The initializer accepts one `--public-url` origin; both Feishu callback URLs derive from it.
-The `VEGES_BOOTSTRAP_ADMIN_PASSWORD` template input is passed only to that initializer; it is not
-part of the application or digest-worker runtime environment. The initializer is idempotent after
-successful setup and refuses to create defaults when it detects existing users without an active
-platform configuration, so upgrades cannot silently replace their legacy settings.
+Fresh Sealos installations use two single-container application Pods and no application init
+containers. The initial admin password is mounted from a Kubernetes Secret file and used only when
+the account does not exist. No default business configuration is created. Both Feishu callback URLs
+derive from the public URL the administrator later saves.
 
 ## Local Runtime
 
@@ -95,8 +102,9 @@ second local workspace so Vite proxies to that API port instead. A minimal runti
 curl --fail --silent http://127.0.0.1:8787/api/health
 ```
 
-Expected response: `{"ok":true}`. This health endpoint proves the process is serving;
-it does not prove database, OSS, Feishu, or AI workflows.
+Expected response: `{"ok":true}`. This liveness endpoint proves the process is serving;
+it does not prove database, OSS, Feishu, or AI workflows. Use `/api/ready` for migration readiness
+and `/api/platform-status` for maintenance and migration detail.
 
 The application pool defaults to 10 clients and the digest worker deployment is capped at 2.
 Before changing `DB_POOL_MAX`, compare the sum across the maximum number of application replicas
@@ -159,9 +167,11 @@ history and the full encryption key ring.
 Versioned incremental DDL is maintained in `server/migrations/`. Every table, constraint, and
 index change still requires a new forward-only SQL file; do not edit an already-applied file.
 Keep `server/schema.ts` synchronized as the idempotent bootstrap and compatibility definition.
+Whenever `schemaSql` changes, increase the migration ID in `server/database-migrations.ts`; keeping
+the old ID with a different checksum intentionally prevents application readiness.
 
 For the organization package-market policy release, updating the application image is sufficient:
-the existing API startup path applies `schemaSql` before serving requests, which creates the
+the automatic migration coordinator applies `schemaSql` before readiness, which creates the
 policy tables and updates the selection constraint idempotently. Do not run `psql` or
 `npm run db:init` as an extra release step for this change. The database role used by the API
 must already have permission to create the new tables and alter the policy constraint.
@@ -169,8 +179,8 @@ must already have permission to create the new tables and alter the policy const
 No data is copied from or deleted from `organization_package_markets`. If that old table exists,
 it remains physically present but is no longer read or written. Organizations without rows in the
 new policy tables resolve to the new default: market enabled, Release and CI enabled, and all
-available packages visible. A normal Pod restart simply repeats the existing idempotent startup
-DDL; this release adds no separate migration runner or Pod coordination mechanism.
+available packages visible. A normal Pod restart verifies the migration receipt and checksum
+without repeating completed initialization side effects.
 
 The package-market SQL files remain the structural change record and can be run manually
 only when an explicitly approved environment needs that audit trail applied independently:

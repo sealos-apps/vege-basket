@@ -43,6 +43,36 @@
   line-height: 1.6;
 }
 
+.maintenance-screen-panel {
+  grid-template-columns: 32px minmax(0, 1fr);
+}
+
+.maintenance-screen-panel > svg {
+  color: var(--warning, #b45309);
+}
+
+.maintenance-screen-panel .button {
+  margin-top: 16px;
+}
+
+.login-maintenance-notice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid color-mix(in srgb, var(--warning, #b45309) 45%, var(--line));
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--strong);
+  background: color-mix(in srgb, var(--warning, #b45309) 8%, var(--surface));
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.login-maintenance-notice span {
+  display: grid;
+  gap: 2px;
+}
+
 .login-panel {
   width: min(920px, 100%);
   display: grid;

@@ -112,9 +112,8 @@ import type {
   ProjectPackageDocumentInput,
   ProjectPackageItemInput,
 } from './project-package-timeline.ts'
-import { schemaSql } from './schema.ts'
 import {
-  createPersonalProjectModule, initializeProjectModules, lockOrganizationModuleCatalog,
+  createPersonalProjectModule, lockOrganizationModuleCatalog,
   lockProjectModules, parseProjectModuleId, ProjectModuleError, requirePersonalProjectModuleManagement,
   requireProjectModuleName, resolveProjectModuleId, syncOrganizationProjectModules,
 } from './project-modules.ts'
@@ -220,7 +219,14 @@ import {
   startPlatformConfigRuntime,
   stopPlatformConfigRuntime,
 } from './platform-config-runtime.ts'
-import { assertPlatformBootstrapIntegrity, markPlatformStorageUsed } from './platform-config-store.ts'
+import { markPlatformStorageUsed } from './platform-config-store.ts'
+import { runAutomaticDatabaseMigrations, stopAutomaticDatabaseMigrations } from './database-migrations.ts'
+import {
+  platformMaintenanceMiddleware,
+  getPublicPlatformStatus,
+  startPlatformMaintenanceRuntime,
+  stopPlatformMaintenanceRuntime,
+} from './platform-maintenance.ts'
 import { getPackageMarketRulesForConfigRevision } from './platform-package-rules.ts'
 import {
   configureAccountOffboardingNotifications,
@@ -530,6 +536,7 @@ const aiAgentPrompts: Record<AiAgentType, string> = {
 }
 
 app.use(cors())
+app.use('/api', platformMaintenanceMiddleware)
 
 app.post('/api/todo-images', (request, response, next) => {
   void platformConfigRequestMiddleware(request, response, next)
@@ -4816,6 +4823,15 @@ app.get('/api/health', (_request, response) => {
   response.json({ ok: true })
 })
 
+app.get('/api/ready', (_request, response) => {
+  const status = getPublicPlatformStatus()
+  if (status.migration.phase !== 'completed') {
+    response.status(503).json({ ok: false, migration: status.migration })
+    return
+  }
+  response.json({ ok: true })
+})
+
 app.post('/api/auth/register', asyncHandler(async (_request, response) => {
   response.status(403).json({
     error: '新用户只能通过飞书登录自动注册。',
@@ -4838,6 +4854,13 @@ app.post('/api/auth/login', asyncHandler(async (request, response) => {
   }
 
   const userId = Number(row.id)
+  if (getPublicPlatformStatus().maintenance.active && !(await isPlatformAdmin(userId))) {
+    response.status(503).json({
+      error: '平台正在维护，当前只允许超级管理员登录。',
+      code: 'PLATFORM_MAINTENANCE',
+    })
+    return
+  }
   await linkPendingMemberships(userId, row.email)
   await acceptProjectInviteToken(userId, request.body.inviteToken, request.body.invitePassword)
   await acceptOrganizationInviteToken(userId, request.body.organizationInviteToken)
@@ -13742,27 +13765,37 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
 })
 
 assertEncryptionConfigured()
-await query(schemaSql)
-await initializeProjectModules(pool)
-await assertPlatformBootstrapIntegrity()
-await startPlatformConfigRuntime()
-
 const server = app.listen(port, () => {
   console.log(`API server listening on http://127.0.0.1:${port}`)
 })
 
-const feishuAiRetryTimer = setInterval(() => {
-  if (feishuAiChatEnabled()) scheduleFeishuAiMessages()
-}, 30_000)
-feishuAiRetryTimer.unref()
+let feishuAiRetryTimer: NodeJS.Timeout | null = null
+const startup = runAutomaticDatabaseMigrations()
+  .then(async () => {
+    await startPlatformMaintenanceRuntime()
+    await startPlatformConfigRuntime()
+    feishuAiRetryTimer = setInterval(() => {
+      if (feishuAiChatEnabled()) scheduleFeishuAiMessages()
+    }, 30_000)
+    feishuAiRetryTimer.unref()
+  })
+  .catch((error) => {
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : 'APPLICATION_STARTUP_FAILED'
+    console.error(`Application startup failed: ${code}`)
+  })
 
 let shuttingDown = false
 async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
-  clearInterval(feishuAiRetryTimer)
+  if (feishuAiRetryTimer) clearInterval(feishuAiRetryTimer)
   const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()))
+  stopAutomaticDatabaseMigrations()
+  await startup
   await stopPlatformConfigRuntime()
+  await stopPlatformMaintenanceRuntime()
   server.closeAllConnections()
   await serverClosed
   await pool.end()

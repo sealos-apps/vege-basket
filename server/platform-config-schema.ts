@@ -474,7 +474,7 @@ export function mergePlatformConfigSection(
   strictKeys(input, editableSectionFields[section], section, issues)
   if (issues.length > 0) throw new PlatformConfigValidationError(issues)
   const candidate = structuredClone(current)
-  if (candidate.feishu.oauthStateSecret === corruptedOAuthStateSecret) {
+  if (!candidate.feishu.oauthStateSecret || candidate.feishu.oauthStateSecret === corruptedOAuthStateSecret) {
     candidate.feishu.oauthStateSecret = crypto.randomBytes(32).toString('base64url')
   }
   const sectionTarget = candidate[section] as unknown as Record<string, unknown>

@@ -27,6 +27,12 @@ import { PlatformConfigTransitionError } from './platform-config-transition.ts'
 import { getPlatformSecurityStatus } from './platform-security.ts'
 import { getPlatformMutationReceipt, isPlatformMutationScope } from './platform-mutation-receipts.ts'
 import { createAiConcurrencyLimiter, createAiRateLimiter } from './ai-rate-limit.ts'
+import {
+  getPublicPlatformStatus,
+  isMaintenanceRequestId,
+  listApplicationMigrations,
+  updatePlatformMaintenance,
+} from './platform-maintenance.ts'
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 const platformTestRateLimiter = createAiRateLimiter({ globalLimit: 30, perUserLimit: 10, windowMs: 60_000 })
@@ -63,6 +69,11 @@ function sendPlatformError(response: Response, error: unknown) {
 }
 
 export const platformManagementRouter = Router()
+
+platformManagementRouter.get('/platform-status', (_request, response) => {
+  response.setHeader('Cache-Control', 'no-store')
+  response.json(getPublicPlatformStatus())
+})
 
 platformManagementRouter.get('/platform-info', async (request, response, next) => {
   void request
@@ -267,6 +278,48 @@ platformManagementRouter.get('/admin/platform-config/runtime', async (request, r
   try {
     if (!(await requirePlatformAdminSession(request, response))) return
     response.json(await listPlatformRuntimeStatus())
+  } catch (error) {
+    next(error)
+  }
+})
+
+platformManagementRouter.get('/admin/platform-maintenance', async (request, response, next) => {
+  try {
+    if (!(await requirePlatformAdminSession(request, response))) return
+    response.setHeader('Cache-Control', 'no-store')
+    response.json(getPublicPlatformStatus())
+  } catch (error) {
+    next(error)
+  }
+})
+
+platformManagementRouter.put('/admin/platform-maintenance', async (request, response, next) => {
+  try {
+    const session = await requirePlatformAdminSession(request, response)
+    if (!session) return
+    const expectedRevision = positiveInteger(request.body?.expectedRevision)
+    const requestId = String(request.body?.requestId ?? '')
+    if (typeof request.body?.enabled !== 'boolean' || expectedRevision === null || !isMaintenanceRequestId(requestId)) {
+      response.status(400).json({ error: '维护状态、版本或请求编号无效。' })
+      return
+    }
+    response.json(await updatePlatformMaintenance({
+      actorUserId: session.userId,
+      enabled: request.body.enabled,
+      expectedRevision,
+      message: typeof request.body.message === 'string' ? request.body.message : '',
+      requestId,
+    }))
+  } catch (error) {
+    if (!sendPlatformError(response, error)) next(error)
+  }
+})
+
+platformManagementRouter.get('/admin/platform-migrations', async (request, response, next) => {
+  try {
+    if (!(await requirePlatformAdminSession(request, response))) return
+    response.setHeader('Cache-Control', 'no-store')
+    response.json({ migrations: await listApplicationMigrations() })
   } catch (error) {
     next(error)
   }

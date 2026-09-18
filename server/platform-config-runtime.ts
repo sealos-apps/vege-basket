@@ -8,6 +8,7 @@ import {
   getCurrentPlatformRevision,
   type VersionedPlatformConfig,
 } from './platform-config-store.ts'
+import { getPlatformOperationalRevision } from './platform-maintenance.ts'
 
 const requestConfig = new AsyncLocalStorage<VersionedPlatformConfig>()
 const instanceId = crypto.randomUUID()
@@ -23,10 +24,11 @@ async function recordRuntimeStatus(config: VersionedPlatformConfig | null, error
   await query(
     `with current_status as (
        insert into platform_config_runtime_status
-         (instance_id, process_kind, applied_revision, heartbeat_at, error_code)
-       values ($1::uuid, 'api', $2, clock_timestamp(), $3)
+         (instance_id, process_kind, applied_revision, operational_revision, heartbeat_at, error_code)
+       values ($1::uuid, 'api', $2, $3, clock_timestamp(), $4)
        on conflict (instance_id) do update
          set applied_revision = excluded.applied_revision,
+             operational_revision = excluded.operational_revision,
              heartbeat_at = excluded.heartbeat_at,
              error_code = excluded.error_code
        returning instance_id
@@ -34,7 +36,7 @@ async function recordRuntimeStatus(config: VersionedPlatformConfig | null, error
      delete from platform_config_runtime_status
       where instance_id <> (select instance_id from current_status)
         and heartbeat_at < clock_timestamp() - interval '5 minutes'`,
-    [instanceId, config?.revision ?? null, errorCode],
+    [instanceId, config?.revision ?? null, getPlatformOperationalRevision(), errorCode],
   )
 }
 
@@ -151,10 +153,11 @@ export async function listPlatformRuntimeStatus() {
       error_code: string
       heartbeat_at: Date
       instance_id: string
+      operational_revision: string
       process_kind: 'api'
       offline: boolean
     }>(
-      `select instance_id, process_kind, applied_revision, heartbeat_at, error_code,
+      `select instance_id, process_kind, applied_revision, operational_revision, heartbeat_at, error_code,
               heartbeat_at < clock_timestamp() - interval '45 seconds' as offline
          from platform_config_runtime_status
         where heartbeat_at >= clock_timestamp() - interval '5 minutes'
@@ -169,6 +172,7 @@ export async function listPlatformRuntimeStatus() {
       errorCode: row.error_code || undefined,
       heartbeatAt: row.heartbeat_at.toISOString(),
       instanceId: row.instance_id,
+      operationalRevision: Number(row.operational_revision),
       processKind: row.process_kind,
       status: row.offline
         ? 'offline' as const

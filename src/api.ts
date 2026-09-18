@@ -79,6 +79,8 @@ import type {
   PlatformOrganization,
   PlatformRuntimeStatus,
   PlatformSecurityStatus,
+  PlatformStatus,
+  ApplicationMigration,
 } from './platform-management-types'
 import {
   serializeOrganizationContext,
@@ -606,7 +608,7 @@ export function fetchOffboardingPreview(userId: number) {
 }
 
 async function requestPlatformMutation<T>(
-  scope: 'config' | 'organizations' | 'users',
+  scope: 'config' | 'maintenance' | 'organizations' | 'users',
   requestId: string,
   write: () => Promise<T>,
 ) {
@@ -774,6 +776,35 @@ export function restorePlatformConfigRevision(targetRevision: number, expectedRe
 
 export function fetchPlatformRuntimeStatus() {
   return request<PlatformRuntimeStatus>('/api/admin/platform-config/runtime')
+}
+
+export function fetchPlatformStatus() {
+  return request<PlatformStatus>('/api/platform-status')
+}
+
+export function fetchPlatformMaintenance() {
+  return request<PlatformStatus>('/api/admin/platform-maintenance')
+}
+
+export function updatePlatformMaintenance(
+  enabled: boolean,
+  message: string,
+  expectedRevision: number,
+) {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('maintenance', requestId, () => request<{
+    changed: boolean
+    enabled: boolean
+    replayed: boolean
+    revision: number
+  }>('/api/admin/platform-maintenance', {
+    method: 'PUT',
+    body: JSON.stringify({ enabled, message, expectedRevision, requestId }),
+  }))
+}
+
+export function fetchApplicationMigrations() {
+  return request<{ migrations: ApplicationMigration[] }>('/api/admin/platform-migrations')
 }
 
 export function fetchPlatformSecurityStatus() {

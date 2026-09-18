@@ -680,18 +680,32 @@ Owner、任意有效项目成员，以及同时拥有 `organization_admin` 账�
 分享来源留言不接受图片 Markdown，并在公开页按纯文本展示；公开备注列表只返回最近 100
 条。原本拥有项目访问权的登录用户可从分享页打开内部待办详情。
 
-Server startup validates encryption keys and executes `schemaSql`; starting the API is a
-database mutation, not a read-only smoke test. Versioned files under
-`server/migrations/` are the operator-facing incremental DDL record and must be
-applied before code that depends on a new structure. The application does not
-automatically execute those versioned files, and there is no automatic down migration.
+Server startup validates encryption keys, starts the health/status HTTP surface, and then
+coordinates database migration through a PostgreSQL session advisory lock. One replica applies
+the idempotent `schemaSql` baseline and encrypted data initialization while other replicas wait.
+`application_migrations` records the migration ID, SHA-256 checksum, kind, duration, and completion
+time. Changing `schemaSql` without increasing the migration ID fails closed with a checksum error;
+every future table, constraint, or index change must also add a forward-only file under
+`server/migrations/`. There is no automatic down migration. Starting the API can mutate the
+database and is not a read-only smoke test.
+
+Platform maintenance state is stored independently from configuration history. Manual maintenance,
+an incomplete or failed database migration, or a missing platform configuration blocks ordinary
+API routes with `503 PLATFORM_MAINTENANCE`. Health/status remain public; after migration, the
+built-in administrator can log in and use platform configuration, security, runtime, migration,
+and maintenance routes. PostgreSQL `LISTEN/NOTIFY` plus polling synchronizes maintenance state
+between replicas. System-forced maintenance cannot be disabled, and manual maintenance can end
+only after required platform configuration is valid and every online API replica has loaded the
+current configuration revision.
 The image-sync surface uses the repository, workflow, branch, and token in the encrypted
 platform configuration. Only platform administrators may edit or test those values. Each dispatch carries a server-generated UUID as the workflow
 `request_id`; uncertain POST responses remain recoverable until a matching GitHub `run-name`
 is found or the five-minute reconciliation window expires. Real dispatch verification consumes
 GitHub runner and OSS resources and therefore requires explicit authorization.
-The Sealos template provisions PostgreSQL, injects only startup configuration, probes
-`/api/health`, deploys one application replica, and runs the todo-digest worker every
+The Sealos template provisions PostgreSQL, injects only startup configuration, mounts the initial
+admin password as a Secret file, and deploys two application Pods with one Veges container in each.
+There are no application init containers. Liveness probes `/api/health`; readiness probes
+`/api/ready`, which succeeds after automatic migrations. The separate todo-digest worker runs every
 five minutes. Digest runs are unique per subscription/date, claimed with row locking and
 a lease, retried at most three times, and terminally failed when the last lease expires.
 Build receipts and deployment state under `.sealos/` are historical evidence; all three

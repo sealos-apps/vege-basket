@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 const apiSource = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8')
+const clientAppSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
 const platformAdminSource = readFileSync(new URL('./platform-admins.ts', import.meta.url), 'utf8')
 const routerSource = readFileSync(new URL('./platform-management-router.ts', import.meta.url), 'utf8')
 const workbenchSource = readFileSync(
@@ -16,6 +17,8 @@ const digestWorkerSource = readFileSync(new URL('./todo-digest-worker.ts', impor
 const cliSource = readFileSync(new URL('./platform-config-cli.ts', import.meta.url), 'utf8')
 const platformOrganizationsSource = readFileSync(new URL('./platform-organizations.ts', import.meta.url), 'utf8')
 const accountOffboardingSource = readFileSync(new URL('./account-offboarding.ts', import.meta.url), 'utf8')
+const maintenanceSource = readFileSync(new URL('./platform-maintenance.ts', import.meta.url), 'utf8')
+const migrationsSource = readFileSync(new URL('./database-migrations.ts', import.meta.url), 'utf8')
 
 test('standalone platform administrator mutations are idempotent and audited', () => {
   const routeStart = routerSource.indexOf("platformManagementRouter.post('/admin/platform-admins'")
@@ -178,4 +181,29 @@ test('platform organization search does not silently truncate the directory', ()
   const listSource = platformOrganizationsSource.slice(listStart, listEnd)
 
   assert.doesNotMatch(listSource, /limit 1000/u)
+})
+
+test('maintenance mode blocks business APIs while keeping administrator recovery routes', () => {
+  assert.match(appSource, /app\.use\('\/api', platformMaintenanceMiddleware\)/u)
+  assert.match(maintenanceSource, /code: 'PLATFORM_MAINTENANCE'/u)
+  assert.match(maintenanceSource, /'\/admin\/platform-config'/u)
+  assert.match(maintenanceSource, /'\/admin\/platform-maintenance'/u)
+  assert.match(maintenanceSource, /'\/admin\/users'/u)
+  assert.match(maintenanceSource, /'\/admin\/organizations'/u)
+  assert.match(maintenanceSource, /PLATFORM_MAINTENANCE_DISABLE_BLOCKED/u)
+  assert.match(maintenanceSource, /result_changed/u)
+  assert.match(workbenchSource, /系统正在强制维护/u)
+  assert.match(workbenchSource, /maintenanceAppliedCount/u)
+  assert.match(apiSource, /requestPlatformMutation\('maintenance'/u)
+  assert.match(clientAppSource, /!workspaceLoaded && !maintenanceAdmin/u)
+})
+
+test('automatic database migrations are serialized, checksummed, and recorded', () => {
+  assert.match(migrationsSource, /pg_try_advisory_lock/u)
+  assert.match(migrationsSource, /createHash\('sha256'\)\.update\(schemaSql\)/u)
+  assert.match(migrationsSource, /DATABASE_MIGRATION_CHECKSUM_MISMATCH/u)
+  assert.match(migrationsSource, /insert into application_migrations/u)
+  assert.match(migrationsSource, /isRetryableConnectionError/u)
+  assert.ok(appSource.indexOf('app.listen(port') < appSource.indexOf('runAutomaticDatabaseMigrations()'))
+  assert.ok(appSource.indexOf("app.use('/api', platformMaintenanceMiddleware)") < appSource.indexOf("app.post('/api/todo-images'"))
 })

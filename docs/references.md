@@ -9,6 +9,7 @@
 | WYSIWYG Markdown editor contract | `src/components/markdown-wysiwyg-editor.tsx`, `src/App.css` |
 | HTTP routes and authorization | `server/index.ts`, `server/roles.ts`, `server/test-workbench.ts`, `server/organizations.ts`, `server/organization-package-market.ts` |
 | Database schema and incremental migrations | `server/schema.ts`, `server/migrations/` |
+| Automatic migration coordinator and maintenance state | `server/database-migrations.ts`, `server/platform-maintenance.ts` |
 | Encryption format | `server/crypto.ts` |
 | Shared AI provider and limits | `server/ai-provider.ts`, `server/ai-rate-limit.ts` |
 | AI summary/proposal contracts | `server/ai-period-summary.ts`, `server/ai-todo-proposals.ts` |
@@ -50,16 +51,23 @@ Process controls:
 | Variable | Default / behavior |
 | --- | --- |
 | `PORT` | `8787`. |
+
+Fresh deployments mount the initial built-in `admin` password at
+`/run/secrets/veges-bootstrap-admin-password/password`. Local or recovery-only startup may use
+`VEGES_BOOTSTRAP_ADMIN_PASSWORD`; the process deletes that environment value after checking the
+account. It is not business configuration and is never written to the platform configuration.
 Business configuration is not a process environment contract. Superadministrators edit
 the public URL, the existing eight AI fields, SMTP, OSS, package rules, Feishu, and GitHub
 Actions in Platform Management. Each version is encrypted in PostgreSQL. API replicas reload
 through `LISTEN/NOTIFY` plus reconciliation; the digest worker reads the current version before
-delivery. Fixed Feishu event and OAuth callback URLs are stored separately and are read-only.
+delivery. Feishu event and OAuth callback URLs are read-only values derived from the configured
+public URL.
 
 The built-in `admin` account has an immutable database grant. Managed platform grants are
 separate from occupational roles. New accounts are created only by successful Feishu OAuth;
 legacy password accounts may still sign in. `VEGES_ADMIN_USERNAMES` and the former business
-environment variables are accepted only by the one-time `platform:config import` command.
+environment variables are accepted only by the explicit, operator-run `platform:config import`
+compatibility command. Normal startup never imports them.
 
 Successful Feishu OAuth is treated as internal identity and may create a user without a
 project invite. The Feishu custom application's availability scope must therefore be

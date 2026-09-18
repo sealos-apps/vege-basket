@@ -41,7 +41,7 @@ spec:
       default: ''
       required: true
     VEGES_BOOTSTRAP_ADMIN_PASSWORD:
-      description: Initial password for the built-in admin account. Used only by the initialization container and must contain at least 12 characters.
+      description: Initial password for the built-in admin account. Mounted as a secret file and used only when the account does not exist. Must contain at least 12 characters.
       type: string
       default: ''
       required: true
@@ -179,6 +179,14 @@ spec:
       restartPolicy: OnFailure
   ttlSecondsAfterFinished: 300
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${{ defaults.app_name }}-bootstrap-admin
+type: Opaque
+stringData:
+  password: ${{ inputs.VEGES_BOOTSTRAP_ADMIN_PASSWORD }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -188,11 +196,11 @@ metadata:
     cloud.sealos.io/app-deploy-manager: ${{ defaults.app_name }}
   annotations:
     originImageName: ${{ inputs.VEGES_IMAGE }}
-    deploy.cloud.sealos.io/minReplicas: '1'
-    deploy.cloud.sealos.io/maxReplicas: '1'
+    deploy.cloud.sealos.io/minReplicas: '2'
+    deploy.cloud.sealos.io/maxReplicas: '2'
 spec:
   revisionHistoryLimit: 1
-  replicas: 1
+  replicas: 2
   strategy:
     type: Recreate
   selector:
@@ -206,92 +214,10 @@ spec:
       automountServiceAccountToken: false
       imagePullSecrets:
         - name: ${{ defaults.app_name }}
-      initContainers:
-        - name: wait-postgres
-          image: postgres:16-alpine
-          imagePullPolicy: IfNotPresent
-          env:
-            - name: PG_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: ${{ defaults.app_name }}-pg-conn-credential
-                  key: password
-            - name: PG_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: ${{ defaults.app_name }}-pg-conn-credential
-                  key: endpoint
-            - name: PG_DATABASE
-              value: vegebasket
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -eu
-              for i in $(seq 1 90); do
-                if pg_isready -h "${PG_ENDPOINT%:*}" -p "${PG_ENDPOINT##*:}" -U postgres -d postgres >/dev/null 2>&1; then
-                  break
-                fi
-                sleep 2
-              done
-              pg_isready -h "${PG_ENDPOINT%:*}" -p "${PG_ENDPOINT##*:}" -U postgres -d postgres >/dev/null 2>&1
-              if ! psql "postgresql://postgres:${PG_PASSWORD}@${PG_ENDPOINT}/postgres" -tAc "SELECT 1 FROM pg_database WHERE datname='${PG_DATABASE}'" | grep -q 1; then
-                psql "postgresql://postgres:${PG_PASSWORD}@${PG_ENDPOINT}/postgres" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"${PG_DATABASE}\";"
-              fi
-          resources:
-            requests:
-              cpu: 20m
-              memory: 25Mi
-            limits:
-              cpu: 200m
-              memory: 256Mi
-        - name: initialize-platform
-          image: ${{ inputs.VEGES_IMAGE }}
-          imagePullPolicy: IfNotPresent
-          env:
-            - name: PG_HOST
-              valueFrom:
-                secretKeyRef:
-                  name: ${{ defaults.app_name }}-pg-conn-credential
-                  key: host
-            - name: PG_PORT
-              valueFrom:
-                secretKeyRef:
-                  name: ${{ defaults.app_name }}-pg-conn-credential
-                  key: port
-            - name: PG_USER
-              valueFrom:
-                secretKeyRef:
-                  name: ${{ defaults.app_name }}-pg-conn-credential
-                  key: username
-            - name: PG_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: ${{ defaults.app_name }}-pg-conn-credential
-                  key: password
-            - name: DATABASE_URL
-              value: postgresql://$(PG_USER):$(PG_PASSWORD)@$(PG_HOST):$(PG_PORT)/vegebasket
-            - name: APP_ENCRYPTION_ACTIVE_KEY_ID
-              value: ${{ inputs.APP_ENCRYPTION_ACTIVE_KEY_ID }}
-            - name: APP_ENCRYPTION_KEYS
-              value: ${{ inputs.APP_ENCRYPTION_KEYS }}
-            - name: VEGES_BOOTSTRAP_ADMIN_PASSWORD
-              value: ${{ inputs.VEGES_BOOTSTRAP_ADMIN_PASSWORD }}
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -eu
-              npm run db:init
-              npm run platform:config -- initialize \
-                --public-url "https://${{ defaults.app_host }}.${{ SEALOS_CLOUD_DOMAIN }}"
-          resources:
-            requests:
-              cpu: 20m
-              memory: 64Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi
+      volumes:
+        - name: bootstrap-admin-password
+          secret:
+            secretName: ${{ defaults.app_name }}-bootstrap-admin
       containers:
         - name: ${{ defaults.app_name }}
           image: ${{ inputs.VEGES_IMAGE }}
@@ -335,9 +261,13 @@ spec:
               value: ${{ inputs.APP_ENCRYPTION_ACTIVE_KEY_ID }}
             - name: APP_ENCRYPTION_KEYS
               value: ${{ inputs.APP_ENCRYPTION_KEYS }}
+          volumeMounts:
+            - name: bootstrap-admin-password
+              mountPath: /run/secrets/veges-bootstrap-admin-password
+              readOnly: true
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: /api/ready
               port: 8787
             initialDelaySeconds: 10
             periodSeconds: 10

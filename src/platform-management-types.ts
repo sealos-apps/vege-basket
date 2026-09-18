@@ -113,9 +113,37 @@ export type PlatformRuntimeStatus = {
     errorCode?: string
     heartbeatAt: string
     instanceId: string
+    operationalRevision: number
     processKind: 'api'
     status: 'applied' | 'error' | 'loading' | 'offline'
   }>
+}
+
+export type PlatformStatus = {
+  configInitialized: boolean
+  maintenance: {
+    active: boolean
+    manual: boolean
+    message: string
+    revision: number
+    systemForced: boolean
+    systemReasons: string[]
+  }
+  migration: {
+    completedAt?: string
+    errorCode?: string
+    phase: 'waiting' | 'running' | 'completed' | 'failed'
+    startedAt?: string
+  }
+}
+
+export type ApplicationMigration = {
+  appliedAt: string
+  checksum: string
+  durationMs: number
+  id: string
+  kind: 'data' | 'schema'
+  name: string
 }
 
 export type PlatformSecurityStatus = {

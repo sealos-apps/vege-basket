@@ -93,7 +93,7 @@
 .platform-security-check svg { color: var(--platform-accent); }
 .platform-inspection { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: .8rem; }
 .platform-inspection time { color: var(--muted-foreground); }
-.platform-runtime-summary { display: grid; grid-template-columns: repeat(3, 1fr); border-block: 1px solid var(--border); }
+.platform-runtime-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); border-block: 1px solid var(--border); }
 .platform-runtime-summary > div { display: grid; gap: 5px; padding: 17px; border-right: 1px solid var(--border); }
 .platform-runtime-summary > div:last-child { border-right: 0; }
 .platform-runtime-summary span { color: var(--muted-foreground); font-size: .76rem; }
