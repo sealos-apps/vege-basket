@@ -3169,13 +3169,13 @@ function App() {
       const result = await fetchNavigationCounts(selectedOrganizationId, { signal })
       if (navigationCountsRequestIdRef.current !== requestId) return
       setOpenTodoCount(result.openTodoCount)
-      setAssignedBugCount(result.assignedBugCount)
+      setAssignedBugCount(canShowDeveloperAssignedBugs ? result.assignedBugCount : 0)
     } catch {
       if (navigationCountsRequestIdRef.current !== requestId || signal?.aborted) return
       setOpenTodoCount(0)
       setAssignedBugCount(0)
     }
-  }, [selectedOrganizationId])
+  }, [canShowDeveloperAssignedBugs, selectedOrganizationId])
 
   useEffect(() => {
     if (!loggedIn || !authUser?.id || !organizationContextReady) {
@@ -3184,6 +3184,7 @@ function App() {
       setAssignedBugCount(0)
       return
     }
+    if (!canShowDeveloperAssignedBugs) setAssignedBugCount(0)
     const controller = new AbortController()
     void refreshNavigationCounts(controller.signal)
     const interval = window.setInterval(() => {
@@ -3194,7 +3195,7 @@ function App() {
       navigationCountsRequestIdRef.current += 1
       window.clearInterval(interval)
     }
-  }, [authUser?.id, loggedIn, organizationContextReady, refreshNavigationCounts])
+  }, [authUser?.id, canShowDeveloperAssignedBugs, loggedIn, organizationContextReady, refreshNavigationCounts])
   async function submitInvitePassword() {
     if (!inviteToken) return
     const password = invitePasswordDraft.trim()
