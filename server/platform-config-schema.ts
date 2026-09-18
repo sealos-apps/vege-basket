@@ -158,7 +158,7 @@ function parseHttpsOrigin(value: unknown, path: string, issues: string[], allowL
   try {
     const url = new URL(raw)
     const localHttp = allowLocalHttp && url.protocol === 'http:' &&
-      ['localhost', '127.0.0.1', '::1'].includes(url.hostname.toLowerCase())
+      ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname.toLowerCase())
     if (
       (url.protocol !== 'https:' && !localHttp) ||
       url.username || url.password || url.search || url.hash ||

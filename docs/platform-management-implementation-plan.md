@@ -16,7 +16,7 @@
 - 新建组织和删除组织只在平台管理中提供；组织管理员视图移除这两个入口。非空组织禁止删除，不能自动解绑或清空资源。
 - 对象存储始终开启；配置缺失显示“待配置”。无关闭开关、历史存储区、多存储配置选择器。
 - 全局 AI 只提供现有八个参数；五项限制沿用现有有效值，未配置时使用现有默认值，不新增分类或并发参数。
-- 飞书两个回调地址固定、只读、可复制。隐藏私聊 AI 和 OAuth state 密钥输入，但保留已有后台能力与配置。
+- 飞书两个回调地址由公网地址自动生成、只读、可复制。隐藏私聊 AI 和 OAuth state 密钥输入，但保留已有后台能力与配置。
 - GitHub 可修改仓库、工作流文件和分支，提供只读可用性测试；测试不触发工作流。
 - 移除包市场三个目录/模板独立输入，保留必要的旧路径兼容，完整规则必须校验。
 - 凭据有显示/隐藏按钮，包含已保存值和新输入值；普通查询不返回明文。APP 根密钥、内部旧签名材料和账户密码不允许查看。
@@ -80,7 +80,6 @@
 | --- | --- |
 | `platform_config_versions` | revision 主键、schema_version、payload_encrypted、created_by、created_at、source；完整配置用 `encryptText` 加密，插入后不可更新 |
 | `platform_config_state` | 固定单行、active_revision 外键、updated_at；保存锁此行并比较 expectedRevision |
-| `platform_instance_settings` | 单行加密的固定回调地址及初始化时间；不在可恢复快照内，管理 API 无写入口 |
 | `platform_security_secrets` | 用途、key_id、加密材料、legacy 标记、创建时间；配置仅保存当前签名 key_id；验证所需旧材料独立保留 |
 | `platform_admin_grants` | user_id 主键、builtin/managed、来源 bootstrap/env_import/platform/maintenance、授予人/时间；builtin 唯一且不可撤销 |
 | `platform_user_permission_versions` | user_id 主键、revision；角色、超管授权、账户状态变化均推进版本 |
@@ -102,7 +101,7 @@
 | --- | --- |
 | `shared/platform-config.ts`（新增） | 非敏感 DTO、分区 ID、规则校验结果；不导出服务器凭据类型 |
 | `server/platform-config-schema.ts`（新增） | 完整私有配置类型、默认值、严格校验、掩码 DTO 和字段操作白名单 |
-| `server/platform-config-store.ts`（新增） | 快照事务、幂等回执、审计、恢复、固定实例信息 |
+| `server/platform-config-store.ts`（新增） | 快照事务、幂等回执、审计与恢复 |
 | `server/platform-config-runtime.ts`（新增） | LISTEN、5 秒核对、单次操作快照、客户端生命周期和加载状态 |
 | `server/platform-admins.ts`（新增） | 数据库授权、builtin 保护、平台授权锁和聚合权限服务 |
 | `server/platform-organizations.ts`（新增） | 平台组织目录、创建/预检/删除、阻止项分类；复用现有组织领域校验 |
@@ -121,7 +120,7 @@
 | 接口 | 契约 |
 | --- | --- |
 | `GET /api/platform-info` | 仅平台名称和可用登录方式；不公开集成地址、桶或账号 |
-| `GET /api/admin/platform-config` | 脱敏配置、revision、凭据 configured 状态、固定回调、可编辑性 |
+| `GET /api/admin/platform-config` | 脱敏配置、revision、凭据 configured 状态和可编辑性；前端从公网地址实时生成两条回调地址 |
 | `PUT /api/admin/platform-config/:section` | expectedRevision、requestId、该分区 fields、secrets；只允许明确 keep/replace/clear，不接收掩码作为值；服务端规范化比较后无变化则返回 `changed: false`，不创建版本、审计事件或热更新通知 |
 | `POST /api/admin/platform-config/:section/secrets/:field/reveal` | expectedRevision；单字段白名单读取当前值，审计后返回 value/revision、no-store；不支持历史值或任意路径 |
 | `POST /api/admin/platform-config/:section/test` | 当前候选 fields/secrets 和基准版本；不保存，返回逐项结果和候选摘要；邮件发送使用明确 send-email 动作 |
@@ -174,7 +173,7 @@
 7. 上传路由在解析请求体前取得快照，按当前附件大小选择 parser；新上传生效，已开始上传固定旧限制。签名、校验、包市场缓存、分享链接、周报/邀请通知和日报均纳入消费者清单。
 8. API 每 15 秒心跳并报告 appliedRevision；45 秒无心跳显示未知，加载失败显示错误码。页面区分“已保存”“加载中”“已生效”“加载异常”，保存成功不能因本机刷新失败显示成未保存。仅报告已知实例，不能声称发现了所有部署副本。
 9. CronJob 启动和实际投递前读当前值，不占常驻 LISTEN 连接；保留投递幂等和租约。无数据库时暂停新的外部动作，不重复发送已经成功的通知。
-10. 恢复旧版本也走相同事务、当前 schema 校验、位置/身份约束和热更新，不倒退 revision。固定回调、平台授权、用户状态和组织生命周期不随配置恢复；签名旧材料只追加保留，不能因恢复而删除。
+10. 恢复旧版本也走相同事务、当前 schema 校验、位置/身份约束和热更新，不倒退 revision。回调地址随恢复后的公网地址生成；平台授权、用户状态和组织生命周期不随配置恢复，签名旧材料只追加保留，不能因恢复而删除。
 
 正常路径自动通知；漏通知时在 5 秒加加载耗时内收敛。网络/解密故障不承诺硬时限，以实际状态报告。平台非敏感信息最多缓存 5 秒，页面重新聚焦时刷新。
 
@@ -293,7 +292,7 @@ SMTP 只允许公网 TLS 服务，校验并固定解析地址，禁止 TLS 降�
 
 - [x] 实现纯配置 schema、掩码 DTO、旧解析器及附录 34 项/5 别名/2 未实现项覆盖测试。
 - [x] 增加配置、授权、回执、安全材料和巡检表；users/GitHub 任务/历史规则绑定字段；DDL 与版本迁移同步。
-- [x] 实现 builtin 约束、本地初始化/恢复、幂等导入、固定回调和 legacy 签名材料保存；移出 db:init 的示例账号/项目创建，防止正式初始化新增普通用户。
+- [x] 实现 builtin 约束、本地初始化/恢复、幂等导入、由公网地址生成回调和 legacy 签名材料保存；移出 db:init 的示例账号/项目创建，防止正式初始化新增普通用户。
 - [ ] 以隔离库验证旧数据、重复迁移、失败回滚、加密补齐；记录所有新加密列及保留 key 引用。
 
 完成条件：无数据库的解析预检可执行；显式授权的隔离数据库导入可重放且不覆盖已有配置/授权，缺失 admin 或配置损坏不能进入业务就绪状态。
@@ -329,7 +328,7 @@ SMTP 只允许公网 TLS 服务，校验并固定解析地址，禁止 TLS 降�
 ### 阶段五：正式页面（约 2–3 天）
 
 - [x] 实现身份二级菜单和平台管理视图，迁移现有用户治理，移除组织视图新建/删除。
-- [x] 完成全部 11 个分区、中文字段、规则编辑/校验、固定回调复制和 GitHub 测试。
+- [x] 完成全部 11 个分区、中文字段、规则编辑/校验、派生回调复制和 GitHub 测试。
 - [x] 实现敏感值 reveal 生命周期、版本冲突/草稿保留、保存与加载状态、确认后 mutation 核对。
 - [ ] 浏览器覆盖桌面与 375px 手机、键盘菜单、长名称/错误、滚动、授权撤销和延迟响应，保存截图。
 
@@ -395,7 +394,7 @@ git diff --check
 | 热更新 | 两 API 和 CronJob、新旧动作不混版、漏/乱序通知、断线重连、轮询、连续保存、加载失败/失联、限流不重置、上传 parser 真正生效、隐藏重试开关生效 |
 | 组织 | 各 blocker 单独及历史状态、错误名称、预检后新增、空壳可删、审计/账号保留、旧接口 410、普通组织管理员 403、未知 FK 分类失败 |
 | 数据库并发 | 撤权与保存/删除、组织删除与邀请/成员/绑定/周报写入、断连后 receipt 核对、FK 竞争、无孤儿/静默级联、固定锁序无死锁 |
-| 外部集成 | AI/SMTP SSRF、token 版本隔离、凭据换版旧链接可读、使用中位置和 App ID 更换拒绝、固定回调不随公网地址/恢复变化、历史 GitHub 目标固定 |
+| 外部集成 | AI/SMTP SSRF、token 版本隔离、凭据换版旧链接可读、使用中位置和 App ID 更换拒绝、回调随公网地址保存/恢复变化且进行中 OAuth 保留原地址、历史 GitHub 目标固定 |
 | 包规则 | YAML 语法/重复键/tag/alias/深度/超限、未知字段/路径穿越/占位符/引用环、全部现有字段兼容、历史对象授权不扩大、编辑后旧校验结果失效 |
 | 界面 | 11 分区、二级菜单、显式身份、无返回/添加用户/存储关闭、中文/MB、桌面和 375px、长文本/键盘/草稿冲突、pending 与错误留窗、确认 Promise<boolean> |
 

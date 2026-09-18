@@ -284,8 +284,7 @@ spec:
               set -eu
               npm run db:init
               npm run platform:config -- initialize \
-                --event-callback-url "https://${{ defaults.app_host }}.${{ SEALOS_CLOUD_DOMAIN }}/api/integrations/feishu/events" \
-                --oauth-redirect-url "https://${{ defaults.app_host }}.${{ SEALOS_CLOUD_DOMAIN }}/api/auth/feishu/oauth/callback"
+                --public-url "https://${{ defaults.app_host }}.${{ SEALOS_CLOUD_DOMAIN }}"
           resources:
             requests:
               cpu: 20m

@@ -67,7 +67,6 @@ export type PlatformConfig = {
 
 export type PlatformConfigResponse = {
   config: PlatformConfig
-  fixedCallbacks: null | { eventCallbackUrl: string; oauthRedirectUrl: string }
   initialized: boolean
   revision: number
 }

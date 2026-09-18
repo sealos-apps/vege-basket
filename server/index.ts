@@ -206,13 +206,14 @@ import {
   buildFeishuOAuthBindRedirect,
   buildFeishuOAuthSigninRedirect,
 } from './feishu-oauth-redirect.ts'
+import { derivePlatformCallbackUrls } from '../shared/platform-callback-urls.ts'
 import {
   platformAiEnvironment,
   platformFeishuConfig,
   platformPublicUrl,
 } from './platform-config-values.ts'
 import { platformManagementRouter } from './platform-management-router.ts'
-import { getLegacyPlatformSecrets, getPlatformInstanceSettings } from './platform-config-store.ts'
+import { getLegacyPlatformSecrets } from './platform-config-store.ts'
 import {
   platformConfigRequestMiddleware,
   getPlatformConfigSnapshot,
@@ -975,39 +976,14 @@ async function resolveAiIntentClassification(
   }
 }
 
-function getRequestOrigin(request: express.Request) {
-  const browserOrigin = String(request.headers.origin ?? '').trim()
-  if (/^https?:\/\//.test(browserOrigin)) return browserOrigin
-
-  const referer = String(request.headers.referer ?? '').trim()
-  if (referer) {
-    try {
-      const refererUrl = new URL(referer)
-      if (refererUrl.protocol === 'http:' || refererUrl.protocol === 'https:') {
-        return refererUrl.origin
-      }
-    } catch {
-      // Fall back to proxy headers below.
-    }
-  }
-
-  const forwardedProto = String(request.headers['x-forwarded-proto'] ?? '').split(',')[0]?.trim()
-  const forwardedHost = String(request.headers['x-forwarded-host'] ?? '').split(',')[0]?.trim()
-  const proto = forwardedProto || request.protocol || 'http'
-  const host = forwardedHost || request.get('host') || `127.0.0.1:${port}`
-  return `${proto}://${host}`
-}
-
 function timingSafeTextEqual(left: string, right: string) {
   const leftBuffer = Buffer.from(left)
   const rightBuffer = Buffer.from(right)
   return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer)
 }
 
-async function getFeishuOAuthRedirectUri(request: express.Request) {
-  const configured = String((await getPlatformInstanceSettings())?.oauthRedirectUrl ?? '').trim()
-  if (configured) return configured
-  return `${getRequestOrigin(request)}/api/auth/feishu/oauth/callback`
+function getFeishuOAuthRedirectUri() {
+  return derivePlatformCallbackUrls(platformPublicUrl())?.oauthRedirectUrl ?? ''
 }
 
 function sanitizeReturnTo(value: unknown) {
@@ -4938,7 +4914,14 @@ app.post('/api/auth/feishu/oauth/url', asyncHandler(async (request, response) =>
     return
   }
 
-  const redirectUri = await getFeishuOAuthRedirectUri(request)
+  const redirectUri = getFeishuOAuthRedirectUri()
+  if (!redirectUri) {
+    response.status(503).json({
+      error: '请先在平台管理中配置公网地址。',
+      code: 'PLATFORM_PUBLIC_URL_REQUIRED',
+    })
+    return
+  }
   const state = signFeishuOAuthState({
     exp: Date.now() + 10 * 60 * 1_000,
     intent,

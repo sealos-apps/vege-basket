@@ -64,6 +64,7 @@ import {
   platformConfigRuntimeOverallStatus,
   platformConfigSectionHasDraftChanges,
 } from '../../shared/platform-config'
+import { derivePlatformCallbackUrls } from '../../shared/platform-callback-urls'
 import { userRoleLabel } from '@/user-roles'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -762,6 +763,8 @@ export function PlatformManagementWorkbench({
     return <div className="platform-loading">{busy ? <SpinnerGap className="animate-spin" /> : null}{error || '正在读取平台配置…'}</div>
   }
 
+  const callbackUrls = derivePlatformCallbackUrls(draft.general.publicUrl)
+
   const secret = (section: PlatformConfigSection, field: string, label: string, state: SecretState) => (
     <SecretField
       key={`${section}.${field}:${loaded.revision}`}
@@ -866,7 +869,7 @@ export function PlatformManagementWorkbench({
 
           {tab === 'general' ? <div className="platform-form-grid">
             <Field label="平台名称"><Input value={draft.general.displayName} onChange={(event) => updateSection('general', { displayName: event.target.value })} /></Field>
-            <Field label="公网地址" hint="用于登录完成后的回跳和生成站内链接"><Input placeholder="https://veges.example.com" value={draft.general.publicUrl} onChange={(event) => updateSection('general', { publicUrl: event.target.value })} /></Field>
+            <Field label="公网地址" hint="用于飞书回调、登录完成后的回跳和站内链接"><Input placeholder="https://veges.example.com" value={draft.general.publicUrl} onChange={(event) => updateSection('general', { publicUrl: event.target.value })} /></Field>
           </div> : null}
 
           {tab === 'ai' ? <div className="platform-form-grid">
@@ -915,8 +918,8 @@ export function PlatformManagementWorkbench({
             {secret('feishu', 'appSecret', 'App Secret', draft.feishu.appSecret)}
             {secret('feishu', 'verificationToken', '验证令牌', draft.feishu.verificationToken)}
             <ToggleField label="启用业务通知" checked={draft.feishu.deliveryEnabled} onChange={(deliveryEnabled) => updateSection('feishu', { deliveryEnabled })} />
-            <Field label="事件回调地址"><div className="platform-copy-field"><Input readOnly value={loaded.fixedCallbacks?.eventCallbackUrl ?? '尚未初始化'} /><Button size="icon" variant="ghost" title="复制" type="button" onClick={() => void navigator.clipboard.writeText(loaded.fixedCallbacks?.eventCallbackUrl ?? '')}><Copy /></Button></div></Field>
-            <Field label="登录重定向地址"><div className="platform-copy-field"><Input readOnly value={loaded.fixedCallbacks?.oauthRedirectUrl ?? '尚未初始化'} /><Button size="icon" variant="ghost" title="复制" type="button" onClick={() => void navigator.clipboard.writeText(loaded.fixedCallbacks?.oauthRedirectUrl ?? '')}><Copy /></Button></div></Field>
+            <Field label="事件回调地址" hint="根据公网地址自动生成；修改公网地址后请同步更新飞书开放平台。"><div className="platform-copy-field"><Input readOnly value={callbackUrls?.eventCallbackUrl ?? '请先配置有效的公网地址'} /><Button disabled={!callbackUrls} size="icon" variant="ghost" title="复制" type="button" onClick={() => callbackUrls && void navigator.clipboard.writeText(callbackUrls.eventCallbackUrl)}><Copy /></Button></div></Field>
+            <Field label="登录重定向地址" hint="根据公网地址自动生成；修改公网地址后请同步更新飞书开放平台。"><div className="platform-copy-field"><Input readOnly value={callbackUrls?.oauthRedirectUrl ?? '请先配置有效的公网地址'} /><Button disabled={!callbackUrls} size="icon" variant="ghost" title="复制" type="button" onClick={() => callbackUrls && void navigator.clipboard.writeText(callbackUrls.oauthRedirectUrl)}><Copy /></Button></div></Field>
           </div> : null}
 
           {tab === 'github' ? <div className="platform-form-grid">
@@ -1014,14 +1017,14 @@ export function PlatformManagementWorkbench({
                 <h4>恢复此版本将产生的变化</h4>
                 <HistoryChanges groups={historyDetail.changesFromCurrent} emptyLabel="当前配置已经与此版本一致，恢复不会生成新版本。" />
               </section> : null}
-              <p className="platform-history-note">固定回调地址、用户权限和组织数据不属于配置版本，恢复时不会改变。</p>
+              <p className="platform-history-note">回调地址随该版本的公网地址生成；用户权限和组织数据不会改变。</p>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setHistoryDetail(undefined)}>关闭</Button>
               {historyDetail.version.revision !== historyDetail.currentRevision ? <ConfirmActionDialog
                 actionKey={`platform-config-restore:${historyDetail.currentRevision}:${historyDetail.version.revision}`}
                 title={`恢复到版本 v${historyDetail.version.revision}？`}
-                description={<div className="platform-history-restore-preview"><p>恢复会按以下差异创建一个新版本，并由在线 API 实例自动加载。</p><HistoryChanges compact groups={historyDetail.changesFromCurrent} emptyLabel="当前配置已经与此版本一致，不会生成新版本。" /><p>固定回调地址、用户权限和组织数据不会改变。</p></div>}
+                description={<div className="platform-history-restore-preview"><p>恢复会按以下差异创建一个新版本，并由在线 API 实例自动加载。</p><HistoryChanges compact groups={historyDetail.changesFromCurrent} emptyLabel="当前配置已经与此版本一致，不会生成新版本。" /><p>回调地址随公网地址恢复；用户权限和组织数据不会改变。</p></div>}
                 confirmLabel="恢复此版本"
                 variant="default"
                 trigger={<Button disabled={historyDetail.changesFromCurrent.length === 0}>恢复此版本</Button>}

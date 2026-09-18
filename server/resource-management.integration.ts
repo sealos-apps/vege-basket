@@ -87,15 +87,6 @@ try {
         where singleton = true`,
       [Number(version.rows[0].revision)],
     )
-    await bootstrap.query(
-      `insert into platform_instance_settings
-        (singleton, event_callback_url_encrypted, oauth_redirect_url_encrypted)
-       values (true, $1, $2)`,
-      [
-        encryptText(`${new URL(base).origin}/api/integrations/feishu/events`),
-        encryptText(`${new URL(base).origin}/api/auth/feishu/oauth/callback`),
-      ],
-    )
     await bootstrap.query('commit')
   } catch (error) {
     await bootstrap.query('rollback')

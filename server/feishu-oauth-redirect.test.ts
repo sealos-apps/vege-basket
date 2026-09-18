@@ -5,8 +5,26 @@ import {
   buildFeishuOAuthBindRedirect,
   buildFeishuOAuthSigninRedirect,
 } from './feishu-oauth-redirect.ts'
+import { derivePlatformCallbackUrls } from '../shared/platform-callback-urls.ts'
 
 const appSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+
+test('Feishu callback addresses derive from one platform public origin', () => {
+  assert.deepEqual(derivePlatformCallbackUrls('https://veges.example.com'), {
+    eventCallbackUrl: 'https://veges.example.com/api/integrations/feishu/events',
+    oauthRedirectUrl: 'https://veges.example.com/api/auth/feishu/oauth/callback',
+  })
+  assert.deepEqual(derivePlatformCallbackUrls('http://127.0.0.1:5173'), {
+    eventCallbackUrl: 'http://127.0.0.1:5173/api/integrations/feishu/events',
+    oauthRedirectUrl: 'http://127.0.0.1:5173/api/auth/feishu/oauth/callback',
+  })
+  assert.deepEqual(derivePlatformCallbackUrls('http://[::1]:5173'), {
+    eventCallbackUrl: 'http://[::1]:5173/api/integrations/feishu/events',
+    oauthRedirectUrl: 'http://[::1]:5173/api/auth/feishu/oauth/callback',
+  })
+  assert.equal(derivePlatformCallbackUrls('http://unsafe.example.com'), null)
+  assert.equal(derivePlatformCallbackUrls('https://veges.example.com/path'), null)
+})
 
 test('Feishu sign-in returns to the configured platform public address', () => {
   assert.equal(
@@ -65,4 +83,11 @@ test('Feishu callback completion uses the configured platform public address', (
     appSource,
     /buildFeishuOAuthBindRedirect\(platformPublicUrl\(\), state\.returnTo, 'success'/u,
   )
+})
+
+test('Feishu authorization uses the current public address and preserves it in signed state', () => {
+  assert.match(appSource, /const redirectUri = getFeishuOAuthRedirectUri\(\)/u)
+  assert.match(appSource, /redirectUri,\s*returnTo:/u)
+  assert.match(appSource, /redirect_uri', redirectUri/u)
+  assert.doesNotMatch(appSource, /getRequestOrigin/u)
 })

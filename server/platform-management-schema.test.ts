@@ -12,6 +12,7 @@ test('startup schema contains the platform management migration', () => {
   assert.ok(schemaSql.includes(platformManagementSchemaSql))
   assert.match(schemaSql, /create table if not exists platform_config_versions/u)
   assert.match(schemaSql, /create constraint trigger assert_builtin_admin_user_consistency/u)
+  assert.doesNotMatch(platformManagementSchemaSql, /platform_instance_settings/u)
 })
 
 test('versioned platform management migration matches startup schema', () => {

@@ -140,10 +140,10 @@ expose `subprojectName`. Name encryption reuses the retained lookup key in
 Protected JSON endpoints use `Authorization: Bearer <session-token>`. The primary route
 families are:
 
-Feishu always sends OAuth results to the fixed callback URL. After the callback is processed,
-sign-in and account binding return to the configured platform public address while preserving the
-validated in-app path. If no public address is configured, the callback retains the relative-path
-compatibility behavior.
+The Feishu event callback and OAuth redirect URL are derived from the active platform public
+address. Sign-in and account binding preserve the validated in-app return path. Starting a new
+OAuth flow fails with `PLATFORM_PUBLIC_URL_REQUIRED` when no valid public address is configured;
+an in-flight flow retains the exact redirect URL stored in its signed state.
 
 | Family | Routes |
 | --- | --- |

@@ -6,7 +6,6 @@ import {
   getCurrentPlatformConfig,
   getPlatformConfigHistory,
   getPlatformConfigHistoryDetail,
-  getPlatformInstanceSettings,
   PlatformConfigStoreError,
   recordPlatformSecretRevealFailure,
   restorePlatformConfig,
@@ -81,14 +80,10 @@ platformManagementRouter.get('/platform-info', async (request, response, next) =
 platformManagementRouter.get('/admin/platform-config', async (request, response, next) => {
   try {
     if (!(await requirePlatformAdminSession(request, response))) return
-    const [current, instance] = await Promise.all([
-      getCurrentPlatformConfig(),
-      getPlatformInstanceSettings(),
-    ])
+    const current = await getCurrentPlatformConfig()
     response.setHeader('Cache-Control', 'no-store')
     response.json({
       config: maskPlatformConfig(current?.config ?? createDefaultPlatformConfig()),
-      fixedCallbacks: instance,
       initialized: Boolean(current),
       revision: current?.revision ?? 0,
     })

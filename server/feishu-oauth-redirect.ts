@@ -1,17 +1,4 @@
-function safePublicOrigin(value: string) {
-  try {
-    const url = new URL(value)
-    const loopbackHttp = url.protocol === 'http:' &&
-      ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname.toLowerCase())
-    if (
-      (url.protocol !== 'https:' && !loopbackHttp) ||
-      url.username || url.password || url.pathname !== '/' || url.search || url.hash
-    ) return ''
-    return url.origin
-  } catch {
-    return ''
-  }
-}
+import { normalizePlatformPublicOrigin } from '../shared/platform-callback-urls.ts'
 
 function safeReturnPath(value: string) {
   const trimmed = value.trim()
@@ -22,7 +9,7 @@ function safeReturnPath(value: string) {
 }
 
 function oauthReturnTarget(publicUrl: string, returnTo: string) {
-  const publicOrigin = safePublicOrigin(publicUrl)
+  const publicOrigin = normalizePlatformPublicOrigin(publicUrl)
   const target = new URL(safeReturnPath(returnTo), publicOrigin || 'http://veges.local')
   return { publicOrigin, target }
 }

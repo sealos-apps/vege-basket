@@ -39,13 +39,6 @@ create table if not exists platform_config_state (
 insert into platform_config_state (singleton) values (true)
 on conflict (singleton) do nothing;
 
-create table if not exists platform_instance_settings (
-  singleton boolean primary key default true check (singleton),
-  event_callback_url_encrypted text not null,
-  oauth_redirect_url_encrypted text not null,
-  initialized_at timestamptz not null default now()
-);
-
 create table if not exists platform_security_secrets (
   purpose text not null,
   key_id text not null,

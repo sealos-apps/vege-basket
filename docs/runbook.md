@@ -57,15 +57,14 @@ apply the reviewed schema in an authorized maintenance window, then run:
 npm run platform:config -- inspect --env-file /secure/path/legacy.env
 npm run platform:config -- verify --env-file /secure/path/legacy.env
 npm run platform:config -- bootstrap-admin --env-file /secure/path/legacy.env
-npm run platform:config -- import --env-file /secure/path/legacy.env \
-  --event-callback-url https://veges.private.sealos.pub/api/integrations/feishu/events \
-  --oauth-redirect-url https://pre.veges.private.sealos.pub/api/auth/feishu/oauth/callback
+npm run platform:config -- import --env-file /secure/path/legacy.env
 ```
 
 `bootstrap-admin` prompts for a password and creates or upgrades the immutable built-in `admin`.
 在平台配置尚未初始化时，健康检查、`admin` 登录、当前用户读取和轻量权限上下文读取仍可用，便于通过“平台管理”保存首个配置版本；其他业务接口会返回配置未初始化错误。登录后的浏览器每 15 秒及重新回到前台时读取一次权限上下文，超级管理员授权、撤销和账号停用无需重新登录即可生效。
-`import` runs once, encrypts business settings into PostgreSQL, imports
-`VEGES_ADMIN_USERNAMES` as managed grants, and fixes both callback URLs. It refuses to overwrite
+`import` runs once, encrypts business settings into PostgreSQL, and imports
+`VEGES_ADMIN_USERNAMES` as managed grants. The Feishu event callback and OAuth redirect URL are
+derived from the imported `APP_PUBLIC_URL`; legacy `FEISHU_OAUTH_REDIRECT_URI` is ignored. It refuses to overwrite
 an existing platform configuration. Retain the complete application encryption key ring for every
 stored config version. After import, remove business values from the workload environment and use
 the Platform Management page for all changes.
@@ -73,6 +72,7 @@ the Platform Management page for all changes.
 平台配置保存后，管理页按目标版本轮询在线 API 实例：全部实例加载目标版本后显示“加载完成”，实例报错、没有在线实例或目标版本已被新版本替代时显示明确状态。配置历史按版本展示字段级差异，密钥只显示“已设置、已替换、已清除”等状态；恢复前会展示目标版本相对当前配置的差异。规范化后的配置没有变化时，服务端只记录幂等回执，不创建配置版本、审计事件或热更新通知。
 
 Fresh Sealos installations run `db:init` and `platform:config -- initialize` in an init container.
+The initializer accepts one `--public-url` origin; both Feishu callback URLs derive from it.
 The `VEGES_BOOTSTRAP_ADMIN_PASSWORD` template input is passed only to that initializer; it is not
 part of the application or digest-worker runtime environment. The initializer is idempotent after
 successful setup and refuses to create defaults when it detects existing users without an active

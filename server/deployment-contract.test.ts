@@ -55,12 +55,12 @@ test('Sealos injects only startup configuration into application processes', () 
   assert.equal(sealosTemplate.match(/name: VEGES_BOOTSTRAP_ADMIN_PASSWORD\b/gu)?.length, 1)
 })
 
-test('Sealos initializes schema, builtin admin, fixed callbacks, and default platform config before startup', () => {
+test('Sealos initializes schema, builtin admin, and public-address based platform config before startup', () => {
   const initializer = sealosTemplate.slice(sealosTemplate.indexOf('- name: initialize-platform'))
   assert.match(initializer, /npm run db:init/u)
   assert.match(initializer, /platform:config -- initialize/u)
-  assert.match(initializer, /\/api\/integrations\/feishu\/events/u)
-  assert.match(initializer, /\/api\/auth\/feishu\/oauth\/callback/u)
+  assert.match(initializer, /--public-url/u)
+  assert.doesNotMatch(initializer, /event-callback-url|oauth-redirect-url/u)
 })
 
 test('Sealos bounds application and digest worker database pools separately', () => {

@@ -105,7 +105,7 @@ test('unchanged platform configuration does not create a version or trigger a re
   const saveEnd = configStoreSource.indexOf('export async function revealCurrentPlatformSecret', saveStart)
   const saveSource = configStoreSource.slice(saveStart, saveEnd)
   const restoreStart = configStoreSource.indexOf('export async function restorePlatformConfig')
-  const restoreEnd = configStoreSource.indexOf('export async function getPlatformInstanceSettings', restoreStart)
+  const restoreEnd = configStoreSource.indexOf('export async function getLegacyPlatformSecrets', restoreStart)
   const restoreSource = configStoreSource.slice(restoreStart, restoreEnd)
 
   assert.ok(saveSource.indexOf('changes.length === 0') < saveSource.indexOf('insert into platform_config_versions'))
@@ -148,6 +148,17 @@ test('platform management removes the legacy Feishu analysis webhook settings', 
   assert.match(runtimeSource, /'loading'/u)
   assert.match(runtimeSource, /'offline'/u)
   assert.doesNotMatch(appSource, /app\.post\('\/api\/integrations\/feishu\/conversation-analysis'/u)
+})
+
+test('Feishu callback addresses derive from the editable platform public address', () => {
+  assert.doesNotMatch(routerSource, /fixedCallbacks|getPlatformInstanceSettings/u)
+  assert.doesNotMatch(configStoreSource, /platform_instance_settings/u)
+  assert.doesNotMatch(cliSource, /event-callback-url|oauth-redirect-url|platform_instance_settings/u)
+  assert.match(cliSource, /option\('--public-url'\)/u)
+  assert.match(workbenchSource, /derivePlatformCallbackUrls\(draft\.general\.publicUrl\)/u)
+  assert.match(workbenchSource, /根据公网地址自动生成/u)
+  assert.match(appSource, /derivePlatformCallbackUrls\(platformPublicUrl\(\)\)/u)
+  assert.match(appSource, /PLATFORM_PUBLIC_URL_REQUIRED/u)
 })
 
 test('builtin administrator bootstrap validates the complete existing account', () => {

@@ -7,6 +7,7 @@ import { parse as parseDotenv } from 'dotenv'
 import { validatePackageRulesYaml } from './package-rules-validator.ts'
 import { parseLegacyPlatformConfig } from './platform-legacy-config.ts'
 import { createDefaultPlatformConfig, platformConfigSchemaVersion } from './platform-config-schema.ts'
+import { normalizePlatformPublicOrigin } from '../shared/platform-callback-urls.ts'
 
 const serverDirectory = path.dirname(fileURLToPath(import.meta.url))
 
@@ -48,16 +49,10 @@ function loadRules(env: Record<string, string>, envFilename: string) {
   return { filename, source: fs.readFileSync(filename, 'utf8') }
 }
 
-function validateFixedHttpsUrl(value: string, name: string) {
-  try {
-    const url = new URL(value)
-    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
-      throw new Error('invalid')
-    }
-    return url.toString()
-  } catch {
-    throw new Error(`${name} 必须是固定的 HTTPS 地址。`)
-  }
+function validatePublicUrl(value: string) {
+  const origin = normalizePlatformPublicOrigin(value)
+  if (!origin) throw new Error('--public-url 必须是无账号、路径、查询参数和片段的 HTTPS 地址；本地开发可使用回环 HTTP 地址。')
+  return origin
 }
 
 async function readHiddenLine(prompt: string) {
@@ -255,8 +250,7 @@ async function bootstrapAdmin(recover = false) {
 }
 
 async function initializeFreshInstall() {
-  const eventCallbackUrl = validateFixedHttpsUrl(option('--event-callback-url'), '--event-callback-url')
-  const oauthRedirectUrl = validateFixedHttpsUrl(option('--oauth-redirect-url'), '--oauth-redirect-url')
+  const publicUrl = validatePublicUrl(option('--public-url'))
   const password = String(process.env.VEGES_BOOTSTRAP_ADMIN_PASSWORD ?? '')
   const rulesSource = fs.readFileSync(path.join(serverDirectory, 'trial-combo-package-rules.yaml'), 'utf8')
   const validation = validatePackageRulesYaml(rulesSource)
@@ -285,19 +279,16 @@ async function initializeFreshInstall() {
            and grant_row.grant_kind = 'builtin'
          for update of users`,
       )
-      const instance = await client.query(
-        'select singleton from platform_instance_settings where singleton = true for update',
-      )
       if (state.rows[0]?.active_revision) {
-        if (builtin.rows.length !== 1 || instance.rows.length !== 1) {
-          throw new Error('平台已经初始化，但内置 admin 或固定回调不完整；请按恢复流程处理。')
+        if (builtin.rows.length !== 1) {
+          throw new Error('平台已经初始化，但内置 admin 不完整；请按恢复流程处理。')
         }
         await client.query('commit')
         console.log('平台已经初始化，本次未写入。')
         return
       }
       const userCount = Number((await client.query<{ count: string }>('select count(*)::text as count from users')).rows[0].count)
-      if (userCount > 0 || builtin.rows.length > 0 || instance.rows.length > 0) {
+      if (userCount > 0 || builtin.rows.length > 0) {
         throw new Error('检测到未迁移的已有数据；请使用 inspect、verify、bootstrap-admin 和 import 完成升级。')
       }
       if (password.length < 12) throw new Error('VEGES_BOOTSTRAP_ADMIN_PASSWORD 必须至少 12 位。')
@@ -325,7 +316,7 @@ async function initializeFreshInstall() {
         [userId],
       )
       const config = createDefaultPlatformConfig()
-      config.general.publicUrl = new URL(eventCallbackUrl).origin
+      config.general.publicUrl = publicUrl
       config.packages.rulesYaml = rulesSource
       config.feishu.oauthStateSecret = crypto.randomBytes(32).toString('base64url')
       config.storage.urlSecret = crypto.randomBytes(32).toString('base64url')
@@ -340,12 +331,6 @@ async function initializeFreshInstall() {
         `update platform_config_state set active_revision = $1, updated_at = now()
           where singleton = true`,
         [revision],
-      )
-      await client.query(
-        `insert into platform_instance_settings
-          (singleton, event_callback_url_encrypted, oauth_redirect_url_encrypted)
-         values (true, $1, $2)`,
-        [encryptText(eventCallbackUrl), encryptText(oauthRedirectUrl)],
       )
       await client.query(
         `insert into platform_bootstrap_receipts (step, source)
@@ -371,11 +356,6 @@ async function importLegacy() {
   const validation = validatePackageRulesYaml(rules.source)
   if (!validation.valid) throw new Error(`包市场规则校验失败：${validation.errors[0]?.message ?? '未知错误'}`)
   const imported = parseLegacyPlatformConfig(env, rules.source)
-  const eventCallbackUrl = validateFixedHttpsUrl(option('--event-callback-url'), '--event-callback-url')
-  const oauthRedirectUrl = validateFixedHttpsUrl(
-    option('--oauth-redirect-url') || env.FEISHU_OAUTH_REDIRECT_URI || '',
-    '--oauth-redirect-url',
-  )
   const [{ pool }, { encryptText }] = await Promise.all([
     import('./db.ts'),
     import('./crypto.ts'),
@@ -433,12 +413,6 @@ async function importLegacy() {
         `update platform_config_state set active_revision = $1, updated_at = now()
           where singleton = true`,
         [revision],
-      )
-      await client.query(
-        `insert into platform_instance_settings
-          (singleton, event_callback_url_encrypted, oauth_redirect_url_encrypted)
-         values (true, $1, $2)`,
-        [encryptText(eventCallbackUrl), encryptText(oauthRedirectUrl)],
       )
       if (imported.legacyTodoImageUrlSecret) {
         await client.query(

@@ -173,7 +173,6 @@ export async function getCurrentPlatformRevision() {
 export async function assertPlatformBootstrapIntegrity() {
   const result = await query<{
     builtin_count: string
-    callbacks_ready: boolean
     config_ready: boolean
   }>(
     `select
@@ -182,15 +181,11 @@ export async function assertPlatformBootstrapIntegrity() {
         where users.is_builtin_admin and lower(btrim(users.email)) = 'admin'
           and users.account_status = 'active' and users.password_hash <> ''
           and users.registration_source = 'builtin' and grant_row.grant_kind = 'builtin') as builtin_count,
-       exists(select 1 from platform_instance_settings where singleton = true) as callbacks_ready,
        exists(select 1 from platform_config_state where singleton = true and active_revision is not null) as config_ready`,
   )
   const state = result.rows[0]
   if (Number(state?.builtin_count) !== 1) {
     throw Object.assign(new Error('内置 admin 超级管理员未正确初始化。'), { code: 'BUILTIN_ADMIN_NOT_INITIALIZED' })
-  }
-  if (!state?.callbacks_ready) {
-    throw Object.assign(new Error('固定回调地址未初始化。'), { code: 'PLATFORM_CALLBACKS_NOT_INITIALIZED' })
   }
   if (!state?.config_ready) {
     throw Object.assign(new Error('平台配置未初始化。'), { code: 'PLATFORM_CONFIG_NOT_INITIALIZED' })
@@ -551,21 +546,6 @@ export async function restorePlatformConfig(input: {
   } finally {
     client.release()
   }
-}
-
-export async function getPlatformInstanceSettings() {
-  const result = await query<{
-    event_callback_url_encrypted: string
-    oauth_redirect_url_encrypted: string
-  }>(
-    `select event_callback_url_encrypted, oauth_redirect_url_encrypted
-       from platform_instance_settings where singleton = true`,
-  )
-  const row = result.rows[0]
-  return row ? {
-    eventCallbackUrl: decryptText(row.event_callback_url_encrypted),
-    oauthRedirectUrl: decryptText(row.oauth_redirect_url_encrypted),
-  } : null
 }
 
 export async function getLegacyPlatformSecrets(purpose: string) {

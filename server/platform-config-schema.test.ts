@@ -61,6 +61,14 @@ test('platform config restricts callback-like URLs and GitHub targets', () => {
   )
 })
 
+test('platform public address permits local IPv4 and IPv6 loopback origins', () => {
+  for (const publicUrl of ['http://127.0.0.1:5173', 'http://[::1]:5173']) {
+    const config = createDefaultPlatformConfig()
+    config.general.publicUrl = publicUrl
+    assert.equal(parsePlatformConfig(config).general.publicUrl, publicUrl)
+  }
+})
+
 test('masked config never serializes secret values', () => {
   const config = createDefaultPlatformConfig()
   config.ai.apiBase = 'https://api.example.com'
