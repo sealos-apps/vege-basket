@@ -67,7 +67,6 @@ export type LegacyPlatformImport = {
   ignoredUnimplementedKeys: string[]
   legacyTodoImageUrlSecret: string
   unknownKeys: string[]
-  webhookUsername: string
 }
 
 function stringValue(env: Record<string, string>, key: string, fallback = '') {
@@ -169,9 +168,6 @@ export function parseLegacyPlatformConfig(
       appId: stringValue(env, 'FEISHU_APP_ID'),
       appSecret: stringValue(env, 'FEISHU_APP_SECRET'),
       verificationToken: stringValue(env, 'FEISHU_VERIFICATION_TOKEN'),
-      webhookUserId: null,
-      webhookBasicUser: stringValue(env, 'FEISHU_WEBHOOK_BASIC_USER'),
-      webhookBasicPassword: stringValue(env, 'FEISHU_WEBHOOK_BASIC_PASSWORD'),
       deliveryEnabled: booleanValue(env, 'FEISHU_DELIVERY_ENABLED', defaults.feishu.deliveryEnabled),
       aiChatEnabled: booleanValue(env, 'FEISHU_AI_CHAT_ENABLED', defaults.feishu.aiChatEnabled),
       oauthStateSecret,
@@ -194,6 +190,5 @@ export function parseLegacyPlatformConfig(
       .filter((key) => key in env),
     legacyTodoImageUrlSecret,
     unknownKeys: Object.keys(env).filter((key) => !known.has(key)).sort(),
-    webhookUsername: stringValue(env, 'FEISHU_WEBHOOK_USER_EMAIL'),
   }
 }

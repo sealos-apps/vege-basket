@@ -380,7 +380,7 @@ External entry points have separate trust boundaries:
   work, and uses the canonical semantic classification and AI turn lifecycle. Forwarded
   source text and processing errors are encrypted. Group messages never receive project
   or workspace AI data.
-- Conversation-analysis webhooks require configured HTTP Basic credentials.
+- Conversation analysis is available through the browser Veges AI composer and the Feishu private-chat integration; the retired fixed-user HTTP webhook is no longer exposed.
 - AI provider URLs must use HTTPS, contain no credentials, resolve only to public
   addresses, and are fetched without following redirects. If system DNS returns only
   `198.18.0.0/15` proxy Fake-IP addresses for a hostname, the provider boundary verifies

@@ -3,7 +3,7 @@ import { Router } from 'express'
 import type { PoolClient } from 'pg'
 import { decryptText, encryptText } from './crypto.ts'
 import { pool } from './db.ts'
-import { platformPublicUrl } from './platform-config-values.ts'
+import { platformFeishuConfig, platformPublicUrl } from './platform-config-values.ts'
 import {
   canManageOrganizationWeeklyReports,
   normalizeWeeklyReportRules,
@@ -1284,6 +1284,9 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
     }
     const organizationId = positiveId(request.params.organizationId)
     if (!organizationId) throw new WeeklyReportError(400, '组织参数无效')
+    if (!platformFeishuConfig().deliveryEnabled) {
+      throw new WeeklyReportError(503, '飞书业务通知已停用')
+    }
     const targetUserIds = Array.isArray(request.body?.userIds)
       ? [...new Set(request.body.userIds
         .map((value: unknown) => positiveId(value))

@@ -143,7 +143,6 @@ async function verify() {
       console.log(JSON.stringify({
         platformSchemaPresent: tables.rows[0].platform_exists,
         unresolvedAdminAccounts: unresolvedAdmins,
-        webhookAccountConfigured: Boolean(imported.webhookUsername),
       }, null, 2))
       if (unresolvedAdmins.length > 0) process.exitCode = 1
     } finally {
@@ -408,14 +407,6 @@ async function importLegacy() {
       )
       if (current.rows[0]?.active_revision) throw new Error('平台配置已经存在，拒绝用旧 env 覆盖。')
 
-      if (imported.webhookUsername) {
-        const webhookUser = await client.query<{ id: string }>(
-          `select id from users where lower(btrim(email)) = $1 and account_status = 'active'`,
-          [imported.webhookUsername.trim().toLowerCase()],
-        )
-        if (!webhookUser.rows[0]) throw new Error('FEISHU_WEBHOOK_USER_EMAIL 无法解析为有效用户。')
-        imported.config.feishu.webhookUserId = Number(webhookUser.rows[0].id)
-      }
       for (const username of imported.adminUsernames) {
         if (username === 'admin') continue
         const target = await client.query<{ id: string }>(

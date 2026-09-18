@@ -224,7 +224,6 @@ export async function testPlatformConfigSection(
       config.email.password,
       config.feishu.appSecret,
       config.feishu.verificationToken,
-      config.feishu.webhookBasicPassword,
       config.github.token,
       config.storage.accessKeyId,
       config.storage.accessKeySecret,

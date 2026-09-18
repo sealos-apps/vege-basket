@@ -525,7 +525,6 @@ const aiAgentPrompts: Record<AiAgentType, string> = {
 }
 
 app.use(cors())
-app.use('/api/integrations/feishu/conversation-analysis', express.text({ type: '*/*' }))
 
 app.post('/api/todo-images', (request, response, next) => {
   void platformConfigRequestMiddleware(request, response, next)
@@ -873,41 +872,10 @@ function trimForAi(value: string, maxLength = aiMaxMessageLength()) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value
 }
 
-function stripMarkdownForSummary(value: string) {
-  return value
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
-    .replace(/^\s{0,3}[-*+]\s+/gm, '')
-    .replace(/^\s{0,3}\d+\.\s+/gm, '')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\|/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
 function extractMentionNames(value: string) {
   return Array.from(value.matchAll(/@([^\s@，。；：、,.!?！？()（）【】[\]<>《》"'“”]+)(?=$|[\s，。；：、,.!?！？()（）【】[\]<>《》"'“”])/g))
     .map((match) => match[1]?.trim() ?? '')
     .filter(Boolean)
-}
-
-function extractCoreSummaryFromAnalysis(value: string) {
-  const coreSection = value.match(/(?:核心摘要|一句话总结)[^\n]*\n+([\s\S]*?)(?=\n#{1,6}\s|\n\d+\.\s|\n###\s|$)/)
-  if (coreSection?.[1]) return coreSection[1]
-
-  const firstMeaningfulLine = value
-    .split('\n')
-    .map((line) => stripMarkdownForSummary(line))
-    .find((line) => line && !/^[-:|\s]+$/.test(line) && !/^技术原话/.test(line))
-  return firstMeaningfulLine ?? value
-}
-
-function buildFeishuInformationSummary(analysis: string) {
-  const summary = stripMarkdownForSummary(extractCoreSummaryFromAnalysis(analysis))
-  if (!summary) return '飞书对话分析已完成，完整报告已保存到 Veges AI 的 AI 文档。'
-  return summary.length > 200 ? `${summary.slice(0, 197)}...` : summary
 }
 
 function checkAiRateLimit(userId: number) {
@@ -1002,45 +970,6 @@ async function resolveAiIntentClassification(
   }
 }
 
-function parseBasicAuth(request: express.Request) {
-  const header = request.headers.authorization ?? ''
-  if (!header.startsWith('Basic ')) return null
-
-  const decoded = Buffer.from(header.slice('Basic '.length), 'base64').toString('utf8')
-  const separatorIndex = decoded.indexOf(':')
-  if (separatorIndex < 0) return null
-  return {
-    username: decoded.slice(0, separatorIndex),
-    password: decoded.slice(separatorIndex + 1),
-  }
-}
-
-function timingSafeTextEqual(left: string, right: string) {
-  const leftBuffer = Buffer.from(left)
-  const rightBuffer = Buffer.from(right)
-  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer)
-}
-
-function ensureFeishuWebhookAuth(request: express.Request, response: express.Response) {
-  const { webhookBasicPassword: basicPassword, webhookBasicUser: basicUser } = platformFeishuConfig()
-  if (!basicUser || !basicPassword) {
-    response.status(503).json({ error: 'Feishu webhook is not configured' })
-    return false
-  }
-
-  const credentials = parseBasicAuth(request)
-  if (
-    !credentials ||
-    !timingSafeTextEqual(credentials.username, basicUser) ||
-    !timingSafeTextEqual(credentials.password, basicPassword)
-  ) {
-    response.setHeader('WWW-Authenticate', 'Basic realm="Veges Feishu Webhook"')
-    response.status(401).json({ error: 'Unauthorized' })
-    return false
-  }
-  return true
-}
-
 function getRequestOrigin(request: express.Request) {
   const browserOrigin = String(request.headers.origin ?? '').trim()
   if (/^https?:\/\//.test(browserOrigin)) return browserOrigin
@@ -1062,6 +991,12 @@ function getRequestOrigin(request: express.Request) {
   const proto = forwardedProto || request.protocol || 'http'
   const host = forwardedHost || request.get('host') || `127.0.0.1:${port}`
   return `${proto}://${host}`
+}
+
+function timingSafeTextEqual(left: string, right: string) {
+  const leftBuffer = Buffer.from(left)
+  const rightBuffer = Buffer.from(right)
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer)
 }
 
 async function getFeishuOAuthRedirectUri(request: express.Request) {
@@ -1178,20 +1113,6 @@ function extractTextFromUnknown(value: unknown): string {
   if (directText) return directText
 
   return Object.values(object).map(extractTextFromUnknown).filter(Boolean).join('\n')
-}
-
-function extractConversationText(body: Record<string, unknown>) {
-  const candidates = [
-    body.content,
-    body.message,
-    body.text,
-    body.chatRecord,
-    body.chat_record,
-    body.conversation,
-    body.event,
-    body.data,
-  ]
-  return candidates.map(extractTextFromUnknown).find(Boolean) ?? ''
 }
 
 function verifyFeishuToken(token: unknown) {
@@ -2698,29 +2619,6 @@ function sendAiConversationError(response: express.Response, error: unknown) {
     return true
   }
   return false
-}
-
-async function createFeishuAnalysisDraft(userId: number, title: string, content: string) {
-  const draftContent = `## ${title}\n\n${content}`
-  const result = await query<{ id: string }>(
-    `
-    insert into draft_items (user_id, source, content)
-    values ($1, 'feishu', $2)
-    returning id
-    `,
-    [userId, encryptText(draftContent)],
-  )
-  return Number(result.rows[0].id)
-}
-
-async function saveFeishuAnalysisSummary(userId: number, title: string, content: string) {
-  await query(
-    `
-    insert into summaries (user_id, project_id, type, title, period, content)
-    values ($1, null, 'weekly', $2, $3, $4)
-    `,
-    [userId, encryptText(title), encryptText('飞书对话分析'), encryptText(content)],
-  )
 }
 
 type FeishuAiMessageClaim = {
@@ -12738,77 +12636,6 @@ app.post('/api/drafts/:draftId/archive', asyncHandler(async (request, response) 
   }))
 }))
 
-app.post('/api/integrations/feishu/conversation-analysis', asyncHandler(async (request, response) => {
-  if (!ensureFeishuWebhookAuth(request, response)) return
-
-  const configuredUserId = platformFeishuConfig().webhookUserId
-  if (!configuredUserId) {
-    response.status(503).json({ error: 'Configured Veges user is not set' })
-    return
-  }
-  const userResult = await query<{ id: string }>(
-    "select id from users where id = $1 and account_status = 'active'",
-    [configuredUserId],
-  )
-  const userId = userResult.rows[0] ? Number(userResult.rows[0].id) : null
-  if (!userId) {
-    response.status(404).json({ error: 'Configured Veges user not found' })
-    return
-  }
-  if (!checkAiRateLimit(userId)) {
-    response.status(429).json({ error: 'AI rate limit exceeded' })
-    return
-  }
-
-  const body = typeof request.body === 'string'
-    ? { content: request.body }
-    : request.body && typeof request.body === 'object'
-      ? request.body as Record<string, unknown>
-      : {}
-  console.log('Feishu conversation analysis webhook received', {
-    keys: Object.keys(body),
-    title: extractTextFromUnknown(body.title).slice(0, 80),
-    contentLength: extractConversationText(body).length,
-  })
-  const conversationText = trimForAi(extractConversationText(body), 8_000)
-  if (!conversationText) {
-    response.status(400).json({ error: 'Conversation content is required' })
-    return
-  }
-
-  const result = await createAiAgentResponse(userId, 'conversation-analysis', [
-    {
-      role: 'user',
-      content: conversationText,
-    },
-  ])
-  if ('error' in result) {
-    response.status(result.status).json({ error: result.error })
-    return
-  }
-
-  const sourceTitle = trimForAi(extractTextFromUnknown(body.title), 80)
-  const title = sourceTitle
-    ? `${formatDate(new Date())} 飞书对话分析 - ${sourceTitle}`
-    : `${formatDate(new Date())} 飞书对话分析`
-  const summary = buildFeishuInformationSummary(result.message)
-  await saveFeishuAnalysisSummary(userId, title, result.message)
-  await createFeishuAnalysisDraft(userId, title, summary)
-  response.status(201).json({
-    ok: true,
-    title,
-    savedTo: '草稿箱待归档内容 + Veges AI 的 AI 文档',
-  })
-}))
-
-app.post('/api/integrations/feishu/deliver-notifications', asyncHandler(async (request, response) => {
-  if (!ensureFeishuWebhookAuth(request, response)) return
-  response.json({
-    disabled: true,
-    message: 'Feishu notifications are delivered only for newly assigned todos.',
-  })
-}))
-
 app.post('/api/integrations/feishu/events', asyncHandler(async (request, response) => {
   const body = request.body && typeof request.body === 'object'
     ? request.body as Record<string, unknown>
@@ -13940,7 +13767,7 @@ await initializeProjectModules(pool)
 await assertPlatformBootstrapIntegrity()
 await startPlatformConfigRuntime()
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`API server listening on http://127.0.0.1:${port}`)
 })
 
@@ -13949,9 +13776,18 @@ const feishuAiRetryTimer = setInterval(() => {
 }, 30_000)
 feishuAiRetryTimer.unref()
 
-process.on('SIGINT', async () => {
+let shuttingDown = false
+async function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
   clearInterval(feishuAiRetryTimer)
+  const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()))
   await stopPlatformConfigRuntime()
+  server.closeAllConnections()
+  await serverClosed
   await pool.end()
   process.exit(0)
-})
+}
+
+process.once('SIGINT', () => void shutdown())
+process.once('SIGTERM', () => void shutdown())

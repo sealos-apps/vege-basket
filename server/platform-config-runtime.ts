@@ -21,13 +21,19 @@ let activeErrorCode = ''
 
 async function recordRuntimeStatus(config: VersionedPlatformConfig | null, errorCode = '') {
   await query(
-    `insert into platform_config_runtime_status
-      (instance_id, process_kind, applied_revision, heartbeat_at, error_code)
-     values ($1::uuid, 'api', $2, now(), $3)
-     on conflict (instance_id) do update
-       set applied_revision = excluded.applied_revision,
-           heartbeat_at = excluded.heartbeat_at,
-           error_code = excluded.error_code`,
+    `with current_status as (
+       insert into platform_config_runtime_status
+         (instance_id, process_kind, applied_revision, heartbeat_at, error_code)
+       values ($1::uuid, 'api', $2, clock_timestamp(), $3)
+       on conflict (instance_id) do update
+         set applied_revision = excluded.applied_revision,
+             heartbeat_at = excluded.heartbeat_at,
+             error_code = excluded.error_code
+       returning instance_id
+     )
+     delete from platform_config_runtime_status
+      where instance_id <> (select instance_id from current_status)
+        and heartbeat_at < clock_timestamp() - interval '5 minutes'`,
     [instanceId, config?.revision ?? null, errorCode],
   )
 }
@@ -146,11 +152,12 @@ export async function listPlatformRuntimeStatus() {
       heartbeat_at: Date
       instance_id: string
       process_kind: 'api'
-      stale: boolean
+      offline: boolean
     }>(
       `select instance_id, process_kind, applied_revision, heartbeat_at, error_code,
-              heartbeat_at < now() - interval '45 seconds' as stale
+              heartbeat_at < clock_timestamp() - interval '45 seconds' as offline
          from platform_config_runtime_status
+        where heartbeat_at >= clock_timestamp() - interval '5 minutes'
         order by started_at`,
     ),
   ])
@@ -163,11 +170,13 @@ export async function listPlatformRuntimeStatus() {
       heartbeatAt: row.heartbeat_at.toISOString(),
       instanceId: row.instance_id,
       processKind: row.process_kind,
-      status: row.stale
-        ? 'unknown' as const
-        : row.error_code || Number(row.applied_revision ?? 0) !== revision
+      status: row.offline
+        ? 'offline' as const
+        : row.error_code
           ? 'error' as const
-          : 'applied' as const,
+          : Number(row.applied_revision ?? 0) !== revision
+            ? 'loading' as const
+            : 'applied' as const,
     })),
   }
 }

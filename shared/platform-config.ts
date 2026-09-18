@@ -13,7 +13,7 @@ export type PlatformConfigSection = (typeof platformConfigSections)[number]
 export const platformSecretFields = {
   ai: ['apiKey'],
   email: ['password'],
-  feishu: ['appSecret', 'verificationToken', 'webhookBasicPassword'],
+  feishu: ['appSecret', 'verificationToken'],
   github: ['token'],
   storage: ['accessKeyId', 'accessKeySecret', 'urlSecret'],
 } as const
@@ -35,7 +35,7 @@ export type PlatformConfigRuntimeInstance = {
   heartbeatAt: string
   instanceId: string
   processKind: 'api'
-  status: 'applied' | 'error' | 'unknown'
+  status: 'applied' | 'error' | 'loading' | 'offline'
 }
 
 export type PlatformConfigRuntimeStatus = {
@@ -44,6 +44,18 @@ export type PlatformConfigRuntimeStatus = {
     mode: 'load-on-run'
   }
   instances: PlatformConfigRuntimeInstance[]
+}
+
+export type PlatformConfigRuntimeOverallStatus = 'applied' | 'error' | 'loading' | 'offline'
+
+export function platformConfigRuntimeOverallStatus(
+  runtime: PlatformConfigRuntimeStatus,
+): PlatformConfigRuntimeOverallStatus {
+  const onlineInstances = runtime.instances.filter((instance) => instance.status !== 'offline')
+  if (onlineInstances.length === 0) return 'offline'
+  if (onlineInstances.some((instance) => instance.status === 'error')) return 'error'
+  if (onlineInstances.some((instance) => instance.status === 'loading')) return 'loading'
+  return 'applied'
 }
 
 export function isPlatformConfigSection(value: unknown): value is PlatformConfigSection {

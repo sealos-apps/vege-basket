@@ -31,9 +31,9 @@
 | 13 | FEISHU_VERIFICATION_TOKEN | 是 | 飞书 / 事件及卡片回调校验 Token | 迁移 |
 | 14 | FEISHU_OAUTH_REDIRECT_URI | 否 | 飞书 / 登录重定向地址 | 按本轮要求固定只读、可复制；初始化落库，取消覆盖/编辑能力，保存和恢复不能改动 |
 | 15 | FEISHU_OAUTH_STATE_SECRET | 否 | 后台签名配置 | 本期隐藏；导入并保留有效值和旧 state 验证兼容，页面保存不能清空 |
-| 16 | FEISHU_WEBHOOK_USER_EMAIL | 是 | 飞书 / 对话分析接收账号 | 迁移为用户选择，落库 userId；初始化按现有用户名精确解析 |
-| 17 | FEISHU_WEBHOOK_BASIC_USER | 是 | 飞书 / 分析 webhook Basic 用户名 | 迁移 |
-| 18 | FEISHU_WEBHOOK_BASIC_PASSWORD | 是 | 飞书 / 分析 webhook Basic 密码 | 迁移 |
+| 16 | FEISHU_WEBHOOK_USER_EMAIL | 否 | 已移除的固定账号对话分析 Webhook | 仅兼容读取旧 env，不再导入或使用 |
+| 17 | FEISHU_WEBHOOK_BASIC_USER | 否 | 已移除的固定账号对话分析 Webhook | 仅兼容读取旧 env，不再导入或使用 |
+| 18 | FEISHU_WEBHOOK_BASIC_PASSWORD | 否 | 已移除的固定账号对话分析 Webhook | 仅兼容读取旧 env，不再导入或使用 |
 | 19 | FEISHU_DELIVERY_ENABLED | 是 | 飞书 / 通知发送开关 | 迁移，同时覆盖 API 与日报 worker |
 | 20 | FEISHU_AI_CHAT_ENABLED | 是 | 后台私聊 AI 开关 | 本期隐藏；当前已实现，不删除后台；保留旧值，新安装默认关闭 |
 | 21 | OSS_ENDPOINT | 是 | 对象存储 / 服务地址 | 单套配置迁移；已使用时更换位置须先独立迁移 |

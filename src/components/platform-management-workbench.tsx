@@ -20,6 +20,7 @@ import {
   Trash,
   UserGear,
   UserMinus,
+  WarningCircle,
 } from '@phosphor-icons/react'
 import {
   createPlatformOrganization,
@@ -54,6 +55,7 @@ import type {
   PlatformSecurityStatus,
   SecretState,
 } from '@/platform-management-types'
+import { platformConfigRuntimeOverallStatus } from '../../shared/platform-config'
 import { userRoleLabel } from '@/user-roles'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -101,7 +103,7 @@ const tabs: Array<{ group: string; icon: typeof GearSix; id: Tab; label: string 
 const sectionSecretFields: Partial<Record<PlatformConfigSection, string[]>> = {
   ai: ['apiKey'],
   email: ['password'],
-  feishu: ['appSecret', 'verificationToken', 'webhookBasicPassword'],
+  feishu: ['appSecret', 'verificationToken'],
   github: ['token'],
   storage: ['accessKeyId', 'accessKeySecret', 'urlSecret'],
 }
@@ -711,18 +713,14 @@ export function PlatformManagementWorkbench({
     )
     : null
 
-  const runtimeReady = Boolean(
-    runtime && runtime.instances.length > 0 && runtime.instances.every((instance) => (
-      instance.status === 'applied' && instance.appliedRevision === loaded.revision
-    )),
-  )
+  const runtimeStatus = runtime ? platformConfigRuntimeOverallStatus(runtime) : 'loading'
   const platformTopbarActions = topbarActionHost
     ? createPortal(
       <div className="platform-topbar-status" aria-label="平台配置状态">
         <span>配置 v{loaded.revision}</span>
-        <Badge variant={runtimeReady ? 'secondary' : 'outline'}>
-          {runtimeReady ? <CheckCircle /> : <SpinnerGap className="animate-spin" />}
-          {runtimeReady ? '已生效' : '加载中'}
+        <Badge variant={runtimeStatus === 'applied' ? 'secondary' : runtimeStatus === 'error' ? 'destructive' : 'outline'}>
+          {runtimeStatus === 'applied' ? <CheckCircle /> : runtimeStatus === 'loading' ? <SpinnerGap className="animate-spin" /> : <WarningCircle />}
+          {runtimeStatus === 'applied' ? '已生效' : runtimeStatus === 'error' ? '加载异常' : runtimeStatus === 'offline' ? '无在线实例' : '加载中'}
         </Badge>
       </div>,
       topbarActionHost,
@@ -790,10 +788,7 @@ export function PlatformManagementWorkbench({
             <Field label="App ID"><Input value={draft.feishu.appId} onChange={(event) => updateSection('feishu', { appId: event.target.value })} /></Field>
             {secret('feishu', 'appSecret', 'App Secret', draft.feishu.appSecret)}
             {secret('feishu', 'verificationToken', '验证令牌', draft.feishu.verificationToken)}
-            <Field label="通知账号"><Select value={draft.feishu.webhookUserId ? String(draft.feishu.webhookUserId) : 'none'} onValueChange={(value) => updateSection('feishu', { webhookUserId: value === 'none' ? null : Number(value) })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">未选择</SelectItem>{eligibleOwners.map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.displayName}</SelectItem>)}</SelectContent></Select></Field>
-            <Field label="Webhook 访问账号"><Input value={draft.feishu.webhookBasicUser} onChange={(event) => updateSection('feishu', { webhookBasicUser: event.target.value })} /></Field>
-            {secret('feishu', 'webhookBasicPassword', 'Webhook 密码', draft.feishu.webhookBasicPassword)}
-            <ToggleField label="启用飞书通知" checked={draft.feishu.deliveryEnabled} onChange={(deliveryEnabled) => updateSection('feishu', { deliveryEnabled })} />
+            <ToggleField label="启用业务通知" checked={draft.feishu.deliveryEnabled} onChange={(deliveryEnabled) => updateSection('feishu', { deliveryEnabled })} />
             <Field label="事件回调地址"><div className="platform-copy-field"><Input readOnly value={loaded.fixedCallbacks?.eventCallbackUrl ?? '尚未初始化'} /><Button size="icon" variant="ghost" title="复制" type="button" onClick={() => void navigator.clipboard.writeText(loaded.fixedCallbacks?.eventCallbackUrl ?? '')}><Copy /></Button></div></Field>
             <Field label="登录重定向地址"><div className="platform-copy-field"><Input readOnly value={loaded.fixedCallbacks?.oauthRedirectUrl ?? '尚未初始化'} /><Button size="icon" variant="ghost" title="复制" type="button" onClick={() => void navigator.clipboard.writeText(loaded.fixedCallbacks?.oauthRedirectUrl ?? '')}><Copy /></Button></div></Field>
           </div> : null}
@@ -867,7 +862,7 @@ export function PlatformManagementWorkbench({
 
           {tab === 'security' ? <div className="platform-security"><div className="platform-runtime-summary"><div><span>应用加密</span><strong>{security?.configured ? '已启用' : '配置异常'}</strong></div><div><span>加密算法</span><strong>{security?.algorithm ?? '未知'}</strong></div><div><span>活动密钥标识</span><strong>{security?.activeKeyId || '未配置'}</strong></div></div><section><h4>密钥保留状态</h4><p>现有密文引用的旧密钥必须继续保留。这里只显示标识，不显示密钥材料。</p><div className="platform-key-list">{security?.retainedKeyIds.map((keyId) => <Badge key={keyId} variant={keyId === security.activeKeyId ? 'default' : 'outline'}>{keyId}{keyId === security.activeKeyId ? '（当前）' : ''}</Badge>)}</div></section><section><h4>加密覆盖</h4><div className="platform-security-check"><CheckCircle /><span>平台配置与历史版本使用应用层加密存储</span></div><div className="platform-security-check"><CheckCircle /><span>敏感业务文本使用应用层加密存储</span></div></section><section><h4>最近巡检</h4>{security?.lastInspection ? <div className="platform-inspection"><Badge variant={security.lastInspection.status === 'passed' ? 'secondary' : 'destructive'}>{security.lastInspection.status === 'passed' ? '通过' : '失败'}</Badge><span>{security.lastInspection.result.summary || '巡检已记录'}</span><time>{new Date(security.lastInspection.createdAt).toLocaleString('zh-CN')}</time></div> : <p>尚无巡检记录。迁移或密钥轮换后应运行已授权的数据加密巡检。</p>}</section></div> : null}
 
-          {tab === 'runtime' ? <div className="platform-runtime"><div className="platform-runtime-summary"><div><span>数据库当前版本</span><strong>v{runtime?.activeRevision ?? loaded.revision}</strong></div><div><span>API 实例</span><strong>{runtime?.instances.length ?? 0}</strong></div><div><span>定时任务</span><strong>运行时加载</strong></div></div><section><h4>服务实例</h4>{runtime?.instances.map((instance) => <div className="platform-runtime-row" key={instance.instanceId}><span className={`platform-runtime-dot ${instance.status}`} /><code>{instance.instanceId.slice(0, 8)}</code><span>{instance.status === 'applied' ? '已生效' : instance.status === 'error' ? '加载异常' : '状态未知'}</span><strong>{instance.appliedRevision ? `v${instance.appliedRevision}` : '未加载'}</strong><time>{new Date(instance.heartbeatAt).toLocaleString('zh-CN')}</time></div>)}</section></div> : null}
+          {tab === 'runtime' ? <div className="platform-runtime"><div className="platform-runtime-summary"><div><span>数据库当前版本</span><strong>v{runtime?.activeRevision ?? loaded.revision}</strong></div><div><span>在线 API 实例</span><strong>{runtime?.instances.filter((instance) => instance.status !== 'offline').length ?? 0}</strong></div><div><span>定时任务</span><strong>运行时加载</strong></div></div><section><h4>服务实例</h4>{runtime?.instances.map((instance) => <div className="platform-runtime-row" key={instance.instanceId}><span className={`platform-runtime-dot ${instance.status}`} /><code>{instance.instanceId.slice(0, 8)}</code><span>{instance.status === 'applied' ? '已生效' : instance.status === 'error' ? '加载异常' : instance.status === 'offline' ? '已离线' : '加载中'}</span><strong>{instance.appliedRevision ? `v${instance.appliedRevision}` : '未加载'}</strong><time>{new Date(instance.heartbeatAt).toLocaleString('zh-CN')}</time></div>)}</section></div> : null}
           {tab === 'history' ? <div className="platform-runtime"><section><h4>配置历史</h4>{history.map((item) => <div className="platform-history-row" key={item.revision}><strong>v{item.revision}</strong><span>{item.createdBy}</span><time>{new Date(item.createdAt).toLocaleString('zh-CN')}</time><ConfirmActionDialog title={`恢复到版本 v${item.revision}？`} description="恢复会创建一个新版本并自动热更新，不会改变固定回调、用户权限或组织数据。" confirmLabel="确认恢复" trigger={<Button size="sm" variant="outline" disabled={item.revision === loaded.revision}>恢复</Button>} onConfirm={async () => { await restorePlatformConfigRevision(item.revision, loaded.revision); await Promise.all([loadConfig(), loadRuntime()]); return true }} /></div>)}</section></div> : null}
 
           {(['general', 'ai', 'email', 'storage', 'packages', 'feishu', 'github'] as Tab[]).includes(tab) ? <footer className="platform-savebar"><Button variant="outline" type="button" disabled={busy} onClick={() => { setDraft(cloneConfig(loaded.config)); setSecrets({}); setTestResult('') }}>撤销修改</Button>{(['ai', 'email', 'storage', 'feishu', 'github'] as Tab[]).includes(tab) ? <Button variant="outline" type="button" disabled={busy} onClick={() => void testSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}{tab === 'email' ? '测试连接' : '测试可用性'}</Button> : null}<Button type="button" disabled={busy} onClick={() => void saveSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}保存更改</Button></footer> : null}

@@ -41,9 +41,6 @@ export type PlatformConfig = {
     deliveryEnabled: boolean
     oauthStateSecret: string
     verificationToken: string
-    webhookBasicPassword: string
-    webhookBasicUser: string
-    webhookUserId: number | null
   }
   general: {
     displayName: string
@@ -79,10 +76,9 @@ export type PlatformConfig = {
 export type MaskedPlatformConfig = Omit<PlatformConfig, 'ai' | 'email' | 'feishu' | 'github' | 'packages' | 'storage'> & {
   ai: Omit<PlatformConfig['ai'], 'apiKey'> & { apiKey: ConfiguredSecret }
   email: Omit<PlatformConfig['email'], 'password'> & { password: ConfiguredSecret }
-  feishu: Omit<PlatformConfig['feishu'], 'aiChatEnabled' | 'appSecret' | 'oauthStateSecret' | 'verificationToken' | 'webhookBasicPassword'> & {
+  feishu: Omit<PlatformConfig['feishu'], 'aiChatEnabled' | 'appSecret' | 'oauthStateSecret' | 'verificationToken'> & {
     appSecret: ConfiguredSecret
     verificationToken: ConfiguredSecret
-    webhookBasicPassword: ConfiguredSecret
   }
   github: Omit<PlatformConfig['github'], 'token'> & { token: ConfiguredSecret }
   packages: Pick<PlatformConfig['packages'], 'downloadExpireSeconds' | 'rulesYaml'>
@@ -99,7 +95,7 @@ const editableSectionFields: Record<PlatformConfigSection, readonly string[]> = 
   email: ['enabled', 'host', 'port', 'security', 'username', 'fromName', 'fromAddress'],
   storage: ['endpoint', 'bucket', 'uploadMaxBytes', 'objectPrefix'],
   packages: ['downloadExpireSeconds', 'rulesYaml'],
-  feishu: ['appId', 'webhookUserId', 'webhookBasicUser', 'deliveryEnabled'],
+  feishu: ['appId', 'deliveryEnabled'],
   github: ['enabled', 'repositoryUrl', 'workflowFile', 'branch', 'downloadExpireSeconds'],
 }
 
@@ -271,9 +267,6 @@ export function createDefaultPlatformConfig(): PlatformConfig {
       appId: '',
       appSecret: '',
       verificationToken: '',
-      webhookUserId: null,
-      webhookBasicUser: '',
-      webhookBasicPassword: '',
       deliveryEnabled: true,
       aiChatEnabled: false,
       oauthStateSecret: '',
@@ -357,10 +350,8 @@ export function parsePlatformConfig(value: unknown): PlatformConfig {
   if (!Array.isArray(packages.legacyMiddlewareRoots)) issues.push('packages.legacyMiddlewareRoots 必须是数组。')
 
   const feishu = objectValue(root.feishu, 'feishu', issues)
+  // Deprecated webhook fields remain accepted so immutable historical versions stay readable.
   strictKeys(feishu, ['appId', 'appSecret', 'verificationToken', 'webhookUserId', 'webhookBasicUser', 'webhookBasicPassword', 'deliveryEnabled', 'aiChatEnabled', 'oauthStateSecret'], 'feishu', issues)
-  const webhookUserId = feishu.webhookUserId === null
-    ? null
-    : integerValue(feishu.webhookUserId, 'feishu.webhookUserId', issues, 1, Number.MAX_SAFE_INTEGER)
   const feishuIdentity = [stringValue(feishu.appId), stringValue(feishu.appSecret)]
   if (feishuIdentity.some(Boolean) && !feishuIdentity.every(Boolean)) issues.push('飞书 App ID 和 App Secret 必须同时配置。')
 
@@ -415,9 +406,6 @@ export function parsePlatformConfig(value: unknown): PlatformConfig {
       appId: stringValue(feishu.appId),
       appSecret: String(feishu.appSecret ?? ''),
       verificationToken: String(feishu.verificationToken ?? ''),
-      webhookUserId,
-      webhookBasicUser: stringValue(feishu.webhookBasicUser),
-      webhookBasicPassword: String(feishu.webhookBasicPassword ?? ''),
       deliveryEnabled: booleanValue(feishu.deliveryEnabled, 'feishu.deliveryEnabled', issues),
       aiChatEnabled: booleanValue(feishu.aiChatEnabled, 'feishu.aiChatEnabled', issues),
       oauthStateSecret: String(feishu.oauthStateSecret ?? ''),
@@ -455,9 +443,6 @@ export function maskPlatformConfig(config: PlatformConfig): MaskedPlatformConfig
       appSecret: secretState(config.feishu.appSecret),
       deliveryEnabled: config.feishu.deliveryEnabled,
       verificationToken: secretState(config.feishu.verificationToken),
-      webhookBasicUser: config.feishu.webhookBasicUser,
-      webhookBasicPassword: secretState(config.feishu.webhookBasicPassword),
-      webhookUserId: config.feishu.webhookUserId,
     },
     github: { ...config.github, token: secretState(config.github.token) },
     packages: {

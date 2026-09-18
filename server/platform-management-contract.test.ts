@@ -10,6 +10,7 @@ const workbenchSource = readFileSync(
   'utf8',
 )
 const appSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+const runtimeSource = readFileSync(new URL('./platform-config-runtime.ts', import.meta.url), 'utf8')
 const digestWorkerSource = readFileSync(new URL('./todo-digest-worker.ts', import.meta.url), 'utf8')
 const cliSource = readFileSync(new URL('./platform-config-cli.ts', import.meta.url), 'utf8')
 const platformOrganizationsSource = readFileSync(new URL('./platform-organizations.ts', import.meta.url), 'utf8')
@@ -88,6 +89,17 @@ test('platform secrets use the prototype replacement dialog contract', () => {
   assert.match(workbenchSource, /setEditorValue\(''\)/u)
   assert.doesNotMatch(workbenchSource, /确认新/u)
   assert.doesNotMatch(workbenchSource, /confirmation:/u)
+})
+
+test('platform management removes the legacy Feishu analysis webhook settings', () => {
+  assert.doesNotMatch(workbenchSource, /通知账号/u)
+  assert.doesNotMatch(workbenchSource, /Webhook 访问账号/u)
+  assert.doesNotMatch(workbenchSource, /Webhook 密码/u)
+  assert.match(workbenchSource, /platformConfigRuntimeOverallStatus/u)
+  assert.match(runtimeSource, /interval '5 minutes'/u)
+  assert.match(runtimeSource, /'loading'/u)
+  assert.match(runtimeSource, /'offline'/u)
+  assert.doesNotMatch(appSource, /app\.post\('\/api\/integrations\/feishu\/conversation-analysis'/u)
 })
 
 test('builtin administrator bootstrap validates the complete existing account', () => {

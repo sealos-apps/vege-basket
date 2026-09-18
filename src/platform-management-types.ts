@@ -43,9 +43,6 @@ export type PlatformConfig = {
     appId: string
     appSecret: SecretState
     verificationToken: SecretState
-    webhookUserId: number | null
-    webhookBasicUser: string
-    webhookBasicPassword: SecretState
     deliveryEnabled: boolean
   }
   github: {
@@ -99,7 +96,7 @@ export type PlatformRuntimeStatus = {
     heartbeatAt: string
     instanceId: string
     processKind: 'api'
-    status: 'applied' | 'error' | 'unknown'
+    status: 'applied' | 'error' | 'loading' | 'offline'
   }>
 }
 

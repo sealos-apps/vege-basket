@@ -35,3 +35,15 @@ test('legacy import reports unimplemented and unknown keys without values', () =
   assert.deepEqual(imported.ignoredUnimplementedKeys, ['FEISHU_ENCRYPT_KEY'])
   assert.deepEqual(imported.unknownKeys, ['UNKNOWN_SETTING'])
 })
+
+test('legacy webhook settings are ignored during platform import', () => {
+  const imported = parseLegacyPlatformConfig({
+    FEISHU_WEBHOOK_USER_EMAIL: 'legacy@example.com',
+    FEISHU_WEBHOOK_BASIC_USER: 'legacy-user',
+    FEISHU_WEBHOOK_BASIC_PASSWORD: 'legacy-password',
+  }, 'page_kinds: {}\nrules: {}\n')
+  assert.equal('webhookUsername' in imported, false)
+  assert.equal('webhookUserId' in imported.config.feishu, false)
+  assert.equal('webhookBasicUser' in imported.config.feishu, false)
+  assert.equal('webhookBasicPassword' in imported.config.feishu, false)
+})
