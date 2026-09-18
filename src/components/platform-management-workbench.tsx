@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Buildings,
   CheckCircle,
@@ -34,6 +35,7 @@ import {
   revealPlatformSecret,
   restorePlatformConfigRevision,
   savePlatformConfigSection,
+  setPlatformAdmin,
   testPlatformConfigSection,
   updateManagedUserPermissions,
   updateManagedUserStatus,
@@ -77,8 +79,9 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import './platform-management-workbench.css'
 
-type Tab = PlatformConfigSection | 'users' | 'organizations' | 'security' | 'runtime'
+type Tab = PlatformConfigSection | 'users' | 'organizations' | 'security' | 'runtime' | 'history'
 type SecretDrafts = Record<string, string>
+type UserTab = 'users' | 'admins'
 
 const tabs: Array<{ group: string; icon: typeof GearSix; id: Tab; label: string }> = [
   { group: '平台', icon: GearSix, id: 'general', label: '平台信息' },
@@ -92,6 +95,7 @@ const tabs: Array<{ group: string; icon: typeof GearSix; id: Tab; label: string 
   { group: '服务配置', icon: GithubLogo, id: 'github', label: 'GitHub Actions' },
   { group: '审计', icon: ShieldCheck, id: 'security', label: '数据安全' },
   { group: '审计', icon: ClockCounterClockwise, id: 'runtime', label: '版本与运行状态' },
+  { group: '审计', icon: ClockCounterClockwise, id: 'history', label: '配置历史' },
 ]
 
 const sectionSecretFields: Partial<Record<PlatformConfigSection, string[]>> = {
@@ -236,12 +240,17 @@ function SecretField({
 
 export function PlatformManagementWorkbench({
   currentUserId,
+  sidebarNavigationHost,
+  topbarActionHost,
   onAuthorizationLost,
 }: {
   currentUserId: number
+  sidebarNavigationHost: HTMLDivElement | null
+  topbarActionHost: HTMLDivElement | null
   onAuthorizationLost: () => void
 }) {
   const [tab, setTab] = useState<Tab>('general')
+  const [userTab, setUserTab] = useState<UserTab>('users')
   const [loaded, setLoaded] = useState<PlatformConfigResponse>()
   const [draft, setDraft] = useState<PlatformConfig>()
   const [secrets, setSecrets] = useState<SecretDrafts>({})
@@ -259,6 +268,8 @@ export function PlatformManagementWorkbench({
   const [createOpen, setCreateOpen] = useState(false)
   const [organizationName, setOrganizationName] = useState('')
   const [ownerUserId, setOwnerUserId] = useState('')
+  const [grantUserId, setGrantUserId] = useState('')
+  const [grantAdminOpen, setGrantAdminOpen] = useState(false)
   const [organizationSearch, setOrganizationSearch] = useState('')
   const [offboardingUser, setOffboardingUser] = useState<ManagedUser>()
   const [offboardingPreview, setOffboardingPreview] = useState<OffboardingPreview>()
@@ -317,6 +328,22 @@ export function PlatformManagementWorkbench({
   }, [])
 
   useEffect(() => () => setSecrets({}), [])
+
+  useEffect(() => {
+    if (!loaded?.revision) return
+    let active = true
+    const timer = window.setInterval(() => {
+      void fetchPlatformRuntimeStatus()
+        .then((response) => {
+          if (active) setRuntime(response)
+        })
+        .catch(() => undefined)
+    }, 5_000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [loaded?.revision])
 
   function updateSection<K extends PlatformConfigSection>(section: K, patch: Partial<PlatformConfig[K]>) {
     setDraft((current) => current ? { ...current, [section]: { ...current[section], ...patch } } : current)
@@ -434,6 +461,40 @@ export function PlatformManagementWorkbench({
     }
   }
 
+  async function grantPlatformAdmin() {
+    const user = users.find((item) => item.id === Number(grantUserId))
+    if (!user) return
+    setBusy(true)
+    setError('')
+    try {
+      await setPlatformAdmin(user.id, true, user.permissionVersion)
+      setGrantAdminOpen(false)
+      setGrantUserId('')
+      await loadUsers()
+      setNotice(`已授予 ${user.displayName} 超级管理员权限。`)
+    } catch (grantError) {
+      handleError(grantError, '授予超级管理员失败。')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function revokePlatformAdmin(user: ManagedUser): Promise<boolean> {
+    setBusy(true)
+    setError('')
+    try {
+      await setPlatformAdmin(user.id, false, user.permissionVersion)
+      await loadUsers()
+      setNotice(`已移除 ${user.displayName} 的超级管理员权限。`)
+      return true
+    } catch (revokeError) {
+      handleError(revokeError, '移除超级管理员失败。')
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function openOffboarding(user: ManagedUser) {
     setBusy(true)
     setError('')
@@ -514,16 +575,63 @@ export function PlatformManagementWorkbench({
     />
   )
 
+  const platformSidebarNavigation = sidebarNavigationHost
+    ? createPortal(
+      <nav className="nav-list platform-sidebar-nav" aria-label="平台管理导航">
+        {[...new Set(tabs.map((item) => item.group))].map((group) => (
+          <div className="nav-group" key={group} role="group" aria-label={group}>
+            <div className="nav-group-label">{group}</div>
+            {tabs.filter((item) => item.group === group).map((item) => {
+              const Icon = item.icon
+              return (
+                <Button
+                  aria-current={tab === item.id ? 'page' : undefined}
+                  className={tab === item.id ? 'nav-button active' : 'nav-button'}
+                  key={item.id}
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    setTab(item.id)
+                    setError('')
+                    setNotice('')
+                    setTestResult('')
+                  }}
+                >
+                  <Icon size={18} />
+                  {item.label}
+                </Button>
+              )
+            })}
+          </div>
+        ))}
+      </nav>,
+      sidebarNavigationHost,
+    )
+    : null
+
+  const runtimeReady = Boolean(
+    runtime && runtime.instances.length > 0 && runtime.instances.every((instance) => (
+      instance.status === 'applied' && instance.appliedRevision === loaded.revision
+    )),
+  )
+  const platformTopbarActions = topbarActionHost
+    ? createPortal(
+      <div className="platform-topbar-status" aria-label="平台配置状态">
+        <span>配置 v{loaded.revision}</span>
+        <Badge variant={runtimeReady ? 'secondary' : 'outline'}>
+          {runtimeReady ? <CheckCircle /> : <SpinnerGap className="animate-spin" />}
+          {runtimeReady ? '已生效' : '加载中'}
+        </Badge>
+      </div>,
+      topbarActionHost,
+    )
+    : null
+
   return (
-    <div className="platform-workbench">
-      <header className="platform-heading">
-        <div><span className="platform-kicker"><ShieldCheck /> 超级管理员</span><h2>平台管理</h2><p>统一管理平台服务、账号权限和组织生命周期。</p></div>
-        <div className="platform-revision"><span>当前配置</span><strong>v{loaded.revision}</strong></div>
-      </header>
-      <div className="platform-layout">
-        <nav className="platform-nav" aria-label="平台管理导航">
-          {[...new Set(tabs.map((item) => item.group))].map((group) => <div key={group}><span>{group}</span>{tabs.filter((item) => item.group === group).map((item) => { const Icon = item.icon; return <button type="button" key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => { setTab(item.id); setError(''); setNotice(''); setTestResult('') }}><Icon />{item.label}</button> })}</div>)}
-        </nav>
+    <>
+      {platformSidebarNavigation}
+      {platformTopbarActions}
+      <div className="platform-workbench">
         <section className="platform-content">
           <div className="platform-section-title"><div><h3>{selected.label}</h3><p>{tab === 'organizations' ? '组织只在这里创建和删除；存在业务或历史数据时禁止删除。' : tab === 'users' ? '账号由飞书自动注册；内置 admin 的超管权限不可移除。' : '保存后由各服务实例自动加载，无需重启。'}</p></div></div>
           {error ? <div className="platform-alert error" role="alert">{error}</div> : null}
@@ -597,20 +705,29 @@ export function PlatformManagementWorkbench({
             <Field label="下载链接有效期（秒）"><Input type="number" value={draft.github.downloadExpireSeconds} onChange={(event) => updateSection('github', { downloadExpireSeconds: Number(event.target.value) })} /></Field>
           </div> : null}
 
-          {tab === 'users' ? <div className="platform-table-list">{users.map((user) => <article key={user.id} className="platform-user-row"><div className="platform-user-name"><strong>{user.displayName}{user.isBuiltinAdmin ? <Badge>内置</Badge> : null}</strong><small>{user.username} · {user.registrationSource === 'feishu' ? '飞书注册' : user.registrationSource === 'builtin' ? '内置账号' : '历史账号'} · {user.accountStatus === 'active' ? '正常' : user.accountStatus === 'disabled' ? '已禁用' : '已离职'}</small></div><div className="platform-role-options">{roleValues.map((role) => <label key={role}><Checkbox checked={user.roles.includes(role)} disabled={busy || user.accountStatus === 'departed'} onCheckedChange={() => setUsers((current) => current.map((item) => item.id === user.id ? { ...item, roles: item.roles.includes(role) ? item.roles.filter((value) => value !== role) : [...item.roles, role] } : item))} />{userRoleLabel[role]}</label>)}</div><label className="platform-admin-option"><Checkbox checked={user.platformAdmin} disabled={busy || user.isBuiltinAdmin || user.accountStatus !== 'active' || (!user.feishuIdentityVerified && !user.isBuiltinAdmin)} onCheckedChange={(checked) => setUsers((current) => current.map((item) => item.id === user.id ? { ...item, platformAdmin: checked === true } : item))} />超级管理员</label><div className="platform-user-actions"><Button size="sm" variant="outline" disabled={busy || user.roles.length === 0 || user.accountStatus === 'departed'} onClick={() => void saveUser(user)}>保存权限</Button>{user.accountStatus === 'disabled' ? <Button size="sm" variant="outline" disabled={busy || user.isBuiltinAdmin} onClick={() => void setUserStatus(user, 'active')}>启用</Button> : <ConfirmActionDialog actionKey={`platform-user-disable:${user.id}`} title={`禁用账号“${user.displayName}”？`} description="账号会立即退出登录；再次启用后才能访问平台。" confirmLabel="确认禁用" trigger={<Button size="sm" variant="outline" disabled={busy || user.isBuiltinAdmin || user.accountStatus !== 'active'}>禁用</Button>} onConfirm={async () => { await setUserStatus(user, 'disabled'); return true }} />}{user.accountStatus !== 'departed' ? <Button size="sm" variant="destructive" disabled={busy || user.isBuiltinAdmin || user.id === currentUserId} onClick={() => void openOffboarding(user)}><UserMinus />离职</Button> : null}</div></article>)}</div> : null}
+          {tab === 'users' ? <>
+            <div className="platform-subtabs" role="tablist" aria-label="用户视图">
+              <Button type="button" variant="ghost" className={userTab === 'users' ? 'active' : ''} onClick={() => setUserTab('users')}>全部用户 <Badge variant="outline">{users.length}</Badge></Button>
+              <Button type="button" variant="ghost" className={userTab === 'admins' ? 'active' : ''} onClick={() => setUserTab('admins')}>超级管理员 <Badge variant="outline">{users.filter((user) => user.platformAdmin).length}</Badge></Button>
+              {userTab === 'admins' ? <Button className="platform-subtab-action" type="button" onClick={() => setGrantAdminOpen(true)}><Plus />授予超级管理员</Button> : null}
+            </div>
+            <div className="platform-table-list">{users.filter((user) => userTab === 'users' || user.platformAdmin).map((user) => <article key={user.id} className="platform-user-row"><div className="platform-user-name"><strong>{user.displayName}{user.isBuiltinAdmin ? <Badge>内置</Badge> : null}</strong><small>{user.username} · {user.registrationSource === 'feishu' ? '飞书注册' : user.registrationSource === 'builtin' ? '内置账号' : '历史账号'} · {user.accountStatus === 'active' ? '正常' : user.accountStatus === 'disabled' ? '已禁用' : '已离职'}</small></div>{userTab === 'users' ? <div className="platform-role-options">{roleValues.map((role) => <label key={role}><Checkbox checked={user.roles.includes(role)} disabled={busy || user.accountStatus === 'departed'} onCheckedChange={() => setUsers((current) => current.map((item) => item.id === user.id ? { ...item, roles: item.roles.includes(role) ? item.roles.filter((value) => value !== role) : [...item.roles, role] } : item))} />{userRoleLabel[role]}</label>)}</div> : <div className="platform-admin-source"><ShieldCheck />{user.isBuiltinAdmin ? '系统内置' : '平台授权'}</div>}<label className="platform-admin-option">{user.platformAdmin ? <Badge variant="secondary">超级管理员</Badge> : null}</label><div className="platform-user-actions">{userTab === 'users' ? <Button size="sm" variant="outline" disabled={busy || user.roles.length === 0 || user.accountStatus === 'departed'} onClick={() => void saveUser(user)}>保存权限</Button> : user.isBuiltinAdmin ? <span className="platform-locked-admin"><ShieldCheck />不可移除</span> : <ConfirmActionDialog actionKey={`platform-admin-revoke:${user.id}`} title={`移除“${user.displayName}”的超级管理员权限？`} description="移除后该账号仍可使用已有职业角色，但不能进入平台管理。" confirmLabel="确认移除" trigger={<Button size="sm" variant="destructive" disabled={busy}>移除权限</Button>} onConfirm={() => revokePlatformAdmin(user)} />}{userTab === 'users' ? (user.accountStatus === 'disabled' ? <Button size="sm" variant="outline" disabled={busy || user.isBuiltinAdmin} onClick={() => void setUserStatus(user, 'active')}>启用</Button> : <ConfirmActionDialog actionKey={`platform-user-disable:${user.id}`} title={`禁用账号“${user.displayName}”？`} description="账号会立即退出登录；再次启用后才能访问平台。" confirmLabel="确认禁用" trigger={<Button size="sm" variant="outline" disabled={busy || user.isBuiltinAdmin || user.accountStatus !== 'active'}>禁用</Button>} onConfirm={async () => { await setUserStatus(user, 'disabled'); return true }} />) : null}{userTab === 'users' && user.accountStatus !== 'departed' ? <Button size="sm" variant="destructive" disabled={busy || user.isBuiltinAdmin || user.id === currentUserId} onClick={() => void openOffboarding(user)}><UserMinus />离职</Button> : null}</div></article>)}</div>
+          </> : null}
 
           {tab === 'organizations' ? <div className="platform-organizations"><div className="platform-list-tools"><div className="platform-search"><MagnifyingGlass /><Input placeholder="搜索组织或所有者" value={organizationSearch} onChange={(event) => setOrganizationSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void loadOrganizations() }} /></div><Button variant="outline" onClick={() => void loadOrganizations()} disabled={busy}>查询</Button><Button onClick={() => setCreateOpen(true)} disabled={busy}><Plus />新建组织</Button></div><div className="platform-table-list">{organizations.map((organization) => <article className="platform-organization-row" key={organization.id}><div><strong>{organization.name}</strong><small>所有者：{organization.owner.displayName}</small></div><div className="platform-counts"><span>{organization.memberCount} 成员</span><span>{organization.projectCount} 项目</span><span>{organization.testSpaceCount} 测试空间</span></div><Badge variant={organization.canDelete ? 'secondary' : 'outline'}>{organization.canDelete ? '空组织' : `${organization.blockers.reduce((sum, item) => sum + item.count, 0)} 项关联数据`}</Badge><ConfirmActionDialog actionKey={`platform-organization-delete:${organization.id}`} title={`删除组织“${organization.name}”？`} description={organization.canDelete ? '仅删除组织壳和唯一所有者关系，操作不可恢复。' : '该组织仍有关联业务或历史数据，当前不能删除。'} confirmationName={organization.name} confirmLabel="删除组织" confirmDisabled={!organization.canDelete} trigger={<Button size="icon" variant="destructive" title="删除组织"><Trash /></Button>} onConfirm={async () => { await deletePlatformOrganization(organization.id, organization.name); await loadOrganizations(); return true }} /></article>)}</div></div> : null}
 
           {tab === 'security' ? <div className="platform-security"><div className="platform-runtime-summary"><div><span>应用加密</span><strong>{security?.configured ? '已启用' : '配置异常'}</strong></div><div><span>加密算法</span><strong>{security?.algorithm ?? '未知'}</strong></div><div><span>活动密钥标识</span><strong>{security?.activeKeyId || '未配置'}</strong></div></div><section><h4>密钥保留状态</h4><p>现有密文引用的旧密钥必须继续保留。这里只显示标识，不显示密钥材料。</p><div className="platform-key-list">{security?.retainedKeyIds.map((keyId) => <Badge key={keyId} variant={keyId === security.activeKeyId ? 'default' : 'outline'}>{keyId}{keyId === security.activeKeyId ? '（当前）' : ''}</Badge>)}</div></section><section><h4>加密覆盖</h4><div className="platform-security-check"><CheckCircle /><span>平台配置与历史版本使用应用层加密存储</span></div><div className="platform-security-check"><CheckCircle /><span>敏感业务文本使用应用层加密存储</span></div></section><section><h4>最近巡检</h4>{security?.lastInspection ? <div className="platform-inspection"><Badge variant={security.lastInspection.status === 'passed' ? 'secondary' : 'destructive'}>{security.lastInspection.status === 'passed' ? '通过' : '失败'}</Badge><span>{security.lastInspection.result.summary || '巡检已记录'}</span><time>{new Date(security.lastInspection.createdAt).toLocaleString('zh-CN')}</time></div> : <p>尚无巡检记录。迁移或密钥轮换后应运行已授权的数据加密巡检。</p>}</section></div> : null}
 
-          {tab === 'runtime' ? <div className="platform-runtime"><div className="platform-runtime-summary"><div><span>数据库当前版本</span><strong>v{runtime?.activeRevision ?? loaded.revision}</strong></div><div><span>API 实例</span><strong>{runtime?.instances.length ?? 0}</strong></div><div><span>定时任务</span><strong>运行时加载</strong></div></div><section><h4>服务实例</h4>{runtime?.instances.map((instance) => <div className="platform-runtime-row" key={instance.instanceId}><span className={`platform-runtime-dot ${instance.status}`} /><code>{instance.instanceId.slice(0, 8)}</code><span>{instance.status === 'applied' ? '已生效' : instance.status === 'error' ? '加载异常' : '状态未知'}</span><strong>{instance.appliedRevision ? `v${instance.appliedRevision}` : '未加载'}</strong><time>{new Date(instance.heartbeatAt).toLocaleString('zh-CN')}</time></div>)}</section><section><h4>配置历史</h4>{history.map((item) => <div className="platform-history-row" key={item.revision}><strong>v{item.revision}</strong><span>{item.createdBy}</span><time>{new Date(item.createdAt).toLocaleString('zh-CN')}</time><ConfirmActionDialog title={`恢复到版本 v${item.revision}？`} description="恢复会创建一个新版本并自动热更新，不会改变固定回调、用户权限或组织数据。" confirmLabel="确认恢复" trigger={<Button size="sm" variant="outline" disabled={item.revision === loaded.revision}>恢复</Button>} onConfirm={async () => { await restorePlatformConfigRevision(item.revision, loaded.revision); await Promise.all([loadConfig(), loadRuntime()]); return true }} /></div>)}</section></div> : null}
+          {tab === 'runtime' ? <div className="platform-runtime"><div className="platform-runtime-summary"><div><span>数据库当前版本</span><strong>v{runtime?.activeRevision ?? loaded.revision}</strong></div><div><span>API 实例</span><strong>{runtime?.instances.length ?? 0}</strong></div><div><span>定时任务</span><strong>运行时加载</strong></div></div><section><h4>服务实例</h4>{runtime?.instances.map((instance) => <div className="platform-runtime-row" key={instance.instanceId}><span className={`platform-runtime-dot ${instance.status}`} /><code>{instance.instanceId.slice(0, 8)}</code><span>{instance.status === 'applied' ? '已生效' : instance.status === 'error' ? '加载异常' : '状态未知'}</span><strong>{instance.appliedRevision ? `v${instance.appliedRevision}` : '未加载'}</strong><time>{new Date(instance.heartbeatAt).toLocaleString('zh-CN')}</time></div>)}</section></div> : null}
+          {tab === 'history' ? <div className="platform-runtime"><section><h4>配置历史</h4>{history.map((item) => <div className="platform-history-row" key={item.revision}><strong>v{item.revision}</strong><span>{item.createdBy}</span><time>{new Date(item.createdAt).toLocaleString('zh-CN')}</time><ConfirmActionDialog title={`恢复到版本 v${item.revision}？`} description="恢复会创建一个新版本并自动热更新，不会改变固定回调、用户权限或组织数据。" confirmLabel="确认恢复" trigger={<Button size="sm" variant="outline" disabled={item.revision === loaded.revision}>恢复</Button>} onConfirm={async () => { await restorePlatformConfigRevision(item.revision, loaded.revision); await Promise.all([loadConfig(), loadRuntime()]); return true }} /></div>)}</section></div> : null}
 
           {(['general', 'ai', 'email', 'storage', 'packages', 'feishu', 'github'] as Tab[]).includes(tab) ? <footer className="platform-savebar"><Button variant="outline" type="button" disabled={busy} onClick={() => { setDraft(cloneConfig(loaded.config)); setSecrets({}); setClearedSecrets(new Set()); setTestResult('') }}>撤销修改</Button>{(['ai', 'email', 'storage', 'feishu', 'github'] as Tab[]).includes(tab) ? <Button variant="outline" type="button" disabled={busy} onClick={() => void testSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}{tab === 'email' ? '测试连接' : '测试可用性'}</Button> : null}<Button type="button" disabled={busy} onClick={() => void saveSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}保存更改</Button></footer> : null}
         </section>
       </div>
 
+      <Dialog open={grantAdminOpen} onOpenChange={setGrantAdminOpen}><DialogContent><DialogHeader><DialogTitle>授予超级管理员</DialogTitle><DialogDescription>只能选择已启用且已核实飞书身份的用户。内置 admin 始终保留。</DialogDescription></DialogHeader><div className="platform-dialog-fields"><Field label="选择用户"><Select value={grantUserId} onValueChange={setGrantUserId}><SelectTrigger><SelectValue placeholder="选择用户" /></SelectTrigger><SelectContent>{users.filter((user) => user.accountStatus === 'active' && !user.platformAdmin && (user.isBuiltinAdmin || user.feishuIdentityVerified)).map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.displayName}（{user.username}）</SelectItem>)}</SelectContent></Select></Field></div><DialogFooter><Button variant="outline" onClick={() => setGrantAdminOpen(false)}>取消</Button><Button disabled={busy || !grantUserId} onClick={() => void grantPlatformAdmin()}>确认授权</Button></DialogFooter></DialogContent></Dialog>
       <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent><DialogHeader><DialogTitle>新建组织</DialogTitle><DialogDescription>所有者必须是已核实飞书身份的有效用户，或内置 admin。</DialogDescription></DialogHeader><div className="platform-dialog-fields"><Field label="组织名称"><Input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} /></Field><Field label="所有者"><Select value={ownerUserId} onValueChange={setOwnerUserId}><SelectTrigger><SelectValue placeholder="选择所有者" /></SelectTrigger><SelectContent>{eligibleOwners.map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.displayName}（{user.username}）</SelectItem>)}</SelectContent></Select></Field></div><DialogFooter><Button variant="outline" onClick={() => setCreateOpen(false)}>取消</Button><Button disabled={busy || !organizationName.trim() || !ownerUserId} onClick={() => void createOrganization()}>创建组织</Button></DialogFooter></DialogContent></Dialog>
       <Dialog open={Boolean(offboardingUser && offboardingPreview)} onOpenChange={(open) => { if (!open && !busy) { setOffboardingUser(undefined); setOffboardingPreview(undefined) } }}><DialogContent className="offboarding-dialog"><DialogHeader><DialogTitle>办理离职</DialogTitle><DialogDescription>{offboardingUser?.displayName} 的账号将被禁用，组织内资源和工作归属将按下方选择处理。</DialogDescription></DialogHeader><div className="offboarding-organizations">{offboardingPreview?.organizations.map((organization) => <section key={organization.id} className="offboarding-organization"><div className="offboarding-organization-heading"><strong>{organization.name}</strong><small>待办 {organization.openTodoCount} 条 · Bug {organization.bugCount} 个</small></div><Select value={offboardingSelections[organization.id] ?? ''} onValueChange={(value) => setOffboardingSelections((current) => ({ ...current, [organization.id]: value }))} disabled={busy || organization.admins.length === 0}><SelectTrigger aria-label={`${organization.name} 接收管理员`}><SelectValue placeholder="选择接收管理员" /></SelectTrigger><SelectContent>{organization.admins.map((admin) => <SelectItem key={admin.id} value={String(admin.id)}>{admin.displayName} · {admin.username}</SelectItem>)}</SelectContent></Select>{organization.ownedProjects.length > 0 ? <small>将转移项目 {organization.ownedProjects.length} 个</small> : null}{organization.ownedTestSpaces.length > 0 ? <small>将转移测试空间 {organization.ownedTestSpaces.length} 个</small> : null}{organization.admins.length === 0 ? <p className="form-error">该组织没有可接收的组织管理员。</p> : null}</section>)}</div><DialogFooter><Button variant="outline" disabled={busy} onClick={() => { setOffboardingUser(undefined); setOffboardingPreview(undefined) }}>取消</Button><Button variant="destructive" disabled={busy || !offboardingPreview?.organizations.every((organization) => organization.admins.length > 0)} onClick={() => void submitOffboarding()}>{busy ? '处理中...' : '确认离职'}</Button></DialogFooter></DialogContent></Dialog>
-    </div>
+    </>
   )
 }

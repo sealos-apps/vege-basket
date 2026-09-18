@@ -1782,6 +1782,8 @@ function App() {
   const [view, setView] = useState<View>(getInitialView)
   const [organizationSidebarHost, setOrganizationSidebarHost] = useState<HTMLDivElement | null>(null)
   const [organizationTopbarHost, setOrganizationTopbarHost] = useState<HTMLDivElement | null>(null)
+  const [platformSidebarHost, setPlatformSidebarHost] = useState<HTMLDivElement | null>(null)
+  const [platformTopbarHost, setPlatformTopbarHost] = useState<HTMLDivElement | null>(null)
   const [changelogCanManage, setChangelogCanManage] = useState(false)
   const [changelogEditorOpen, setChangelogEditorOpen] = useState(false)
   const [changelogCreateRequest, setChangelogCreateRequest] = useState(0)
@@ -5182,6 +5184,11 @@ ${packageTimelineText}`
               className="organization-sidebar-navigation"
               ref={setOrganizationSidebarHost}
             />
+          ) : view === 'platform' ? (
+            <div
+              className="platform-sidebar-navigation"
+              ref={setPlatformSidebarHost}
+            />
           ) : (
             <>
               <OrganizationSwitcher
@@ -5394,7 +5401,9 @@ ${packageTimelineText}`
           : view === 'assigned_bugs' || view === 'package_market' || view === 'image_sync' || view === 'changelog' || view === 'platform'
           ? view === 'changelog'
             ? 'workspace embedded-module-workspace changelog-shell'
-            : 'workspace embedded-module-workspace'
+            : view === 'platform'
+              ? 'workspace embedded-module-workspace platform-shell'
+              : 'workspace embedded-module-workspace'
           : 'workspace'}>
         {!(view === 'project' && isProjectTodoDetailActive) ? (
           <header className="topbar">
@@ -5445,7 +5454,9 @@ ${packageTimelineText}`
             <div
               className={view === 'project' ? 'topbar-actions project-topbar-actions' : 'topbar-actions'}
               id={view === 'weekly_report' ? 'weekly-report-topbar-actions' : undefined}
-              ref={view === 'organization' ? setOrganizationTopbarHost : undefined}
+              ref={view === 'organization'
+                ? setOrganizationTopbarHost
+                : view === 'platform' ? setPlatformTopbarHost : undefined}
             >
               {view === 'project' && projectDetailTab === 'packages' ? (
                 <>
@@ -5807,6 +5818,8 @@ ${packageTimelineText}`
         {view === 'platform' && authUser?.isSystemAdmin ? (
           <PlatformManagementWorkbench
             currentUserId={authUser.id}
+            sidebarNavigationHost={platformSidebarHost}
+            topbarActionHost={platformTopbarHost}
             onAuthorizationLost={() => {
               setAuthUser((current) => current ? { ...current, isSystemAdmin: false } : current)
               setView(getRoleLandingView(authUser.activeRole))
