@@ -9458,6 +9458,7 @@ app.get('/api/my-work', asyncHandler(async (request, response) => {
 app.get('/api/navigation-counts', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
+  response.setHeader('Cache-Control', 'private, no-store')
   const organizationId = parseOrganizationContext(request.query.organizationId)
   if (organizationId === undefined) {
     response.status(400).json({ error: '有效的组织上下文是必填项' })
