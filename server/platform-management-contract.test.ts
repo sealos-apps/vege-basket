@@ -11,6 +11,7 @@ const workbenchSource = readFileSync(
 )
 const appSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
 const runtimeSource = readFileSync(new URL('./platform-config-runtime.ts', import.meta.url), 'utf8')
+const configStoreSource = readFileSync(new URL('./platform-config-store.ts', import.meta.url), 'utf8')
 const digestWorkerSource = readFileSync(new URL('./todo-digest-worker.ts', import.meta.url), 'utf8')
 const cliSource = readFileSync(new URL('./platform-config-cli.ts', import.meta.url), 'utf8')
 const platformOrganizationsSource = readFileSync(new URL('./platform-organizations.ts', import.meta.url), 'utf8')
@@ -79,6 +80,30 @@ test('successful platform configuration writes clear plaintext drafts before ref
 
   assert.ok(saveSource.indexOf('await savePlatformConfigSection') < saveSource.indexOf('setSecrets({})'))
   assert.ok(saveSource.indexOf('setSecrets({})') < saveSource.indexOf('await loadConfig()'))
+})
+
+test('unchanged platform configuration does not create a version or trigger a reload', () => {
+  const saveStart = configStoreSource.indexOf('export async function savePlatformConfigSection')
+  const saveEnd = configStoreSource.indexOf('export async function revealCurrentPlatformSecret', saveStart)
+  const saveSource = configStoreSource.slice(saveStart, saveEnd)
+  const restoreStart = configStoreSource.indexOf('export async function restorePlatformConfig')
+  const restoreEnd = configStoreSource.indexOf('export async function getPlatformInstanceSettings', restoreStart)
+  const restoreSource = configStoreSource.slice(restoreStart, restoreEnd)
+
+  assert.ok(saveSource.indexOf('changes.length === 0') < saveSource.indexOf('insert into platform_config_versions'))
+  assert.ok(restoreSource.indexOf('changes.length === 0') < restoreSource.indexOf('insert into platform_config_versions'))
+  assert.match(saveSource, /noop:save:/u)
+  assert.match(restoreSource, /noop:restore/u)
+  assert.match(routerSource, /if \(result\.changed\) void refreshPlatformConfig/u)
+  assert.match(workbenchSource, /disabled=\{busy \|\| !sectionChanged\}/u)
+})
+
+test('platform configuration history exposes safe change and restore previews', () => {
+  assert.match(routerSource, /\/admin\/platform-config\/history\/:revision/u)
+  assert.match(workbenchSource, /恢复此版本将产生的变化/u)
+  assert.match(workbenchSource, /当前配置没有变化，未生成新版本/u)
+  assert.match(workbenchSource, />还原<\/Button>/u)
+  assert.doesNotMatch(workbenchSource, /撤销修改/u)
 })
 
 test('platform secrets use the prototype replacement dialog contract', () => {

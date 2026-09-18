@@ -1,3 +1,14 @@
+import type {
+  PlatformConfigChangeGroup,
+  PlatformConfigHistoryItem,
+} from '../shared/platform-config'
+
+export type {
+  PlatformConfigChange,
+  PlatformConfigChangeGroup,
+  PlatformConfigHistoryItem,
+} from '../shared/platform-config'
+
 export type SecretState = {
   configured: boolean
   revealable: boolean
@@ -60,6 +71,15 @@ export type PlatformConfigResponse = {
   fixedCallbacks: null | { eventCallbackUrl: string; oauthRedirectUrl: string }
   initialized: boolean
   revision: number
+}
+
+export type PlatformConfigHistoryDetail = {
+  changesFromCurrent: PlatformConfigChangeGroup[]
+  changesFromPrevious: PlatformConfigChangeGroup[]
+  currentRevision: number
+  previousRevision: number | null
+  restoredFromRevision: number | null
+  version: Pick<PlatformConfigHistoryItem, 'createdAt' | 'createdBy' | 'revision' | 'source' | 'sourceLabel'>
 }
 
 export type PlatformOrganization = {

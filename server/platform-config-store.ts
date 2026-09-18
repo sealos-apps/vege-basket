@@ -4,7 +4,6 @@ import { pool, query } from './db.ts'
 import { lockPlatformAdministration, requirePlatformAdminWithClient } from './platform-admins.ts'
 import {
   createDefaultPlatformConfig,
-  corruptedOAuthStateSecret,
   mergePlatformConfigSection,
   parsePlatformConfig,
   platformConfigSchemaVersion,
@@ -12,6 +11,12 @@ import {
 } from './platform-config-schema.ts'
 import type { PlatformConfigSection } from '../shared/platform-config.ts'
 import { assertPlatformConfigTransitionAllowed } from './platform-config-transition.ts'
+import {
+  diffPlatformConfigs,
+  groupPlatformConfigChanges,
+  platformConfigsEqual,
+  platformConfigSourceLabel,
+} from './platform-config-history.ts'
 
 export type VersionedPlatformConfig = {
   config: PlatformConfig
@@ -30,6 +35,13 @@ type ConfigVersionRow = {
   revision: string
   schema_version: number
   source: string
+}
+
+type ConfigHistoryRow = ConfigVersionRow & {
+  audit_before_revision: string | null
+  audit_target_id: string | null
+  audit_target_type: string | null
+  created_by: string | null
 }
 
 export class PlatformConfigStoreError extends Error {
@@ -84,6 +96,30 @@ function parseStoredConfig(row: ConfigVersionRow): VersionedPlatformConfig {
     revision: Number(row.revision),
     source: row.source,
   }
+}
+
+function receiptChanged(action: string) {
+  return !action.startsWith('noop:')
+}
+
+function explicitRestoreRevision(row: ConfigHistoryRow) {
+  if (row.audit_target_type !== 'platform_config_revision') return null
+  const revision = Number(row.audit_target_id)
+  return Number.isSafeInteger(revision) && revision > 0 ? revision : null
+}
+
+function inferredRestoreRevision(
+  row: ConfigHistoryRow,
+  version: VersionedPlatformConfig,
+  candidates: VersionedPlatformConfig[],
+) {
+  const explicit = explicitRestoreRevision(row)
+  if (explicit) return explicit
+  if (row.source !== 'restore') return null
+  const matches = candidates.filter((candidate) => (
+    candidate.revision < version.revision && platformConfigsEqual(candidate.config, version.config)
+  ))
+  return matches.length === 1 ? matches[0].revision : null
 }
 
 async function currentConfigWith(executor: QueryExecutor) {
@@ -180,8 +216,8 @@ export async function savePlatformConfigSection(input: {
     await client.query('begin')
     await lockPlatformAdministration(client)
     await requirePlatformAdminWithClient(client, input.actorUserId)
-    const receipt = await client.query<{ request_digest: string; result_revision: string | null }>(
-      `select request_digest, result_revision
+    const receipt = await client.query<{ action: string; request_digest: string; result_revision: string | null }>(
+      `select action, request_digest, result_revision
          from platform_config_mutation_receipts
         where actor_user_id = $1 and request_id = $2::uuid
         for update`,
@@ -192,7 +228,11 @@ export async function savePlatformConfigSection(input: {
         throw new PlatformConfigStoreError('REQUEST_ID_CONFLICT', '该请求编号已用于其他配置变更。')
       }
       await client.query('commit')
-      return { replayed: true, revision: Number(receipt.rows[0].result_revision) }
+      return {
+        changed: receiptChanged(receipt.rows[0].action),
+        replayed: true,
+        revision: Number(receipt.rows[0].result_revision),
+      }
     }
 
     const state = await client.query<{ active_revision: string | null }>(
@@ -209,6 +249,17 @@ export async function savePlatformConfigSection(input: {
       input.fields,
       input.secretActions,
     )
+    const changes = diffPlatformConfigs(current?.config ?? null, nextConfig)
+    if (current && changes.length === 0) {
+      await client.query(
+        `insert into platform_config_mutation_receipts
+          (actor_user_id, request_id, action, request_digest, result_revision)
+         values ($1, $2::uuid, $3, $4, $5)`,
+        [input.actorUserId, input.requestId, `noop:save:${input.section}`, digest, currentRevision],
+      )
+      await client.query('commit')
+      return { changed: false, replayed: false, revision: currentRevision }
+    }
     if (current) await assertPlatformConfigTransitionAllowed(client, current.config, nextConfig)
     await retainDisplacedTodoImageUrlSecret(client, current, nextConfig)
     const inserted = await client.query<{ revision: string }>(
@@ -231,23 +282,22 @@ export async function savePlatformConfigSection(input: {
        values ($1, $2::uuid, $3, $4, $5)`,
       [input.actorUserId, input.requestId, `save:${input.section}`, digest, revision],
     )
-    const changedFields = [
-      ...Object.keys(input.fields && typeof input.fields === 'object' ? input.fields : {}),
-      ...Object.keys(input.secretActions && typeof input.secretActions === 'object' ? input.secretActions : {}),
-    ].map((field) => `${input.section}.${field}`)
-    if (current?.config.feishu.oauthStateSecret === corruptedOAuthStateSecret &&
-        nextConfig.feishu.oauthStateSecret !== corruptedOAuthStateSecret) {
-      changedFields.push('feishu.oauthStateSecret')
-    }
     await client.query(
       `insert into platform_audit_events
         (actor_user_id, action, section, before_revision, after_revision, changed_fields, request_id)
        values ($1, 'platform_config.saved', $2, $3, $4, $5::text[], $6::uuid)`,
-      [input.actorUserId, input.section, currentRevision || null, revision, changedFields, input.requestId],
+      [
+        input.actorUserId,
+        input.section,
+        currentRevision || null,
+        revision,
+        changes.map((change) => change.field),
+        input.requestId,
+      ],
     )
     await client.query(`select pg_notify('veges_platform_config', $1)`, [String(revision)])
     await client.query('commit')
-    return { replayed: false, revision }
+    return { changed: true, replayed: false, revision }
   } catch (error) {
     await client.query('rollback')
     throw error
@@ -292,26 +342,112 @@ export async function revealCurrentPlatformSecret(input: {
 }
 
 export async function getPlatformConfigHistory(limit = 50) {
-  const result = await query<{
-    created_at: Date
-    created_by: string | null
-    revision: string
-    source: string
-  }>(
-    `select version.revision, version.source, version.created_at,
-            coalesce(nullif(users.display_name, ''), users.email) as created_by
+  const boundedLimit = Math.min(Math.max(limit, 1), 100)
+  const result = await query<ConfigHistoryRow>(
+    `select version.revision, version.schema_version, version.payload_encrypted,
+            version.source, version.created_at,
+            coalesce(nullif(users.display_name, ''), users.email) as created_by,
+            audit.before_revision as audit_before_revision,
+            audit.target_type as audit_target_type,
+            audit.target_id as audit_target_id
        from platform_config_versions version
        left join users on users.id = version.created_by_user_id
+       left join lateral (
+         select event.before_revision, event.target_type, event.target_id
+           from platform_audit_events event
+          where event.after_revision = version.revision
+            and event.action in ('platform_config.saved', 'platform_config.restored')
+          order by event.id desc
+          limit 1
+       ) audit on true
       order by version.revision desc
       limit $1`,
-    [Math.min(Math.max(limit, 1), 100)],
+    [boundedLimit + 1],
   )
-  return result.rows.map((row) => ({
-    createdAt: row.created_at.toISOString(),
-    createdBy: row.created_by ?? '系统',
-    revision: Number(row.revision),
-    source: row.source,
-  }))
+  const versions = result.rows.map(parseStoredConfig)
+  return result.rows.slice(0, boundedLimit).map((row, index) => {
+    const version = versions[index]
+    const previous = versions[index + 1] ?? null
+    const groups = groupPlatformConfigChanges(diffPlatformConfigs(previous?.config ?? null, version.config))
+    return {
+      changeCount: groups.reduce((sum, group) => sum + group.count, 0),
+      changedSections: groups.map(({ count, section, sectionLabel }) => ({ count, section, sectionLabel })),
+      createdAt: row.created_at.toISOString(),
+      createdBy: row.created_by ?? '系统',
+      restoredFromRevision: inferredRestoreRevision(row, version, versions.slice(index + 1)),
+      revision: version.revision,
+      source: row.source,
+      sourceLabel: platformConfigSourceLabel(row.source),
+    }
+  })
+}
+
+export async function getPlatformConfigHistoryDetail(revision: number) {
+  if (!Number.isSafeInteger(revision) || revision <= 0) return null
+  const result = await query<ConfigHistoryRow>(
+    `select version.revision, version.schema_version, version.payload_encrypted,
+            version.source, version.created_at,
+            coalesce(nullif(users.display_name, ''), users.email) as created_by,
+            audit.before_revision as audit_before_revision,
+            audit.target_type as audit_target_type,
+            audit.target_id as audit_target_id
+       from platform_config_versions version
+       left join users on users.id = version.created_by_user_id
+       left join lateral (
+         select event.before_revision, event.target_type, event.target_id
+           from platform_audit_events event
+          where event.after_revision = version.revision
+            and event.action in ('platform_config.saved', 'platform_config.restored')
+          order by event.id desc
+          limit 1
+       ) audit on true
+      where version.revision = $1`,
+    [revision],
+  )
+  const row = result.rows[0]
+  if (!row) return null
+  const version = parseStoredConfig(row)
+  const auditBeforeRevision = row.audit_before_revision ? Number(row.audit_before_revision) : null
+  const previousResult = await query<ConfigVersionRow>(
+    auditBeforeRevision
+      ? `select revision, schema_version, payload_encrypted, source, created_at
+           from platform_config_versions where revision = $1`
+      : `select revision, schema_version, payload_encrypted, source, created_at
+           from platform_config_versions where revision < $1 order by revision desc limit 1`,
+    [auditBeforeRevision ?? revision],
+  )
+  const previous = previousResult.rows[0] ? parseStoredConfig(previousResult.rows[0]) : null
+  const current = await getCurrentPlatformConfig()
+  let restoredFromRevision = explicitRestoreRevision(row)
+  if (!restoredFromRevision && row.source === 'restore') {
+    const candidates = await query<ConfigVersionRow>(
+      `select revision, schema_version, payload_encrypted, source, created_at
+         from platform_config_versions
+        where revision < $1
+        order by revision desc
+        limit 101`,
+      [revision],
+    )
+    restoredFromRevision = inferredRestoreRevision(
+      row,
+      version,
+      candidates.rows.map(parseStoredConfig),
+    )
+  }
+  return {
+    changesFromCurrent: groupPlatformConfigChanges(diffPlatformConfigs(current?.config ?? null, version.config)),
+    changesFromPrevious: groupPlatformConfigChanges(diffPlatformConfigs(previous?.config ?? null, version.config)),
+    currentRevision: current?.revision ?? 0,
+    previousRevision: previous?.revision ?? null,
+    restoredFromRevision,
+    version: {
+      createdAt: row.created_at.toISOString(),
+      createdBy: row.created_by ?? '系统',
+      revision: version.revision,
+      source: row.source,
+      sourceLabel: platformConfigSourceLabel(row.source),
+    },
+  }
 }
 
 export async function restorePlatformConfig(input: {
@@ -329,8 +465,8 @@ export async function restorePlatformConfig(input: {
     await client.query('begin')
     await lockPlatformAdministration(client)
     await requirePlatformAdminWithClient(client, input.actorUserId)
-    const existingReceipt = await client.query<{ request_digest: string; result_revision: string | null }>(
-      `select request_digest, result_revision from platform_config_mutation_receipts
+    const existingReceipt = await client.query<{ action: string; request_digest: string; result_revision: string | null }>(
+      `select action, request_digest, result_revision from platform_config_mutation_receipts
         where actor_user_id = $1 and request_id = $2::uuid for update`,
       [input.actorUserId, input.requestId],
     )
@@ -339,7 +475,11 @@ export async function restorePlatformConfig(input: {
         throw new PlatformConfigStoreError('REQUEST_ID_CONFLICT', '该请求编号已用于其他配置变更。')
       }
       await client.query('commit')
-      return { replayed: true, revision: Number(existingReceipt.rows[0].result_revision) }
+      return {
+        changed: receiptChanged(existingReceipt.rows[0].action),
+        replayed: true,
+        revision: Number(existingReceipt.rows[0].result_revision),
+      }
     }
     const state = await client.query<{ active_revision: string | null }>(
       'select active_revision from platform_config_state where singleton = true for update',
@@ -356,6 +496,17 @@ export async function restorePlatformConfig(input: {
     if (!target.rows[0]) throw new PlatformConfigStoreError('PLATFORM_CONFIG_VERSION_NOT_FOUND', '目标配置版本不存在。', 404)
     const targetConfig = parseStoredConfig(target.rows[0]).config
     const current = await currentConfigWith(client)
+    const changes = diffPlatformConfigs(current?.config ?? null, targetConfig)
+    if (current && changes.length === 0) {
+      await client.query(
+        `insert into platform_config_mutation_receipts
+          (actor_user_id, request_id, action, request_digest, result_revision)
+         values ($1, $2::uuid, 'noop:restore', $3, $4)`,
+        [input.actorUserId, input.requestId, digest, currentRevision],
+      )
+      await client.query('commit')
+      return { changed: false, replayed: false, revision: currentRevision }
+    }
     if (current) await assertPlatformConfigTransitionAllowed(client, current.config, targetConfig)
     await retainDisplacedTodoImageUrlSecret(client, current, targetConfig)
     const inserted = await client.query<{ revision: string }>(
@@ -378,13 +529,22 @@ export async function restorePlatformConfig(input: {
     )
     await client.query(
       `insert into platform_audit_events
-        (actor_user_id, action, section, before_revision, after_revision, changed_fields, request_id)
-       values ($1, 'platform_config.restored', 'history', $2, $3, array['*'], $4::uuid)`,
-      [input.actorUserId, currentRevision || null, revision, input.requestId],
+        (actor_user_id, action, section, target_type, target_id,
+         before_revision, after_revision, changed_fields, request_id)
+       values ($1, 'platform_config.restored', 'history', 'platform_config_revision', $2,
+               $3, $4, $5::text[], $6::uuid)`,
+      [
+        input.actorUserId,
+        String(input.targetRevision),
+        currentRevision || null,
+        revision,
+        changes.map((change) => change.field),
+        input.requestId,
+      ],
     )
     await client.query(`select pg_notify('veges_platform_config', $1)`, [String(revision)])
     await client.query('commit')
-    return { replayed: false, revision }
+    return { changed: true, replayed: false, revision }
   } catch (error) {
     await client.query('rollback')
     throw error

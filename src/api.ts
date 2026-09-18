@@ -73,6 +73,8 @@ import type { MyWorkData, MyWorkFilters } from './my-work-types'
 import type {
   PlatformAdmin,
   PlatformConfigResponse,
+  PlatformConfigHistoryDetail,
+  PlatformConfigHistoryItem,
   PlatformConfigSection,
   PlatformOrganization,
   PlatformRuntimeStatus,
@@ -701,7 +703,7 @@ export function savePlatformConfigSection(
     secrets: Record<string, { action: 'clear' | 'keep' | 'replace'; value?: string }>
   },
 ) {
-  return requestPlatformMutation('config', payload.requestId, () => request<{ replayed: boolean; revision: number }>(`/api/admin/platform-config/${section}`, {
+  return requestPlatformMutation('config', payload.requestId, () => request<{ changed: boolean; replayed: boolean; revision: number }>(`/api/admin/platform-config/${section}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
   }))
@@ -746,14 +748,20 @@ export function testPlatformConfigSection(
 }
 
 export function fetchPlatformConfigHistory() {
-  return request<{ history: Array<{ createdAt: string; createdBy: string; revision: number; source: string }> }>(
+  return request<{ history: PlatformConfigHistoryItem[] }>(
     '/api/admin/platform-config/history',
+  )
+}
+
+export function fetchPlatformConfigHistoryDetail(revision: number) {
+  return request<PlatformConfigHistoryDetail>(
+    `/api/admin/platform-config/history/${revision}`,
   )
 }
 
 export function restorePlatformConfigRevision(targetRevision: number, expectedRevision: number) {
   const requestId = crypto.randomUUID()
-  return requestPlatformMutation('config', requestId, () => request<{ replayed: boolean; revision: number }>('/api/admin/platform-config/restore', {
+  return requestPlatformMutation('config', requestId, () => request<{ changed: boolean; replayed: boolean; revision: number }>('/api/admin/platform-config/restore', {
     method: 'POST',
     body: JSON.stringify({ targetRevision, expectedRevision, requestId }),
   }))

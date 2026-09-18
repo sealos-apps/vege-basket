@@ -260,6 +260,14 @@ link also adds the authenticated account to that organization. AI calls
 pass both per-user and application-replica
 sliding-window limits.
 
+Platform configuration versions are encrypted snapshots. The administration API derives
+field-level history from those snapshots and exposes only formatted ordinary values and secret
+configuration states. Restore audit events record their source revision, and restore previews
+compare that snapshot with the current configuration. Canonically unchanged saves and restores
+commit only their idempotency receipt; they do not create a version, audit event, or reload
+notification. After a real change, the browser follows the target revision until every online API
+instance applies it or reports an explicit error, offline, or superseded state.
+
 Veges AI conversations are private to the authenticated user and persist in PostgreSQL.
 Each conversation has an immutable `general`, `project`, or `conversation-analysis`
 context. General chat receives no implicit workspace facts; project context is selected

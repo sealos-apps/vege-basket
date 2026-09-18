@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  platformConfigRevisionProgress,
   platformConfigRuntimeOverallStatus,
+  platformConfigSectionHasDraftChanges,
   type PlatformConfigRuntimeInstance,
 } from '../shared/platform-config.ts'
 
@@ -67,4 +69,41 @@ test('a runtime with no online instances is offline', () => {
     cronJob: { mode: 'load-on-run' },
     instances: [],
   }), 'offline')
+})
+
+test('revision progress reports applied, error, offline, and superseded states', () => {
+  const runtime = {
+    activeRevision: 2,
+    cronJob: { mode: 'load-on-run' as const },
+    instances: [
+      runtimeInstance('applied', 'applied-instance'),
+      runtimeInstance('loading', 'loading-instance'),
+      runtimeInstance('offline', 'stale-instance'),
+    ],
+  }
+  assert.deepEqual(platformConfigRevisionProgress(runtime, 2), {
+    appliedCount: 1,
+    errorCount: 0,
+    onlineCount: 2,
+    state: 'loading',
+    targetRevision: 2,
+  })
+  runtime.instances[1] = runtimeInstance('error', 'failed-instance')
+  assert.equal(platformConfigRevisionProgress(runtime, 2).state, 'error')
+  assert.equal(platformConfigRevisionProgress({ ...runtime, activeRevision: 3 }, 2).state, 'superseded')
+  assert.equal(platformConfigRevisionProgress({ ...runtime, instances: [] }, 2).state, 'offline')
+})
+
+test('section draft detection includes ordinary and secret changes', () => {
+  const loaded = { general: { displayName: 'Veges' }, ai: { model: 'model-a' } }
+  assert.equal(platformConfigSectionHasDraftChanges(loaded, structuredClone(loaded), 'general', {}), false)
+  assert.equal(platformConfigSectionHasDraftChanges(
+    loaded,
+    { ...loaded, general: { displayName: 'Veges Next' } },
+    'general',
+    {},
+  ), true)
+  assert.equal(platformConfigSectionHasDraftChanges(loaded, structuredClone(loaded), 'ai', {
+    'ai.apiKey': 'replacement-secret',
+  }), true)
 })

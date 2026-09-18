@@ -5,6 +5,7 @@ import { listPlatformAdmins, setManagedPlatformAdmin, updateManagedUserPermissio
 import {
   getCurrentPlatformConfig,
   getPlatformConfigHistory,
+  getPlatformConfigHistoryDetail,
   getPlatformInstanceSettings,
   PlatformConfigStoreError,
   recordPlatformSecretRevealFailure,
@@ -127,7 +128,7 @@ platformManagementRouter.put('/admin/platform-config/:section', async (request, 
       secretActions: request.body?.secrets ?? {},
       section,
     })
-    void refreshPlatformConfig(true).catch(() => undefined)
+    if (result.changed) void refreshPlatformConfig(true).catch(() => undefined)
     response.json(result)
   } catch (error) {
     if (!sendPlatformError(response, error)) next(error)
@@ -216,9 +217,30 @@ platformManagementRouter.post('/admin/platform-config/:section/test', async (req
 platformManagementRouter.get('/admin/platform-config/history', async (request, response, next) => {
   try {
     if (!(await requirePlatformAdminSession(request, response))) return
+    response.setHeader('Cache-Control', 'no-store')
     response.json({ history: await getPlatformConfigHistory(Number(request.query.limit ?? 50)) })
   } catch (error) {
     next(error)
+  }
+})
+
+platformManagementRouter.get('/admin/platform-config/history/:revision', async (request, response, next) => {
+  try {
+    if (!(await requirePlatformAdminSession(request, response))) return
+    const revision = positiveInteger(request.params.revision)
+    if (revision === null) {
+      response.status(400).json({ error: '配置版本无效。' })
+      return
+    }
+    const detail = await getPlatformConfigHistoryDetail(revision)
+    if (!detail) {
+      response.status(404).json({ error: '配置版本不存在。' })
+      return
+    }
+    response.setHeader('Cache-Control', 'no-store')
+    response.json(detail)
+  } catch (error) {
+    if (!sendPlatformError(response, error)) next(error)
   }
 })
 
@@ -239,7 +261,7 @@ platformManagementRouter.post('/admin/platform-config/restore', async (request, 
       requestId,
       targetRevision,
     })
-    void refreshPlatformConfig(true).catch(() => undefined)
+    if (result.changed) void refreshPlatformConfig(true).catch(() => undefined)
     response.json(result)
   } catch (error) {
     if (!sendPlatformError(response, error)) next(error)

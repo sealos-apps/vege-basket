@@ -29,6 +29,7 @@ import {
   fetchManagedUsers,
   fetchPlatformConfig,
   fetchPlatformConfigHistory,
+  fetchPlatformConfigHistoryDetail,
   fetchPlatformOrganizations,
   fetchPlatformRuntimeStatus,
   fetchPlatformSecurityStatus,
@@ -48,6 +49,9 @@ import {
 } from '@/api'
 import type {
   PlatformConfig,
+  PlatformConfigChangeGroup,
+  PlatformConfigHistoryDetail,
+  PlatformConfigHistoryItem,
   PlatformConfigResponse,
   PlatformConfigSection,
   PlatformOrganization,
@@ -55,7 +59,11 @@ import type {
   PlatformSecurityStatus,
   SecretState,
 } from '@/platform-management-types'
-import { platformConfigRuntimeOverallStatus } from '../../shared/platform-config'
+import {
+  platformConfigRevisionProgress,
+  platformConfigRuntimeOverallStatus,
+  platformConfigSectionHasDraftChanges,
+} from '../../shared/platform-config'
 import { userRoleLabel } from '@/user-roles'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -109,6 +117,7 @@ const sectionSecretFields: Partial<Record<PlatformConfigSection, string[]>> = {
 }
 
 const roleValues: UserRole[] = ['developer', 'tester', 'organization_admin']
+const configTabs: PlatformConfigSection[] = ['general', 'ai', 'email', 'storage', 'packages', 'feishu', 'github']
 
 function cloneConfig(config: PlatformConfig) {
   return structuredClone(config)
@@ -131,6 +140,37 @@ function Field({ children, hint, label }: { children: ReactNode; hint?: string; 
 
 function ToggleField({ checked, label, onChange }: { checked: boolean; label: string; onChange: (value: boolean) => void }) {
   return <label className="platform-toggle"><span>{label}</span><Checkbox checked={checked} onCheckedChange={(value) => onChange(value === true)} /></label>
+}
+
+function HistoryChanges({
+  compact = false,
+  emptyLabel,
+  groups,
+}: {
+  compact?: boolean
+  emptyLabel: string
+  groups: PlatformConfigChangeGroup[]
+}) {
+  if (groups.length === 0) return <p className="platform-history-empty">{emptyLabel}</p>
+  return <div className={compact ? 'platform-history-changes compact' : 'platform-history-changes'}>{groups.map((group) => (
+    <section key={group.section}>
+      <h5>{group.sectionLabel}</h5>
+      <div>{group.changes.map((change) => (
+        <div className="platform-history-change" key={change.field}>
+          <strong>{change.label}</strong>
+          {compact ? <span>{change.kind === 'long-text' ? '内容将恢复' : `${change.before} → ${change.after}`}</span> : change.kind === 'long-text' ? (
+            <details>
+              <summary>查看修改前后内容</summary>
+              <div className="platform-history-text-diff">
+                <div><span>修改前</span><pre>{change.before}</pre></div>
+                <div><span>修改后</span><pre>{change.after}</pre></div>
+              </div>
+            </details>
+          ) : <span>{change.before} <span aria-hidden="true">→</span> {change.after}</span>}
+        </div>
+      ))}</div>
+    </section>
+  ))}</div>
 }
 
 function generateRandomSecret() {
@@ -350,7 +390,11 @@ export function PlatformManagementWorkbench({
   const [organizations, setOrganizations] = useState<PlatformOrganization[]>([])
   const [runtime, setRuntime] = useState<PlatformRuntimeStatus>()
   const [security, setSecurity] = useState<PlatformSecurityStatus>()
-  const [history, setHistory] = useState<Array<{ createdAt: string; createdBy: string; revision: number; source: string }>>([])
+  const [history, setHistory] = useState<PlatformConfigHistoryItem[]>([])
+  const [historyDetail, setHistoryDetail] = useState<PlatformConfigHistoryDetail>()
+  const [historyDetailLoading, setHistoryDetailLoading] = useState(false)
+  const [rolloutRevision, setRolloutRevision] = useState<number>()
+  const [runtimeCheckFailed, setRuntimeCheckFailed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -398,6 +442,7 @@ export function PlatformManagementWorkbench({
       fetchPlatformConfigHistory(),
     ])
     setRuntime(runtimeResponse)
+    setRuntimeCheckFailed(false)
     setHistory(historyResponse.history)
   }
 
@@ -424,19 +469,23 @@ export function PlatformManagementWorkbench({
     const timer = window.setInterval(() => {
       void fetchPlatformRuntimeStatus()
         .then((response) => {
-          if (active) setRuntime(response)
+          if (active) {
+            setRuntime(response)
+            setRuntimeCheckFailed(false)
+          }
         })
-        .catch(() => undefined)
-    }, 5_000)
+        .catch(() => { if (active) setRuntimeCheckFailed(true) })
+    }, rolloutRevision ? 2_000 : 5_000)
     return () => {
       active = false
       window.clearInterval(timer)
     }
-  }, [loaded?.revision])
+  }, [loaded?.revision, rolloutRevision])
 
   function updateSection<K extends PlatformConfigSection>(section: K, patch: Partial<PlatformConfig[K]>) {
     setDraft((current) => current ? { ...current, [section]: { ...current[section], ...patch } } : current)
     setNotice('')
+    setRolloutRevision(undefined)
     setTestResult('')
   }
 
@@ -444,6 +493,7 @@ export function PlatformManagementWorkbench({
     const path = `${section}.${field}`
     setSecrets((current) => ({ ...current, [path]: value }))
     setNotice('')
+    setRolloutRevision(undefined)
     setTestResult('')
   }
 
@@ -469,13 +519,60 @@ export function PlatformManagementWorkbench({
       })
       setSecrets({})
       await loadConfig()
-      setNotice(`配置已保存为版本 ${result.revision}，服务正在自动加载。`)
+      if (result.changed) {
+        setRolloutRevision(result.revision)
+      } else {
+        setRolloutRevision(undefined)
+        setNotice('当前配置没有变化，未生成新版本。')
+      }
       await loadRuntime()
     } catch (saveError) {
       handleError(saveError, '配置保存失败。')
     } finally {
       setBusy(false)
     }
+  }
+
+  function restoreSection(section: PlatformConfigSection) {
+    if (!loaded) return
+    setDraft((current) => current
+      ? { ...current, [section]: cloneConfig(loaded.config)[section] }
+      : current)
+    setSecrets((current) => Object.fromEntries(
+      Object.entries(current).filter(([path]) => !path.startsWith(`${section}.`)),
+    ))
+    setNotice('')
+    setRolloutRevision(undefined)
+    setTestResult('')
+  }
+
+  async function openHistoryDetail(revision: number) {
+    setHistoryDetailLoading(true)
+    setError('')
+    try {
+      setHistoryDetail(await fetchPlatformConfigHistoryDetail(revision))
+    } catch (detailError) {
+      handleError(detailError, '配置历史详情读取失败。')
+    } finally {
+      setHistoryDetailLoading(false)
+    }
+  }
+
+  async function restoreRevision(targetRevision: number) {
+    if (!loaded) return false
+    const result = await restorePlatformConfigRevision(targetRevision, loaded.revision)
+    setSecrets({})
+    await loadConfig()
+    if (result.changed) {
+      setNotice('')
+      setRolloutRevision(result.revision)
+    } else {
+      setRolloutRevision(undefined)
+      setNotice(`当前配置已与版本 v${targetRevision} 一致，未生成新版本。`)
+    }
+    await loadRuntime()
+    setHistoryDetail(undefined)
+    return true
   }
 
   async function testSection(section: PlatformConfigSection, action: 'connect' | 'send-email' = 'connect') {
@@ -713,7 +810,34 @@ export function PlatformManagementWorkbench({
     )
     : null
 
+  const activeConfigSection = configTabs.includes(tab as PlatformConfigSection)
+    ? tab as PlatformConfigSection
+    : null
+  const sectionChanged = Boolean(
+    activeConfigSection && loaded && draft && platformConfigSectionHasDraftChanges(
+      loaded.config as unknown as Record<string, unknown>,
+      draft as unknown as Record<string, unknown>,
+      activeConfigSection,
+      secrets,
+    ),
+  )
   const runtimeStatus = runtime ? platformConfigRuntimeOverallStatus(runtime) : 'loading'
+  const rollout = runtime && rolloutRevision
+    ? platformConfigRevisionProgress(runtime, rolloutRevision)
+    : null
+  const rolloutMessage = rollout
+    ? runtimeCheckFailed
+      ? `版本 v${rollout.targetRevision} 已保存，状态确认失败，正在重试。`
+      : rollout.state === 'applied'
+        ? `版本 v${rollout.targetRevision} 已由全部 ${rollout.onlineCount} 个在线 API 实例加载完成。`
+        : rollout.state === 'error'
+          ? `版本 v${rollout.targetRevision} 已保存，但有 ${rollout.errorCount} 个在线 API 实例加载异常。`
+          : rollout.state === 'offline'
+            ? `版本 v${rollout.targetRevision} 已保存，当前没有在线 API 实例。`
+            : rollout.state === 'superseded'
+              ? `版本 v${rollout.targetRevision} 已被更新的配置版本替代，请刷新页面确认。`
+              : `版本 v${rollout.targetRevision} 已保存，正在等待在线 API 实例加载（${rollout.appliedCount}/${rollout.onlineCount}）。`
+    : ''
   const platformTopbarActions = topbarActionHost
     ? createPortal(
       <div className="platform-topbar-status" aria-label="平台配置状态">
@@ -735,6 +859,7 @@ export function PlatformManagementWorkbench({
         <section className="platform-content">
           <div className="platform-section-title"><div><h3>{selected.label}</h3><p>{tab === 'organizations' ? '组织只在这里创建和删除；存在业务或历史数据时禁止删除。' : tab === 'users' ? '账号由飞书自动注册；内置 admin 的超管权限不可移除。' : '保存后由各服务实例自动加载，无需重启。'}</p></div></div>
           {error ? <div className="platform-alert error" role="alert">{error}</div> : null}
+          {rolloutMessage ? <div className={`platform-alert ${rollout?.state === 'applied' ? 'success' : rollout?.state === 'error' || rollout?.state === 'superseded' ? 'error' : ''}`} role="status">{rollout?.state === 'loading' ? <SpinnerGap className="animate-spin" /> : rollout?.state === 'applied' ? <CheckCircle /> : <WarningCircle />}{rolloutMessage}</div> : null}
           {notice ? <div className="platform-alert success" role="status"><CheckCircle />{notice}</div> : null}
           {testResult ? <div className="platform-alert" role="status">{testResult}</div> : null}
 
@@ -863,12 +988,49 @@ export function PlatformManagementWorkbench({
           {tab === 'security' ? <div className="platform-security"><div className="platform-runtime-summary"><div><span>应用加密</span><strong>{security?.configured ? '已启用' : '配置异常'}</strong></div><div><span>加密算法</span><strong>{security?.algorithm ?? '未知'}</strong></div><div><span>活动密钥标识</span><strong>{security?.activeKeyId || '未配置'}</strong></div></div><section><h4>密钥保留状态</h4><p>现有密文引用的旧密钥必须继续保留。这里只显示标识，不显示密钥材料。</p><div className="platform-key-list">{security?.retainedKeyIds.map((keyId) => <Badge key={keyId} variant={keyId === security.activeKeyId ? 'default' : 'outline'}>{keyId}{keyId === security.activeKeyId ? '（当前）' : ''}</Badge>)}</div></section><section><h4>加密覆盖</h4><div className="platform-security-check"><CheckCircle /><span>平台配置与历史版本使用应用层加密存储</span></div><div className="platform-security-check"><CheckCircle /><span>敏感业务文本使用应用层加密存储</span></div></section><section><h4>最近巡检</h4>{security?.lastInspection ? <div className="platform-inspection"><Badge variant={security.lastInspection.status === 'passed' ? 'secondary' : 'destructive'}>{security.lastInspection.status === 'passed' ? '通过' : '失败'}</Badge><span>{security.lastInspection.result.summary || '巡检已记录'}</span><time>{new Date(security.lastInspection.createdAt).toLocaleString('zh-CN')}</time></div> : <p>尚无巡检记录。迁移或密钥轮换后应运行已授权的数据加密巡检。</p>}</section></div> : null}
 
           {tab === 'runtime' ? <div className="platform-runtime"><div className="platform-runtime-summary"><div><span>数据库当前版本</span><strong>v{runtime?.activeRevision ?? loaded.revision}</strong></div><div><span>在线 API 实例</span><strong>{runtime?.instances.filter((instance) => instance.status !== 'offline').length ?? 0}</strong></div><div><span>定时任务</span><strong>运行时加载</strong></div></div><section><h4>服务实例</h4>{runtime?.instances.map((instance) => <div className="platform-runtime-row" key={instance.instanceId}><span className={`platform-runtime-dot ${instance.status}`} /><code>{instance.instanceId.slice(0, 8)}</code><span>{instance.status === 'applied' ? '已生效' : instance.status === 'error' ? '加载异常' : instance.status === 'offline' ? '已离线' : '加载中'}</span><strong>{instance.appliedRevision ? `v${instance.appliedRevision}` : '未加载'}</strong><time>{new Date(instance.heartbeatAt).toLocaleString('zh-CN')}</time></div>)}</section></div> : null}
-          {tab === 'history' ? <div className="platform-runtime"><section><h4>配置历史</h4>{history.map((item) => <div className="platform-history-row" key={item.revision}><strong>v{item.revision}</strong><span>{item.createdBy}</span><time>{new Date(item.createdAt).toLocaleString('zh-CN')}</time><ConfirmActionDialog title={`恢复到版本 v${item.revision}？`} description="恢复会创建一个新版本并自动热更新，不会改变固定回调、用户权限或组织数据。" confirmLabel="确认恢复" trigger={<Button size="sm" variant="outline" disabled={item.revision === loaded.revision}>恢复</Button>} onConfirm={async () => { await restorePlatformConfigRevision(item.revision, loaded.revision); await Promise.all([loadConfig(), loadRuntime()]); return true }} /></div>)}</section></div> : null}
+          {tab === 'history' ? <div className="platform-runtime"><section><h4>配置历史</h4><div className="platform-history-list">{history.map((item) => <div className="platform-history-row" key={item.revision}><div className="platform-history-version"><strong>v{item.revision}</strong>{item.revision === loaded.revision ? <Badge variant="secondary">当前版本</Badge> : null}</div><div className="platform-history-summary"><strong>{item.restoredFromRevision ? `恢复自 v${item.restoredFromRevision}` : item.sourceLabel}</strong><span>{item.changedSections.length > 0 ? item.changedSections.map((section) => `${section.sectionLabel} ${section.count} 项`).join('、') : '没有可见配置变化'}</span></div><span>{item.createdBy}</span><time>{new Date(item.createdAt).toLocaleString('zh-CN')}</time><Button size="sm" variant="outline" disabled={historyDetailLoading} onClick={() => void openHistoryDetail(item.revision)}>{historyDetailLoading ? <SpinnerGap className="animate-spin" /> : null}查看详情</Button></div>)}</div></section></div> : null}
 
-          {(['general', 'ai', 'email', 'storage', 'packages', 'feishu', 'github'] as Tab[]).includes(tab) ? <footer className="platform-savebar"><Button variant="outline" type="button" disabled={busy} onClick={() => { setDraft(cloneConfig(loaded.config)); setSecrets({}); setTestResult('') }}>撤销修改</Button>{(['ai', 'email', 'storage', 'feishu', 'github'] as Tab[]).includes(tab) ? <Button variant="outline" type="button" disabled={busy} onClick={() => void testSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}{tab === 'email' ? '测试连接' : '测试可用性'}</Button> : null}<Button type="button" disabled={busy} onClick={() => void saveSection(tab as PlatformConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}保存更改</Button></footer> : null}
+          {activeConfigSection ? <footer className="platform-savebar"><Button variant="outline" type="button" disabled={busy || !sectionChanged} onClick={() => restoreSection(activeConfigSection)}>还原</Button>{(['ai', 'email', 'storage', 'feishu', 'github'] as PlatformConfigSection[]).includes(activeConfigSection) ? <Button variant="outline" type="button" disabled={busy} onClick={() => void testSection(activeConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}{tab === 'email' ? '测试连接' : '测试可用性'}</Button> : null}<Button type="button" disabled={busy || !sectionChanged} onClick={() => void saveSection(activeConfigSection)}>{busy ? <SpinnerGap className="animate-spin" /> : <CheckCircle />}保存更改</Button></footer> : null}
         </section>
       </div>
 
+      <Dialog open={Boolean(historyDetail)} onOpenChange={(open) => { if (!open) setHistoryDetail(undefined) }}>
+        <DialogContent fixedHeader className="platform-history-dialog">
+          {historyDetail ? <>
+            <DialogHeader>
+              <DialogTitle>配置版本 v{historyDetail.version.revision}</DialogTitle>
+              <DialogDescription>
+                {historyDetail.restoredFromRevision ? `恢复自 v${historyDetail.restoredFromRevision}` : historyDetail.version.sourceLabel}
+                {' · '}{historyDetail.version.createdBy}
+                {' · '}{new Date(historyDetail.version.createdAt).toLocaleString('zh-CN')}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="platform-history-detail">
+              <section>
+                <h4>{historyDetail.previousRevision ? `本次相对 v${historyDetail.previousRevision} 的变更` : '初始配置内容'}</h4>
+                <HistoryChanges groups={historyDetail.changesFromPrevious} emptyLabel="该版本没有可见配置变化。" />
+              </section>
+              {historyDetail.version.revision !== historyDetail.currentRevision ? <section>
+                <h4>恢复此版本将产生的变化</h4>
+                <HistoryChanges groups={historyDetail.changesFromCurrent} emptyLabel="当前配置已经与此版本一致，恢复不会生成新版本。" />
+              </section> : null}
+              <p className="platform-history-note">固定回调地址、用户权限和组织数据不属于配置版本，恢复时不会改变。</p>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setHistoryDetail(undefined)}>关闭</Button>
+              {historyDetail.version.revision !== historyDetail.currentRevision ? <ConfirmActionDialog
+                actionKey={`platform-config-restore:${historyDetail.currentRevision}:${historyDetail.version.revision}`}
+                title={`恢复到版本 v${historyDetail.version.revision}？`}
+                description={<div className="platform-history-restore-preview"><p>恢复会按以下差异创建一个新版本，并由在线 API 实例自动加载。</p><HistoryChanges compact groups={historyDetail.changesFromCurrent} emptyLabel="当前配置已经与此版本一致，不会生成新版本。" /><p>固定回调地址、用户权限和组织数据不会改变。</p></div>}
+                confirmLabel="恢复此版本"
+                variant="default"
+                trigger={<Button disabled={historyDetail.changesFromCurrent.length === 0}>恢复此版本</Button>}
+                onConfirm={() => restoreRevision(historyDetail.version.revision)}
+              /> : null}
+            </DialogFooter>
+          </> : null}
+        </DialogContent>
+      </Dialog>
       <Dialog open={grantAdminOpen} onOpenChange={setGrantAdminOpen}><DialogContent><DialogHeader><DialogTitle>授予超级管理员</DialogTitle><DialogDescription>只能选择已启用且已核实飞书身份的用户。内置 admin 始终保留。</DialogDescription></DialogHeader><div className="platform-dialog-fields"><Field label="选择用户"><Select value={grantUserId} onValueChange={setGrantUserId}><SelectTrigger><SelectValue placeholder="选择用户" /></SelectTrigger><SelectContent>{users.filter((user) => user.accountStatus === 'active' && !user.platformAdmin && (user.isBuiltinAdmin || user.feishuIdentityVerified)).map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.displayName}（{user.username}）</SelectItem>)}</SelectContent></Select></Field></div><DialogFooter><Button variant="outline" onClick={() => setGrantAdminOpen(false)}>取消</Button><Button disabled={busy || !grantUserId} onClick={() => void grantPlatformAdmin()}>确认授权</Button></DialogFooter></DialogContent></Dialog>
       <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent><DialogHeader><DialogTitle>新建组织</DialogTitle><DialogDescription>所有者必须是已核实飞书身份的有效用户，或内置 admin。</DialogDescription></DialogHeader><div className="platform-dialog-fields"><Field label="组织名称"><Input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} /></Field><Field label="所有者"><Select value={ownerUserId} onValueChange={setOwnerUserId}><SelectTrigger><SelectValue placeholder="选择所有者" /></SelectTrigger><SelectContent>{eligibleOwners.map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.displayName}（{user.username}）</SelectItem>)}</SelectContent></Select></Field></div><DialogFooter><Button variant="outline" onClick={() => setCreateOpen(false)}>取消</Button><Button disabled={busy || !organizationName.trim() || !ownerUserId} onClick={() => void createOrganization()}>创建组织</Button></DialogFooter></DialogContent></Dialog>
       <Dialog open={Boolean(offboardingUser && offboardingPreview)} onOpenChange={(open) => { if (!open && !busy) { setOffboardingUser(undefined); setOffboardingPreview(undefined) } }}><DialogContent className="offboarding-dialog"><DialogHeader><DialogTitle>办理离职</DialogTitle><DialogDescription>{offboardingUser?.displayName} 的账号将被禁用，组织内资源和工作归属将按下方选择处理。</DialogDescription></DialogHeader><div className="offboarding-organizations">{offboardingPreview?.organizations.map((organization) => <section key={organization.id} className="offboarding-organization"><div className="offboarding-organization-heading"><strong>{organization.name}</strong><small>待办 {organization.openTodoCount} 条 · Bug {organization.bugCount} 个</small></div><Select value={offboardingSelections[organization.id] ?? ''} onValueChange={(value) => setOffboardingSelections((current) => ({ ...current, [organization.id]: value }))} disabled={busy || organization.admins.length === 0}><SelectTrigger aria-label={`${organization.name} 接收管理员`}><SelectValue placeholder="选择接收管理员" /></SelectTrigger><SelectContent>{organization.admins.map((admin) => <SelectItem key={admin.id} value={String(admin.id)}>{admin.displayName} · {admin.username}</SelectItem>)}</SelectContent></Select>{organization.ownedProjects.length > 0 ? <small>将转移项目 {organization.ownedProjects.length} 个</small> : null}{organization.ownedTestSpaces.length > 0 ? <small>将转移测试空间 {organization.ownedTestSpaces.length} 个</small> : null}{organization.admins.length === 0 ? <p className="form-error">该组织没有可接收的组织管理员。</p> : null}</section>)}</div><DialogFooter><Button variant="outline" disabled={busy} onClick={() => { setOffboardingUser(undefined); setOffboardingPreview(undefined) }}>取消</Button><Button variant="destructive" disabled={busy || !offboardingPreview?.organizations.every((organization) => organization.admins.length > 0)} onClick={() => void submitOffboarding()}>{busy ? '处理中...' : '确认离职'}</Button></DialogFooter></DialogContent></Dialog>

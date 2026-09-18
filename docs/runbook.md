@@ -70,6 +70,8 @@ an existing platform configuration. Retain the complete application encryption k
 stored config version. After import, remove business values from the workload environment and use
 the Platform Management page for all changes.
 
+平台配置保存后，管理页按目标版本轮询在线 API 实例：全部实例加载目标版本后显示“加载完成”，实例报错、没有在线实例或目标版本已被新版本替代时显示明确状态。配置历史按版本展示字段级差异，密钥只显示“已设置、已替换、已清除”等状态；恢复前会展示目标版本相对当前配置的差异。规范化后的配置没有变化时，服务端只记录幂等回执，不创建配置版本、审计事件或热更新通知。
+
 Fresh Sealos installations run `db:init` and `platform:config -- initialize` in an init container.
 The `VEGES_BOOTSTRAP_ADMIN_PASSWORD` template input is passed only to that initializer; it is not
 part of the application or digest-worker runtime environment. The initializer is idempotent after

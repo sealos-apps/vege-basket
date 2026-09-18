@@ -28,7 +28,10 @@ export async function getPlatformMutationReceipt(
       action: row.action,
       createdAt: row.created_at.toISOString(),
       found: true as const,
-      result: { revision: row.result_revision ? Number(row.result_revision) : null },
+      result: {
+        changed: !row.action.startsWith('noop:'),
+        revision: row.result_revision ? Number(row.result_revision) : null,
+      },
       scope,
     } : { found: false as const, scope }
   }

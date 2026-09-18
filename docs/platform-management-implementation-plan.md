@@ -122,12 +122,13 @@
 | --- | --- |
 | `GET /api/platform-info` | 仅平台名称和可用登录方式；不公开集成地址、桶或账号 |
 | `GET /api/admin/platform-config` | 脱敏配置、revision、凭据 configured 状态、固定回调、可编辑性 |
-| `PUT /api/admin/platform-config/:section` | expectedRevision、requestId、该分区 fields、secrets；只允许明确 keep/replace/clear，不接收掩码作为值 |
+| `PUT /api/admin/platform-config/:section` | expectedRevision、requestId、该分区 fields、secrets；只允许明确 keep/replace/clear，不接收掩码作为值；服务端规范化比较后无变化则返回 `changed: false`，不创建版本、审计事件或热更新通知 |
 | `POST /api/admin/platform-config/:section/secrets/:field/reveal` | expectedRevision；单字段白名单读取当前值，审计后返回 value/revision、no-store；不支持历史值或任意路径 |
 | `POST /api/admin/platform-config/:section/test` | 当前候选 fields/secrets 和基准版本；不保存，返回逐项结果和候选摘要；邮件发送使用明确 send-email 动作 |
 | `POST /api/admin/platform-config/packages/validate` | 精确 YAML 文本；只解析/校验，返回 valid、错误路径/行列、规则数及兼容提示，不访问 OSS |
-| `GET /api/admin/platform-config/history` | 分页元数据、变更字段与脱敏摘要；不返回配置密文或明文密钥 |
-| `POST /api/admin/platform-config/restore` | targetRevision、expectedRevision、requestId；重新校验当前约束，创建更高版本 |
+| `GET /api/admin/platform-config/history` | 分页元数据、变更分区和数量；不返回配置密文或明文密钥 |
+| `GET /api/admin/platform-config/history/:revision` | 按需返回该版本相对前一版本、相对当前版本的字段级脱敏差异；密钥只显示配置状态，规则文本按长文本展示 |
+| `POST /api/admin/platform-config/restore` | targetRevision、expectedRevision、requestId；先返回待恢复差异，确认后重新校验当前约束并创建更高版本；目标与当前一致时不创建版本 |
 | `GET /api/admin/platform-config/runtime` | 当前 revision、已知 API 实例加载版本/心跳/错误、CronJob 下次执行加载说明 |
 | `GET /api/admin/platform-security` | 加密覆盖说明、key ID 引用和最近巡检结果；无密钥材料 |
 | `GET /api/admin/users` | 复用现有查询，增加来源/核实状态、permissionVersion、平台授权和 builtin 能力标记 |
