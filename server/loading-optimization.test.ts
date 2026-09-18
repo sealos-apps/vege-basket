@@ -91,6 +91,13 @@ test('test workbench reads stay sectioned and scoped to the active space', () =>
   assert.match(testClientSource, /modules: sections\.has\('core'\) \|\| sections\.has\('cases'\) \|\| sections\.has\('plans'\) \|\| sections\.has\('bugs'\)/u)
   assert.match(testClientSource, /invalidateWorkbenchScope\('bugs', notification\.testSpaceId\)/u)
   assert.match(testClientSource, /activatedScopeKeyRef\.current !== scopeKey/u)
+  assert.match(testServerSource, /select count\(\*\) from test_cases test_case where test_case\.test_space_id = ts\.id/u)
+  assert.match(testServerSource, /select count\(\*\) from test_plans test_plan where test_plan\.test_space_id = ts\.id/u)
+  assert.match(testServerSource, /select count\(\*\) from test_bugs test_bug where test_bug\.test_space_id = ts\.id/u)
+  assert.match(testClientSource, /activeSpace\?\.caseCount \?\? 0/u)
+  assert.match(testClientSource, /activeSpace\?\.planCount \?\? 0/u)
+  assert.match(testClientSource, /activeSpace\?\.bugCount \?\? 0/u)
+  assert.doesNotMatch(testClientSource, /test-nav-count">\{(?:cases|plans|bugs)\.length\}/u)
   assert.doesNotMatch(testClientSource, /caseScopeRef/u)
 })
 

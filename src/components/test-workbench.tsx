@@ -1392,9 +1392,9 @@ export function TestWorkbench({
         </div>
           <div className="test-workbench-nav-main">
             <nav className="test-workbench-nav-actions" aria-label="测试工作台模块">
-              <button className={tab === 'cases' ? 'active' : ''} onClick={() => setTab('cases')}><ClipboardText /><span className="test-nav-label">用例管理</span><span className="test-nav-count">{cases.length}</span></button>
-              <button className={tab === 'plans' ? 'active' : ''} onClick={() => setTab('plans')}><ListChecks /><span className="test-nav-label">测试计划</span><span className="test-nav-count">{plans.length}</span></button>
-              <button className={tab === 'bugs' ? 'active' : ''} onClick={() => setTab('bugs')}><Bug /><span className="test-nav-label">Bug 追踪</span><span className="test-nav-count">{bugs.length}</span></button>
+              <button className={tab === 'cases' ? 'active' : ''} onClick={() => setTab('cases')}><ClipboardText /><span className="test-nav-label">用例管理</span><span className="test-nav-count">{activeSpace?.caseCount ?? 0}</span></button>
+              <button className={tab === 'plans' ? 'active' : ''} onClick={() => setTab('plans')}><ListChecks /><span className="test-nav-label">测试计划</span><span className="test-nav-count">{activeSpace?.planCount ?? 0}</span></button>
+              <button className={tab === 'bugs' ? 'active' : ''} onClick={() => setTab('bugs')}><Bug /><span className="test-nav-label">Bug 追踪</span><span className="test-nav-count">{activeSpace?.bugCount ?? 0}</span></button>
               <button className={tab === 'weekly_report' ? 'active' : ''} onClick={() => setTab('weekly_report')}><FileText /><span className="test-nav-label">周报管理</span><span className="test-nav-count" /></button>
             </nav>
           </div>
