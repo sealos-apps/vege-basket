@@ -1,3 +1,4 @@
+import type { WeeklyReportSourceResult } from '../shared/weekly-report-profile'
 import type {
   InboxItem,
   AiConversationContextKind,
@@ -66,7 +67,6 @@ import type {
   PersonalWeeklyReportList,
   WeeklyReportCollection,
   WeeklyReportRules,
-  WeeklyReportSourceCandidate,
   WeeklyReportSourceRef,
 } from './organization-types'
 import type { MyWorkData, MyWorkFilters } from './my-work-types'
@@ -1185,7 +1185,7 @@ export function fetchPersonalWeeklyReports(
 }
 
 export function fetchWeeklyReportSources(organizationId: number, weekStart: string) {
-  return request<{ sources: WeeklyReportSourceCandidate[] }>(
+  return request<WeeklyReportSourceResult>(
     `/api/weekly-reports/${organizationId}/${weekStart}/sources`,
   )
 }
@@ -1195,6 +1195,7 @@ export function savePersonalWeeklyReportDraft(
   weekStart: string,
   payload: {
     content: string
+    convertLegacy?: boolean
     expectedVersion: number
     sourceMode: 'ai' | 'manual'
     sources: WeeklyReportSourceRef[]

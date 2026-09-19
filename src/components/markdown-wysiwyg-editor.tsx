@@ -63,6 +63,7 @@ type MarkdownWysiwygEditorProps = {
   onChange: (markdown: string) => void
   onPasteImages?: (files: File[]) => void
   onReady?: () => void
+  normalizeOnCreate?: boolean
   placeholder?: string
   readOnly?: boolean
   value: string
@@ -283,6 +284,7 @@ export const MarkdownWysiwygEditor = forwardRef<
     onChange,
     onPasteImages,
     onReady,
+    normalizeOnCreate = true,
     placeholder = '开始输入内容…',
     readOnly = false,
     value,
@@ -350,7 +352,7 @@ export const MarkdownWysiwygEditor = forwardRef<
     onCreate: ({ editor: currentEditor }) => {
       const markdown = currentEditor.getMarkdown()
       lastEmittedMarkdownRef.current = markdown
-      if (!readOnlyRef.current && markdown !== value) onChangeRef.current(markdown)
+      if (normalizeOnCreate && !readOnlyRef.current && markdown !== value) onChangeRef.current(markdown)
       onReadyRef.current?.()
     },
     onUpdate: ({ editor: currentEditor }) => {

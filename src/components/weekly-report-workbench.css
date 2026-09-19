@@ -322,8 +322,8 @@
 .weekly-report-editor-panel {
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   padding: 20px;
 }
 
@@ -399,8 +399,9 @@
 .weekly-report-source-panel {
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
   border-left: 1px solid var(--line);
   background: color-mix(in oklch, var(--control-bg) 72%, var(--surface));
 }
@@ -762,3 +763,8 @@
     transition: none;
   }
 }
+
+.weekly-report-source-panel > .wr-source-fieldset > * { flex-shrink: 0; }
+.weekly-report-source-panel .weekly-report-source-list { flex: 1 0 150px; }
+.weekly-report-editor-panel > .markdown-wysiwyg-editor { flex: 1; }
+.weekly-report-editor-panel > .weekly-report-actions { flex-shrink: 0; }

@@ -3436,6 +3436,7 @@ function App() {
       return
     }
 
+    if (!(await weeklyReportWorkbenchRef.current?.prepareOrganizationChange() ?? true)) return
     const roleLandingView = targetView ?? getRoleLandingView(role)
     if (authUser.activeRole === role) {
       setRoleSelectionOpen(false)
@@ -5219,6 +5220,8 @@ ${packageTimelineText}`
       <>
         {roleSelectionDialog}
         <TestWorkbench
+          weeklyReportRef={weeklyReportWorkbenchRef}
+          navigationBusy={roleSelectionBusy}
           accountMenu={(
             <AccountMenu
               activeView={view}
@@ -5917,6 +5920,8 @@ ${packageTimelineText}`
 
         {view === 'weekly_report' ? (
           <WeeklyReportWorkbench
+            navigationBusy={roleSelectionBusy}
+            activeProfile={authUser?.activeRole === 'tester' ? 'tester' : 'developer'}
             ref={weeklyReportWorkbenchRef}
             initialOrganizationId={requestedWeeklyReport.status === 'valid'
               ? requestedWeeklyReport.organizationId
