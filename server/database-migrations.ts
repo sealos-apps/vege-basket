@@ -22,10 +22,23 @@ const bootstrapPasswordFile = '/run/secrets/veges-bootstrap-admin-password/passw
 let status: DatabaseMigrationStatus = { phase: 'waiting' }
 let stopRequested = false
 
-function migrationErrorCode(error: unknown) {
+const retryableConnectionMessages = new Set([
+  'Connection terminated',
+  'Connection terminated due to connection timeout',
+  'Connection terminated unexpectedly',
+])
+
+function hasRetryableConnectionMessage(error: unknown) {
+  if (!(error instanceof Error)) return false
+  if (retryableConnectionMessages.has(error.message)) return true
+  return hasRetryableConnectionMessage(error.cause)
+}
+
+export function databaseMigrationErrorCode(error: unknown) {
   if (error && typeof error === 'object' && 'code' in error) {
     return String((error as { code?: unknown }).code || 'DATABASE_MIGRATION_FAILED')
   }
+  if (hasRetryableConnectionMessage(error)) return 'DATABASE_CONNECTION_FAILED'
   return 'DATABASE_MIGRATION_FAILED'
 }
 
@@ -145,11 +158,15 @@ async function ensureBuiltinAdmin(client: PoolClient) {
 }
 
 async function runMigrationAttempt() {
-  status = { phase: 'running', startedAt: new Date().toISOString() }
+  const startedAt = status.startedAt ?? new Date().toISOString()
+  status = status.errorCode
+    ? { ...status, phase: 'waiting', startedAt }
+    : { phase: 'running', startedAt }
   let client: PoolClient | null = null
   let locked = false
   try {
     client = await pool.connect()
+    status = { phase: 'running', startedAt }
     while (!locked && !stopRequested) {
       const lock = await client.query<{ acquired: boolean }>(
         'select pg_try_advisory_lock(hashtextextended($1::text, 0)) as acquired',
@@ -205,7 +222,7 @@ async function runMigrationAttempt() {
     status = { ...status, completedAt: new Date().toISOString(), phase: 'completed' }
     return true
   } catch (error) {
-    status = { ...status, errorCode: migrationErrorCode(error), phase: 'failed' }
+    status = { ...status, errorCode: databaseMigrationErrorCode(error), phase: 'failed' }
     throw error
   } finally {
     if (locked && client) {
@@ -216,8 +233,8 @@ async function runMigrationAttempt() {
   }
 }
 
-function isRetryableConnectionError(error: unknown) {
-  const code = migrationErrorCode(error)
+export function isRetryableDatabaseConnectionError(error: unknown) {
+  const code = databaseMigrationErrorCode(error)
   return code.startsWith('08') || [
     '3D000',
     '53300',
@@ -226,7 +243,7 @@ function isRetryableConnectionError(error: unknown) {
     'ENETUNREACH',
     'ENOTFOUND',
     'ETIMEDOUT',
-  ].includes(code)
+  ].includes(code) || hasRetryableConnectionMessage(error)
 }
 
 export async function runAutomaticDatabaseMigrations() {
@@ -235,9 +252,9 @@ export async function runAutomaticDatabaseMigrations() {
     try {
       if (await runMigrationAttempt()) return
     } catch (error) {
-      if (!isRetryableConnectionError(error)) throw error
+      if (!isRetryableDatabaseConnectionError(error)) throw error
       status = {
-        errorCode: migrationErrorCode(error),
+        errorCode: databaseMigrationErrorCode(error),
         phase: 'waiting',
         startedAt: status.startedAt,
       }

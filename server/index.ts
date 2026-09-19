@@ -598,7 +598,7 @@ app.use(express.json({
 }))
 app.use('/api', platformManagementRouter)
 app.use('/api', (request, response, next) => {
-  if (request.path === '/health' || request.path === '/auth/login' ||
+  if (request.path === '/health' || request.path === '/ready' || request.path === '/auth/login' ||
       (request.path === '/auth/me' && request.method === 'GET') ||
       (request.path === '/auth/context' && request.method === 'GET')) {
     next()

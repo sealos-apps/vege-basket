@@ -87,7 +87,9 @@ export function getPublicPlatformStatus() {
   const migration = getDatabaseMigrationStatus()
   const systemReasons: string[] = []
   if (migration.phase !== 'completed') systemReasons.push(
-    migration.phase === 'failed' ? '数据库迁移失败' : '数据库正在迁移',
+    migration.errorCode === 'DATABASE_CONNECTION_FAILED'
+      ? '数据库连接不可用'
+      : migration.phase === 'failed' ? '数据库迁移失败' : '数据库正在迁移',
   )
   if (migration.phase === 'completed' && !configInitialized) systemReasons.push('平台尚未完成初始配置')
   const active = activeState.maintenanceEnabled || systemReasons.length > 0
