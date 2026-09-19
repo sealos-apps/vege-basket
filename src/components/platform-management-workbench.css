@@ -95,6 +95,23 @@
 .platform-maintenance-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 16px; margin-top: 16px; }
 .platform-maintenance-form textarea { min-height: 88px; }
 .platform-maintenance-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-bottom: 1px; }
+.platform-maintenance-record-list { margin-top: 14px; border-top: 1px solid var(--border); }
+.platform-maintenance-record-header,
+.platform-maintenance-record-row { display: grid; grid-template-columns: 82px minmax(160px, 1fr) minmax(130px, .72fr) 172px 188px 120px; align-items: center; gap: 12px; min-width: 0; }
+.platform-maintenance-record-header { min-height: 34px; color: var(--muted-foreground); font-size: .72rem; }
+.platform-maintenance-record-row { min-height: 62px; border-top: 1px solid var(--border); font-size: .77rem; }
+.platform-maintenance-record-row > [data-slot='badge'] { justify-self: start; }
+.platform-maintenance-record-message,
+.platform-maintenance-record-actor,
+.platform-maintenance-record-ended { display: grid; gap: 3px; min-width: 0; }
+.platform-maintenance-record-message strong { overflow-wrap: anywhere; font-weight: 600; }
+.platform-maintenance-record-actor strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.platform-maintenance-record-actor small,
+.platform-maintenance-record-ended small { overflow: hidden; color: var(--muted-foreground); text-overflow: ellipsis; white-space: nowrap; }
+.platform-maintenance-record-row time { color: var(--muted-foreground); white-space: nowrap; }
+.platform-maintenance-record-ended > strong { color: var(--platform-accent); }
+.platform-maintenance-record-duration { font-weight: 600; white-space: nowrap; }
+.platform-maintenance-record-more { display: flex; justify-content: center; padding-top: 14px; }
 .platform-migration-list { margin-top: 14px; border-top: 1px solid var(--border); }
 .platform-migration-header,
 .platform-migration-row { display: grid; grid-template-columns: minmax(230px, 1.25fr) minmax(180px, 1fr) 90px 180px; align-items: center; gap: 16px; min-width: 0; }
@@ -167,6 +184,20 @@
   .platform-history-summary > span { white-space: normal; }
   .platform-maintenance-form { grid-template-columns: 1fr; }
   .platform-maintenance-actions { justify-content: flex-start; }
+  .platform-maintenance-record-header { display: none; }
+  .platform-maintenance-record-row { grid-template-columns: auto minmax(0, 1fr); gap: 7px 14px; padding-block: 13px; }
+  .platform-maintenance-record-message { align-self: center; }
+  .platform-maintenance-record-actor,
+  .platform-maintenance-record-row > time,
+  .platform-maintenance-record-ended { grid-column: 2; }
+  .platform-maintenance-record-duration { grid-column: 2; }
+  .platform-maintenance-record-row > [data-label] { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: baseline; column-gap: 10px; white-space: normal; }
+  .platform-maintenance-record-row > [data-label]::before { content: attr(data-label); color: var(--muted-foreground); font-size: .68rem; font-weight: 400; }
+  .platform-maintenance-record-actor > strong,
+  .platform-maintenance-record-actor > small,
+  .platform-maintenance-record-ended > time,
+  .platform-maintenance-record-ended > strong,
+  .platform-maintenance-record-ended > small { grid-column: 2; }
   .platform-migration-header { display: none; }
   .platform-migration-row { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 16px; padding-block: 12px; }
   .platform-migration-row code,

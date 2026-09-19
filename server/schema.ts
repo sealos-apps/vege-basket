@@ -1,4 +1,5 @@
 import { platformManagementSchemaSql } from './platform-management-schema.ts'
+import { platformMaintenanceHistorySchemaSql } from './platform-maintenance-history-schema.ts'
 import { platformMaintenanceSchemaSql } from './platform-maintenance-schema.ts'
 
 export const schemaSql = `
@@ -2638,6 +2639,7 @@ on conflict (test_environment_id,test_space_id) do nothing;
 
 ${platformManagementSchemaSql}
 ${platformMaintenanceSchemaSql}
+${platformMaintenanceHistorySchemaSql}
 `
 
 // Applied only after the encrypted, idempotent module-name backfill has succeeded.

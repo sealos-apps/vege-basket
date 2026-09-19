@@ -137,6 +137,30 @@ export type PlatformStatus = {
   }
 }
 
+export type PlatformMaintenanceRecord = {
+  durationSeconds?: number
+  endedAt?: string
+  endedBy?: {
+    displayName: string
+    id: number
+    username: string
+  }
+  id: number
+  message: string
+  startedAt: string
+  startedBy?: {
+    displayName: string
+    id: number
+    username: string
+  }
+  status: 'active' | 'completed'
+}
+
+export type PlatformMaintenanceHistory = {
+  nextCursor?: number
+  records: PlatformMaintenanceRecord[]
+}
+
 export type ApplicationMigration = {
   appliedAt: string
   checksum: string

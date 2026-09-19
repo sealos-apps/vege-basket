@@ -4,6 +4,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { platformManagementSchemaSql } from './platform-management-schema.ts'
+import { platformMaintenanceHistorySchemaSql } from './platform-maintenance-history-schema.ts'
 import { platformMaintenanceSchemaSql } from './platform-maintenance-schema.ts'
 import { schemaSql } from './schema.ts'
 
@@ -25,6 +26,18 @@ test('startup schema contains the platform maintenance migration', () => {
     'utf8',
   )
   assert.equal(migration.trim(), platformMaintenanceSchemaSql.trim())
+})
+
+test('startup schema contains the forward-only platform maintenance history migration', () => {
+  assert.ok(schemaSql.includes(platformMaintenanceHistorySchemaSql))
+  assert.match(platformMaintenanceHistorySchemaSql, /create table if not exists platform_maintenance_periods/u)
+  assert.match(platformMaintenanceHistorySchemaSql, /duration_seconds bigint/u)
+  assert.match(platformMaintenanceHistorySchemaSql, /where ended_at is null/u)
+  const migration = fs.readFileSync(
+    path.join(serverDirectory, 'migrations/20260919_platform_maintenance_history.sql'),
+    'utf8',
+  )
+  assert.equal(migration.trim(), platformMaintenanceHistorySchemaSql.trim())
 })
 
 test('versioned platform management migration matches startup schema', () => {

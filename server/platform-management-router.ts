@@ -31,6 +31,7 @@ import {
   getPublicPlatformStatus,
   isMaintenanceRequestId,
   listApplicationMigrations,
+  listPlatformMaintenanceHistory,
   updatePlatformMaintenance,
 } from './platform-maintenance.ts'
 
@@ -288,6 +289,24 @@ platformManagementRouter.get('/admin/platform-maintenance', async (request, resp
     if (!(await requirePlatformAdminSession(request, response))) return
     response.setHeader('Cache-Control', 'no-store')
     response.json(getPublicPlatformStatus())
+  } catch (error) {
+    next(error)
+  }
+})
+
+platformManagementRouter.get('/admin/platform-maintenance/history', async (request, response, next) => {
+  try {
+    if (!(await requirePlatformAdminSession(request, response))) return
+    const beforeId = request.query.beforeId === undefined
+      ? undefined
+      : positiveInteger(request.query.beforeId)
+    const limit = request.query.limit === undefined ? 20 : positiveInteger(request.query.limit)
+    if (beforeId === null || limit === null) {
+      response.status(400).json({ error: '维护记录分页参数无效。' })
+      return
+    }
+    response.setHeader('Cache-Control', 'no-store')
+    response.json(await listPlatformMaintenanceHistory({ beforeId, limit: Math.min(limit, 100) }))
   } catch (error) {
     next(error)
   }

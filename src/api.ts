@@ -76,6 +76,7 @@ import type {
   PlatformConfigHistoryDetail,
   PlatformConfigHistoryItem,
   PlatformConfigSection,
+  PlatformMaintenanceHistory,
   PlatformOrganization,
   PlatformRuntimeStatus,
   PlatformSecurityStatus,
@@ -784,6 +785,12 @@ export function fetchPlatformStatus() {
 
 export function fetchPlatformMaintenance() {
   return request<PlatformStatus>('/api/admin/platform-maintenance')
+}
+
+export function fetchPlatformMaintenanceHistory(beforeId?: number) {
+  const query = new URLSearchParams({ limit: '20' })
+  if (beforeId) query.set('beforeId', String(beforeId))
+  return request<PlatformMaintenanceHistory>(`/api/admin/platform-maintenance/history?${query}`)
 }
 
 export function updatePlatformMaintenance(

@@ -69,8 +69,11 @@ legacy password accounts may still sign in. `VEGES_ADMIN_USERNAMES` and the form
 environment variables are accepted only by the explicit, operator-run `platform:config import`
 compatibility command. Normal startup never imports them.
 
-Manual platform maintenance rejects all new password and Feishu logins and shows the configured
-maintenance message on the login page. After database migration completes, system-forced
+Manual platform maintenance rejects ordinary-user password and Feishu logins and shows the configured
+maintenance message on the login page. Active platform administrators may still sign in to finish
+recovery work. Each manual maintenance period records its initiating administrator and database start
+time; ending maintenance records the ending administrator, database end time, and final duration.
+System-forced maintenance is excluded from this history. After database migration completes, system-forced
 maintenance is the recovery exception: only the built-in `admin` may create a password session,
 and that recovery login does not process pending project or organization invitations. Login remains
 closed while migration is incomplete or failed because the authentication schema is not ready.

@@ -35,6 +35,7 @@ import {
   fetchPlatformRuntimeStatus,
   fetchPlatformSecurityStatus,
   fetchPlatformMaintenance,
+  fetchPlatformMaintenanceHistory,
   fetchApplicationMigrations,
   offboardManagedUser,
   revealPlatformSecret,
@@ -58,6 +59,7 @@ import type {
   PlatformConfigHistoryItem,
   PlatformConfigResponse,
   PlatformConfigSection,
+  PlatformMaintenanceRecord,
   PlatformOrganization,
   PlatformRuntimeStatus,
   PlatformSecurityStatus,
@@ -71,6 +73,7 @@ import {
   platformConfigSectionHasDraftChanges,
 } from '../../shared/platform-config'
 import { derivePlatformCallbackUrls } from '../../shared/platform-callback-urls'
+import { maintenanceDurationLabel } from '../../shared/maintenance-duration'
 import { userRoleLabel } from '@/user-roles'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -399,6 +402,10 @@ export function PlatformManagementWorkbench({
   const [runtime, setRuntime] = useState<PlatformRuntimeStatus>()
   const [maintenance, setMaintenance] = useState<PlatformStatus>()
   const [maintenanceMessage, setMaintenanceMessage] = useState('')
+  const [maintenanceRecords, setMaintenanceRecords] = useState<PlatformMaintenanceRecord[]>([])
+  const [maintenanceRecordsCursor, setMaintenanceRecordsCursor] = useState<number>()
+  const [maintenanceRecordsLoading, setMaintenanceRecordsLoading] = useState(false)
+  const [maintenanceClock, setMaintenanceClock] = useState(() => Date.now())
   const [migrations, setMigrations] = useState<ApplicationMigration[]>([])
   const [security, setSecurity] = useState<PlatformSecurityStatus>()
   const [history, setHistory] = useState<PlatformConfigHistoryItem[]>([])
@@ -468,6 +475,10 @@ export function PlatformManagementWorkbench({
       fetchPlatformOrganizations().then((response) => setOrganizations(response.organizations)),
       fetchPlatformSecurityStatus().then(setSecurity),
       fetchApplicationMigrations().then((response) => setMigrations(response.migrations)),
+      fetchPlatformMaintenanceHistory().then((response) => {
+        setMaintenanceRecords(response.records)
+        setMaintenanceRecordsCursor(response.nextCursor)
+      }),
       loadRuntime(),
     ])
       .catch((loadError) => handleError(loadError, '平台信息读取失败。'))
@@ -477,6 +488,14 @@ export function PlatformManagementWorkbench({
   }, [])
 
   useEffect(() => () => setSecrets({}), [])
+
+  const hasActiveMaintenanceRecord = maintenanceRecords.some((record) => record.status === 'active')
+
+  useEffect(() => {
+    if (!hasActiveMaintenanceRecord) return
+    const timer = window.setInterval(() => setMaintenanceClock(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [hasActiveMaintenanceRecord])
 
   useEffect(() => {
     if (!loaded?.revision) return
@@ -509,9 +528,14 @@ export function PlatformManagementWorkbench({
         enabled ? maintenanceMessage : '',
         maintenance.maintenance.revision,
       )
-      const next = await fetchPlatformMaintenance()
+      const [next, historyResponse] = await Promise.all([
+        fetchPlatformMaintenance(),
+        fetchPlatformMaintenanceHistory(),
+      ])
       setMaintenance(next)
       setMaintenanceMessage(next.maintenance.message)
+      setMaintenanceRecords(historyResponse.records)
+      setMaintenanceRecordsCursor(historyResponse.nextCursor)
       setNotice(enabled ? '平台已进入维护模式。' : '维护模式已结束，业务访问已恢复。')
       return true
     } catch (changeError) {
@@ -524,6 +548,20 @@ export function PlatformManagementWorkbench({
       return false
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function loadMoreMaintenanceRecords() {
+    if (!maintenanceRecordsCursor || maintenanceRecordsLoading) return
+    setMaintenanceRecordsLoading(true)
+    try {
+      const response = await fetchPlatformMaintenanceHistory(maintenanceRecordsCursor)
+      setMaintenanceRecords((current) => [...current, ...response.records])
+      setMaintenanceRecordsCursor(response.nextCursor)
+    } catch (loadError) {
+      handleError(loadError, '维护记录读取失败。')
+    } finally {
+      setMaintenanceRecordsLoading(false)
     }
   }
 
@@ -1070,13 +1108,36 @@ export function PlatformManagementWorkbench({
                   /> : <ConfirmActionDialog
                     actionKey={`platform-maintenance-enable:${maintenance?.maintenance.revision ?? 0}`}
                     title="进入维护模式？"
-                    description="所有新登录和普通业务请求将被立即拒绝；当前超级管理员会话可以继续完成平台管理。"
+                    description="普通用户的新登录和普通业务请求将被立即拒绝；超级管理员仍可登录并完成平台管理。"
                     confirmLabel="进入维护"
                     trigger={<Button disabled={busy} variant="destructive"><Wrench />进入维护</Button>}
                     onConfirm={() => changeMaintenance(true)}
                   />}
                 </div>
               </div>
+            </section>
+            <section className="platform-maintenance-history">
+              <div className="platform-maintenance-heading"><div><h4>维护记录</h4><p>维护开始与结束时间由数据库记录，结束维护时自动保存最终时长。</p></div></div>
+              {maintenanceRecords.length > 0 ? <>
+                <div className="platform-maintenance-record-list">
+                  <div className="platform-maintenance-record-header" aria-hidden><span>状态</span><span>维护说明</span><span>维护人</span><span>开始时间</span><span>结束时间</span><span>维护时长</span></div>
+                  {maintenanceRecords.map((record) => {
+                    const durationSeconds = record.durationSeconds ?? Math.max(
+                      0,
+                      Math.floor((maintenanceClock - new Date(record.startedAt).getTime()) / 1_000),
+                    )
+                    return <div className="platform-maintenance-record-row" key={record.id}>
+                      <Badge variant={record.status === 'active' ? 'outline' : 'secondary'}>{record.status === 'active' ? '维护中' : '已结束'}</Badge>
+                      <div className="platform-maintenance-record-message"><strong>{record.message || '未填写维护说明'}</strong></div>
+                      <div className="platform-maintenance-record-actor" data-label="维护人"><strong>{record.startedBy?.displayName ?? '未知账号'}</strong>{record.startedBy?.username && record.startedBy.username !== record.startedBy.displayName ? <small>{record.startedBy.username}</small> : null}</div>
+                      <time data-label="开始时间" dateTime={record.startedAt}>{new Date(record.startedAt).toLocaleString('zh-CN')}</time>
+                      <div className="platform-maintenance-record-ended" data-label="结束时间">{record.endedAt ? <><time dateTime={record.endedAt}>{new Date(record.endedAt).toLocaleString('zh-CN')}</time><small>由 {record.endedBy?.displayName ?? '未知账号'} 结束</small></> : <strong>进行中</strong>}</div>
+                      <strong className="platform-maintenance-record-duration" data-label="维护时长">{maintenanceDurationLabel(durationSeconds)}</strong>
+                    </div>
+                  })}
+                </div>
+                {maintenanceRecordsCursor ? <div className="platform-maintenance-record-more"><Button type="button" variant="outline" disabled={maintenanceRecordsLoading} onClick={() => void loadMoreMaintenanceRecords()}>{maintenanceRecordsLoading ? <SpinnerGap className="animate-spin" /> : null}加载更多</Button></div> : null}
+              </> : <p className="platform-empty-note">暂无人工维护记录。</p>}
             </section>
             <section className="platform-migrations">
               <div className="platform-maintenance-heading"><div><h4>自动迁移记录</h4><p>数据库结构与数据升级由应用副本协调执行。</p></div></div>

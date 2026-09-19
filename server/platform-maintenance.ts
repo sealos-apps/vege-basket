@@ -263,11 +263,13 @@ export async function updatePlatformMaintenance(input: {
       }
     }
     const state = await client.query<{
+      enabled_at: Date | null
+      enabled_by_user_id: string | null
       maintenance_enabled: boolean
       maintenance_message: string
       revision: string
     }>(
-      `select maintenance_enabled, maintenance_message, revision
+      `select maintenance_enabled, maintenance_message, revision, enabled_at, enabled_by_user_id
          from platform_operational_state where singleton = true for update`,
     )
     const current = state.rows[0]
@@ -290,21 +292,102 @@ export async function updatePlatformMaintenance(input: {
       current.maintenance_message !== normalizedMessage
     const revision = changed ? Number(current.revision) + 1 : Number(current.revision)
     if (changed) {
+      const changedAt = (await client.query<{ changed_at: Date }>(
+        'select clock_timestamp() as changed_at',
+      )).rows[0].changed_at
+      if (!current.maintenance_enabled && input.enabled) {
+        await client.query(
+          `insert into platform_maintenance_periods
+            (message, started_by_user_id, started_at, start_revision)
+           values ($1::text, $2::bigint, $3::timestamptz, $4::bigint)`,
+          [normalizedMessage, input.actorUserId, changedAt, revision],
+        )
+      } else if (current.maintenance_enabled && input.enabled) {
+        const updatedPeriod = await client.query(
+          `update platform_maintenance_periods
+              set message = $1::text
+            where ended_at is null`,
+          [normalizedMessage],
+        )
+        if (updatedPeriod.rowCount === 0 && current.enabled_by_user_id !== null) {
+          await client.query(
+            `insert into platform_maintenance_periods
+              (message, started_by_user_id, started_at, start_revision)
+             values ($1::text, $2::bigint, $3::timestamptz, $4::bigint)`,
+            [
+              normalizedMessage,
+              Number(current.enabled_by_user_id ?? input.actorUserId),
+              current.enabled_at ?? changedAt,
+              Number(current.revision),
+            ],
+          )
+        }
+      } else if (current.maintenance_enabled && !input.enabled) {
+        const closedPeriod = await client.query(
+          `update platform_maintenance_periods
+              set ended_by_user_id = $1::bigint,
+                  ended_at = $2::timestamptz,
+                  duration_seconds = greatest(
+                    0::numeric,
+                    floor(extract(epoch from ($2::timestamptz - started_at)))
+                  )::bigint,
+                  end_revision = $3::bigint
+            where ended_at is null`,
+          [input.actorUserId, changedAt, revision],
+        )
+        if (closedPeriod.rowCount === 0 && current.enabled_by_user_id !== null) {
+          const startedAt = current.enabled_at ?? changedAt
+          await client.query(
+            `insert into platform_maintenance_periods
+              (message, started_by_user_id, started_at, ended_by_user_id, ended_at,
+               duration_seconds, start_revision, end_revision)
+             values (
+               $1::text, $2::bigint, $3::timestamptz, $4::bigint, $5::timestamptz,
+               greatest(0::numeric, floor(extract(epoch from ($5::timestamptz - $3::timestamptz))))::bigint,
+               $6::bigint, $7::bigint
+             )`,
+            [
+              current.maintenance_message,
+              Number(current.enabled_by_user_id ?? input.actorUserId),
+              startedAt,
+              input.actorUserId,
+              changedAt,
+              Number(current.revision),
+              revision,
+            ],
+          )
+        }
+      }
       await client.query(
         `update platform_operational_state
             set maintenance_enabled = $1::boolean, maintenance_message = $2::text, revision = $3::bigint,
-                enabled_by_user_id = case when $1::boolean then $4::bigint else null::bigint end,
-                enabled_at = case when $1::boolean then clock_timestamp() else null::timestamptz end,
-                updated_by_user_id = $4::bigint, updated_at = clock_timestamp()
+                enabled_by_user_id = case
+                  when $1::boolean and maintenance_enabled then enabled_by_user_id
+                  when $1::boolean then $4::bigint
+                  else null::bigint
+                end,
+                enabled_at = case
+                  when $1::boolean and maintenance_enabled then enabled_at
+                  when $1::boolean then $5::timestamptz
+                  else null::timestamptz
+                end,
+                updated_by_user_id = $4::bigint, updated_at = $5::timestamptz
           where singleton = true`,
-        [input.enabled, normalizedMessage, revision, input.actorUserId],
+        [input.enabled, normalizedMessage, revision, input.actorUserId, changedAt],
       )
+      const action = current.maintenance_enabled === input.enabled
+        ? 'platform.maintenance_message_updated'
+        : input.enabled
+          ? 'platform.maintenance_enabled'
+          : 'platform.maintenance_disabled'
       await client.query(
         `insert into platform_audit_events
           (actor_user_id, action, section, target_type, target_id, changed_fields, request_id)
          values ($1, $2, 'maintenance', 'platform', 'singleton', $3::text[], $4::uuid)`,
-        [input.actorUserId, input.enabled ? 'platform.maintenance_enabled' : 'platform.maintenance_disabled',
-          ['maintenanceEnabled', 'maintenanceMessage'], input.requestId],
+        [input.actorUserId, action,
+          current.maintenance_enabled === input.enabled
+            ? ['maintenanceMessage']
+            : ['maintenanceEnabled', 'maintenanceMessage'], input.requestId],
       )
       await client.query(`select pg_notify('veges_platform_operation', $1)`, [String(revision)])
     }
@@ -322,6 +405,61 @@ export async function updatePlatformMaintenance(input: {
     throw error
   } finally {
     client.release()
+  }
+}
+
+export async function listPlatformMaintenanceHistory(input: {
+  beforeId?: number
+  limit: number
+}) {
+  const limit = Math.min(Math.max(Math.trunc(input.limit), 1), 100)
+  const result = await query<{
+    duration_seconds: string | null
+    ended_at: Date | null
+    ended_by_display_name: string | null
+    ended_by_user_id: string | null
+    ended_by_username: string | null
+    id: string
+    message: string
+    started_at: Date
+    started_by_display_name: string | null
+    started_by_user_id: string | null
+    started_by_username: string | null
+  }>(
+    `select period.id, period.message, period.started_at, period.ended_at, period.duration_seconds,
+            started_user.id as started_by_user_id, started_user.email as started_by_username,
+            started_user.display_name as started_by_display_name,
+            ended_user.id as ended_by_user_id, ended_user.email as ended_by_username,
+            ended_user.display_name as ended_by_display_name
+       from platform_maintenance_periods period
+       left join users started_user on started_user.id = period.started_by_user_id
+       left join users ended_user on ended_user.id = period.ended_by_user_id
+      where ($1::bigint is null or period.id < $1::bigint)
+      order by period.id desc
+      limit $2::integer`,
+    [input.beforeId ?? null, limit + 1],
+  )
+  const hasMore = result.rows.length > limit
+  const rows = hasMore ? result.rows.slice(0, limit) : result.rows
+  const actor = (id: string | null, username: string | null, displayName: string | null) => (
+    id ? {
+      displayName: displayName || username || '未知账号',
+      id: Number(id),
+      username: username ?? '',
+    } : undefined
+  )
+  return {
+    nextCursor: hasMore && rows.length > 0 ? Number(rows.at(-1)?.id) : undefined,
+    records: rows.map((row) => ({
+      durationSeconds: row.duration_seconds === null ? undefined : Number(row.duration_seconds),
+      endedAt: row.ended_at?.toISOString(),
+      endedBy: actor(row.ended_by_user_id, row.ended_by_username, row.ended_by_display_name),
+      id: Number(row.id),
+      message: row.message,
+      startedAt: row.started_at.toISOString(),
+      startedBy: actor(row.started_by_user_id, row.started_by_username, row.started_by_display_name),
+      status: row.ended_at ? 'completed' as const : 'active' as const,
+    })),
   }
 }
 

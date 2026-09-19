@@ -700,6 +700,12 @@ accept pending project or organization invitations. PostgreSQL
 `LISTEN/NOTIFY` plus polling synchronizes maintenance state between replicas. System-forced
 maintenance cannot be disabled, and manual maintenance can end only after required platform
 configuration is valid and every online API replica has loaded the current configuration revision.
+Each manual maintenance period is stored separately with its message, initiating administrator,
+database start time, and starting revision. Ending maintenance records the ending administrator,
+database end time, ending revision, and computed duration in the same transaction. Editing the
+message updates the open period without resetting its start time. System-forced maintenance is not
+included in this history. The schema baseline backfills an already-active manual period when its
+initiator and start time are available.
 The image-sync surface uses the repository, workflow, branch, and token in the encrypted
 platform configuration. Only platform administrators may edit or test those values. Each dispatch carries a server-generated UUID as the workflow
 `request_id`; uncertain POST responses remain recoverable until a matching GitHub `run-name`
