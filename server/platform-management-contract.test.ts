@@ -60,6 +60,11 @@ test('Feishu tenant tokens are isolated by platform configuration revision', () 
   }
 })
 
+test('Feishu AI retry stays idle before the first platform configuration exists', () => {
+  assert.match(runtimeSource, /export function getOptionalPlatformConfigSnapshot/u)
+  assert.match(appSource, /getOptionalPlatformConfigSnapshot\(\)\?\.config\.feishu\.aiChatEnabled === true/u)
+})
+
 test('platform user controls protect the builtin administrator', () => {
   assert.match(workbenchSource, /user\.isBuiltinAdmin \|\| user\.accountStatus !== 'active'/u)
   assert.match(workbenchSource, /disabled=\{busy \|\| user\.isBuiltinAdmin\}/u)

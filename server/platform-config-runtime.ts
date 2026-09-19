@@ -77,6 +77,10 @@ export function getPlatformConfigSnapshot() {
   return snapshot
 }
 
+export function getOptionalPlatformConfigSnapshot() {
+  return requestConfig.getStore() ?? activeConfig ?? undefined
+}
+
 export async function platformConfigRequestMiddleware(
   _request: Request,
   _response: Response,

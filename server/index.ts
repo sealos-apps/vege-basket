@@ -216,6 +216,7 @@ import { getLegacyPlatformSecrets } from './platform-config-store.ts'
 import {
   platformConfigRequestMiddleware,
   getPlatformConfigSnapshot,
+  getOptionalPlatformConfigSnapshot,
   startPlatformConfigRuntime,
   stopPlatformConfigRuntime,
 } from './platform-config-runtime.ts'
@@ -471,7 +472,7 @@ function feishuDeliveryAvailable() {
 }
 
 function feishuAiChatEnabled() {
-  return platformFeishuConfig().aiChatEnabled
+  return getOptionalPlatformConfigSnapshot()?.config.feishu.aiChatEnabled === true
 }
 
 configureTodoSharePublicUrl(platformPublicUrl)
