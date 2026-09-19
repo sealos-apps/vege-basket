@@ -38,7 +38,7 @@ test('registration invite acceptance verifies the password before locking and va
   assert.match(helper, /inviteRow\.password_hash !== snapshot\.password_hash/u)
 })
 
-test('maintenance login policy blocks manual login and limits forced recovery to builtin admin', () => {
+test('maintenance login policy allows platform admins and limits forced recovery to builtin admin', () => {
   const route = sourceBetween(
     "app.post('/api/auth/login'",
     "app.get('/api/auth/me'",
@@ -49,8 +49,10 @@ test('maintenance login policy blocks manual login and limits forced recovery to
   assert.ok(policyIndex >= 0 && policyIndex < userQueryIndex)
   assert.match(route, /loginAccess === 'blocked'/u)
   assert.match(route, /loginAccess === 'builtin-admin-only' && !row\.is_builtin_admin/u)
+  assert.match(route, /loginAccess === 'platform-admin-only' && !row\.is_platform_admin/u)
   assert.match(route, /loginAccess === 'open'/u)
   assert.match(route, /平台正在维护，暂时无法登录/u)
+  assert.match(route, /当前只允许超级管理员登录/u)
   assert.match(route, /当前只允许内置 admin 登录/u)
   assert.ok(route.indexOf("if (loginAccess === 'open')") < route.indexOf('acceptProjectInviteToken'))
 })

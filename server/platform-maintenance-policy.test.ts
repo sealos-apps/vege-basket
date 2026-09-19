@@ -9,11 +9,11 @@ test('platform login remains open during normal operation', () => {
   }), 'open')
 })
 
-test('manual maintenance blocks every new login', () => {
+test('manual maintenance allows only platform administrator login', () => {
   assert.equal(platformLoginAccess({
     maintenance: { active: true, systemForced: false },
     migration: { phase: 'completed' },
-  }), 'blocked')
+  }), 'platform-admin-only')
 })
 
 test('system-forced maintenance keeps the builtin admin recovery login after migration', () => {

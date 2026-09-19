@@ -1382,6 +1382,22 @@ async function findOrCreateFeishuOAuthUser(
   return created.rows[0]
 }
 
+async function findMaintenanceFeishuPlatformAdmin(openId: string) {
+  const existing = await query<UserRow>(
+    `select users.id, users.email, users.display_name, users.feishu_email,
+            users.feishu_user_id, users.feishu_receive_id_type, users.account_status
+       from users
+       join platform_admin_grants grant_row on grant_row.user_id = users.id
+      where users.feishu_user_id = $1::text and users.account_status = 'active'
+      limit 1`,
+    [openId],
+  )
+  if (!existing.rows[0]) {
+    throw new Error('平台正在维护，当前飞书账号没有有效的超级管理员权限。')
+  }
+  return existing.rows[0]
+}
+
 async function fetchFeishuMessageContent(messageId: string) {
   const token = await getFeishuTenantAccessToken()
   const result = await fetch(
@@ -4854,8 +4870,18 @@ app.post('/api/auth/login', asyncHandler(async (request, response) => {
   }
   const username = normalizeUsername(request.body.username ?? request.body.email)
   const password = String(request.body.password ?? '')
-  const user = await query<UserRow & { is_builtin_admin: boolean; password_hash: string }>(
-    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, password_hash, account_status, is_builtin_admin from users where email = $1',
+  const user = await query<UserRow & {
+    is_builtin_admin: boolean
+    is_platform_admin: boolean
+    password_hash: string
+  }>(
+    `select users.id, users.email, users.display_name, users.feishu_email, users.feishu_user_id,
+            users.feishu_receive_id_type, users.password_hash, users.account_status,
+            users.is_builtin_admin,
+            exists(select 1 from platform_admin_grants grant_row where grant_row.user_id = users.id)
+              as is_platform_admin
+       from users
+      where users.email = $1`,
     [username],
   )
   const row = user.rows[0]
@@ -4869,6 +4895,14 @@ app.post('/api/auth/login', asyncHandler(async (request, response) => {
   if (loginAccess === 'builtin-admin-only' && !row.is_builtin_admin) {
     response.status(503).json({
       error: '平台正在初始化，当前只允许内置 admin 登录。',
+      code: 'PLATFORM_MAINTENANCE',
+      maintenance: platformStatus.maintenance,
+    })
+    return
+  }
+  if (loginAccess === 'platform-admin-only' && !row.is_platform_admin) {
+    response.status(503).json({
+      error: '平台正在维护，当前只允许超级管理员登录。',
       code: 'PLATFORM_MAINTENANCE',
       maintenance: platformStatus.maintenance,
     })
@@ -4943,7 +4977,22 @@ app.patch('/api/auth/me', asyncHandler(async (request, response) => {
 }))
 
 app.post('/api/auth/feishu/oauth/url', asyncHandler(async (request, response) => {
+  const loginAccess = platformLoginAccess(getPublicPlatformStatus())
+  if (loginAccess === 'blocked' || loginAccess === 'builtin-admin-only') {
+    response.status(503).json({
+      error: '平台正在初始化，当前只允许内置 admin 使用密码登录。',
+      code: 'PLATFORM_MAINTENANCE',
+    })
+    return
+  }
   const userId = await requireUserId(request)
+  if (loginAccess === 'platform-admin-only' && userId && !(await isPlatformAdmin(userId))) {
+    response.status(503).json({
+      error: '平台正在维护，当前只允许超级管理员登录。',
+      code: 'PLATFORM_MAINTENANCE',
+    })
+    return
+  }
   const intent: FeishuOAuthState['intent'] = userId ? 'bind' : 'signin'
 
   const { appId, appSecret } = platformFeishuConfig()
@@ -4963,10 +5012,15 @@ app.post('/api/auth/feishu/oauth/url', asyncHandler(async (request, response) =>
   const state = signFeishuOAuthState({
     exp: Date.now() + 10 * 60 * 1_000,
     intent,
-    invitePassword: normalizeProjectInvitePassword(request.body?.invitePassword) || undefined,
-    inviteToken: String(request.body?.inviteToken ?? '').trim().slice(0, 128) || undefined,
-    organizationInviteToken:
-      String(request.body?.organizationInviteToken ?? '').trim().slice(0, 128) || undefined,
+    invitePassword: loginAccess === 'open'
+      ? normalizeProjectInvitePassword(request.body?.invitePassword) || undefined
+      : undefined,
+    inviteToken: loginAccess === 'open'
+      ? String(request.body?.inviteToken ?? '').trim().slice(0, 128) || undefined
+      : undefined,
+    organizationInviteToken: loginAccess === 'open'
+      ? String(request.body?.organizationInviteToken ?? '').trim().slice(0, 128) || undefined
+      : undefined,
     redirectUri,
     returnTo: sanitizeReturnTo(request.body?.returnTo),
     ...(userId ? { userId } : {}),
@@ -4990,6 +5044,22 @@ app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response
   const code = String(request.query.code ?? '').trim()
   if (!code) {
     const message = '飞书没有返回授权码。'
+    response.redirect(
+      state.intent === 'bind'
+        ? buildFeishuOAuthBindRedirect(platformPublicUrl(), state.returnTo, 'error', message)
+        : buildFeishuOAuthSigninRedirect(platformPublicUrl(), state.returnTo, 'error', { message }),
+    )
+    return
+  }
+
+  const loginAccess = platformLoginAccess(getPublicPlatformStatus())
+  if (loginAccess === 'blocked' || loginAccess === 'builtin-admin-only' || (
+    loginAccess === 'platform-admin-only' && state.intent === 'bind' &&
+    (!state.userId || !(await isPlatformAdmin(state.userId)))
+  )) {
+    const message = loginAccess === 'platform-admin-only'
+      ? '平台正在维护，当前只允许超级管理员操作。'
+      : '平台正在初始化，当前只允许内置 admin 使用密码登录。'
     response.redirect(
       state.intent === 'bind'
         ? buildFeishuOAuthBindRedirect(platformPublicUrl(), state.returnTo, 'error', message)
@@ -5024,12 +5094,14 @@ app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response
       return
     }
 
-    const user = await findOrCreateFeishuOAuthUser(
-      feishuUser,
-      state.inviteToken,
-      state.invitePassword,
-      state.organizationInviteToken,
-    )
+    const user = loginAccess === 'platform-admin-only'
+      ? await findMaintenanceFeishuPlatformAdmin(feishuUser.openId)
+      : await findOrCreateFeishuOAuthUser(
+          feishuUser,
+          state.inviteToken,
+          state.invitePassword,
+          state.organizationInviteToken,
+        )
     const token = await createSession(Number(user.id))
     response.redirect(buildFeishuOAuthSigninRedirect(platformPublicUrl(), state.returnTo, 'success', { token }))
   } catch (error) {

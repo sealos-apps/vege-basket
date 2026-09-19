@@ -693,9 +693,10 @@ Platform maintenance state is stored independently from configuration history. M
 an incomplete or failed database migration, or a missing platform configuration blocks ordinary
 API routes with `503 PLATFORM_MAINTENANCE`. Health/status remain public; after migration, the
 built-in administrator can log in during system-forced maintenance and use platform configuration,
-security, runtime, migration, and maintenance routes. Manual maintenance rejects every new password
-and Feishu login; an already-authenticated platform administrator session remains available to end
-maintenance. Recovery login never accepts pending project or organization invitations. PostgreSQL
+security, runtime, migration, and maintenance routes. Manual maintenance permits password or Feishu
+login only for accounts with an active platform-administrator grant; Feishu login reuses an existing
+verified account without registration or invitation processing. Recovery and maintenance login never
+accept pending project or organization invitations. PostgreSQL
 `LISTEN/NOTIFY` plus polling synchronizes maintenance state between replicas. System-forced
 maintenance cannot be disabled, and manual maintenance can end only after required platform
 configuration is valid and every online API replica has loaded the current configuration revision.

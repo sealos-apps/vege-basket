@@ -105,7 +105,7 @@ export function getPublicPlatformStatus() {
   }
 }
 
-export type PlatformLoginAccess = 'blocked' | 'builtin-admin-only' | 'open'
+export type PlatformLoginAccess = 'blocked' | 'builtin-admin-only' | 'open' | 'platform-admin-only'
 
 export function platformLoginAccess(status: {
   maintenance: { active: boolean; systemForced: boolean }
@@ -113,7 +113,7 @@ export function platformLoginAccess(status: {
 }): PlatformLoginAccess {
   if (!status.maintenance.active) return 'open'
   if (status.migration.phase !== 'completed') return 'blocked'
-  return status.maintenance.systemForced ? 'builtin-admin-only' : 'blocked'
+  return status.maintenance.systemForced ? 'builtin-admin-only' : 'platform-admin-only'
 }
 
 function isAlwaysAllowed(request: Request) {
@@ -121,6 +121,7 @@ function isAlwaysAllowed(request: Request) {
   if (getDatabaseMigrationStatus().phase !== 'completed') return false
   if (request.path === '/platform-info') return true
   if (request.path === '/auth/login' || request.path === '/auth/logout') return true
+  if (request.path === '/auth/feishu/oauth/url' || request.path === '/auth/feishu/oauth/callback') return true
   if ((request.path === '/auth/me' || request.path === '/auth/context') && request.method === 'GET') return true
   return [
     '/admin/platform-config',

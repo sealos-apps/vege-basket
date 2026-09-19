@@ -1051,8 +1051,8 @@ export function PlatformManagementWorkbench({
                   <p>{maintenance?.maintenance.systemForced
                     ? '系统强制维护期间只允许内置 admin 登录；普通业务接口返回 503。'
                     : maintenance?.maintenance.manual
-                      ? '手动维护期间禁止所有新登录；当前超级管理员会话仍可完成配置并结束维护。'
-                      : '进入维护后将禁止所有新登录，并暂停普通业务接口。'}</p>
+                      ? '手动维护期间仅允许超级管理员登录，普通用户无法建立新会话。'
+                      : '进入维护后仅允许超级管理员登录，并暂停普通业务接口。'}</p>
                 </div>
                 <Badge className={maintenance?.maintenance.active ? 'platform-maintenance-status active' : 'platform-maintenance-status'} variant={maintenance?.maintenance.active ? 'outline' : 'secondary'}>{maintenance?.maintenance.active ? '维护中' : '业务开放'}</Badge>
               </div>

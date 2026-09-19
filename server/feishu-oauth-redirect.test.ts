@@ -91,3 +91,11 @@ test('Feishu authorization uses the current public address and preserves it in s
   assert.match(appSource, /redirect_uri', redirectUri/u)
   assert.doesNotMatch(appSource, /getRequestOrigin/u)
 })
+
+test('manual maintenance Feishu login reuses only an existing active platform administrator', () => {
+  assert.match(appSource, /async function findMaintenanceFeishuPlatformAdmin/u)
+  assert.match(appSource, /join platform_admin_grants grant_row on grant_row\.user_id = users\.id/u)
+  assert.match(appSource, /users\.feishu_user_id = \$1::text and users\.account_status = 'active'/u)
+  assert.match(appSource, /loginAccess === 'platform-admin-only'\s*\? await findMaintenanceFeishuPlatformAdmin/u)
+  assert.match(appSource, /invitePassword: loginAccess === 'open'/u)
+})

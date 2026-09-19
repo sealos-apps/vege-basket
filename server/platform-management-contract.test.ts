@@ -196,12 +196,12 @@ test('maintenance mode blocks business APIs while keeping administrator recovery
   assert.match(workbenchSource, /系统正在强制维护/u)
   assert.match(workbenchSource, /maintenanceAppliedCount/u)
   assert.match(workbenchSource, /platform-migration-row/u)
-  assert.match(workbenchSource, /手动维护期间禁止所有新登录/u)
+  assert.match(workbenchSource, /手动维护期间仅允许超级管理员登录/u)
   assert.match(apiSource, /requestPlatformMutation\('maintenance'/u)
   assert.match(clientAppSource, /!workspaceLoaded && !maintenanceAdmin/u)
-  assert.match(clientAppSource, /登录已暂停/u)
+  assert.match(clientAppSource, /超级管理员登录/u)
   assert.match(clientAppSource, /内置管理员登录/u)
-  assert.doesNotMatch(clientAppSource, /当前只允许超级管理员使用密码登录/u)
+  assert.match(clientAppSource, /飞书登录只匹配已有超级管理员账号/u)
 })
 
 test('automatic database migrations are serialized, checksummed, and recorded', () => {

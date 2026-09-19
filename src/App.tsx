@@ -6144,13 +6144,14 @@ function LoginScreen({
   const recoveryLogin = Boolean(
     maintenance?.active && maintenance.systemForced && maintenanceStatus?.migration.phase === 'completed',
   )
-  const loginBlocked = Boolean(maintenance?.active && !recoveryLogin)
+  const maintenanceAdminLogin = Boolean(maintenance?.active && !maintenance.systemForced)
+  const loginBlocked = Boolean(maintenance?.active && !recoveryLogin && !maintenanceAdminLogin)
   const migrationPending = Boolean(
     maintenance?.systemForced && maintenanceStatus?.migration.phase !== 'completed',
   )
-  const maintenanceMessage = maintenance?.message || (
-    recoveryLogin ? '平台正在完成初始化，请使用内置 admin 账号恢复服务。' : '维护结束后即可重新登录。'
-  )
+  const maintenanceMessage = maintenance?.message || (recoveryLogin
+    ? '平台正在完成初始化，请使用内置 admin 账号恢复服务。'
+    : '平台正在维护，只有超级管理员可以登录。')
 
   return (
     <main className="login-screen">
@@ -6181,8 +6182,8 @@ function LoginScreen({
         >
           {maintenance?.active ? <div className="login-maintenance-notice" role="status"><WarningCircle /> <span><strong>{maintenance.systemForced ? '平台初始化中' : '平台维护中'}</strong>{maintenanceMessage}</span></div> : null}
           <div className="login-form-heading">
-            <strong>{migrationPending ? '登录暂不可用' : loginBlocked ? '登录已暂停' : recoveryLogin ? '内置管理员登录' : '登录'}</strong>
-            <span>{migrationPending ? '数据库迁移完成后才会开放内置管理员恢复登录。' : loginBlocked ? '维护期间不会创建新的登录会话。' : recoveryLogin ? '仅内置 admin 可以使用密码登录并完成平台恢复。' : '新用户请使用飞书登录；历史账号可以继续使用用户名和密码。'}</span>
+            <strong>{migrationPending ? '登录暂不可用' : recoveryLogin ? '内置管理员登录' : maintenanceAdminLogin ? '超级管理员登录' : '登录'}</strong>
+            <span>{migrationPending ? '数据库迁移完成后才会开放内置管理员恢复登录。' : recoveryLogin ? '仅内置 admin 可以使用密码登录并完成平台恢复。' : maintenanceAdminLogin ? '维护期间仅允许已授权的超级管理员登录。' : '新用户请使用飞书登录；历史账号可以继续使用用户名和密码。'}</span>
           </div>
           {!maintenance?.active && hasProjectInvite && (
             <div className="login-invite-note">
@@ -6276,7 +6277,7 @@ function LoginScreen({
           >
             <LinkSimple size={18} /> {feishuBusy ? '正在打开飞书...' : '用飞书继续'}
           </Button>
-          <p className="form-note">首次使用请通过公司飞书账号自动注册。</p></> : null}
+          <p className="form-note">{maintenanceAdminLogin ? '飞书登录只匹配已有超级管理员账号，不会自动注册。' : '首次使用请通过公司飞书账号自动注册。'}</p></> : null}
             </>
           )}
         </form>
