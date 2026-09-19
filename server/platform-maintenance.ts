@@ -291,10 +291,10 @@ export async function updatePlatformMaintenance(input: {
     if (changed) {
       await client.query(
         `update platform_operational_state
-            set maintenance_enabled = $1, maintenance_message = $2, revision = $3,
-                enabled_by_user_id = case when $1 then $4 else null end,
-                enabled_at = case when $1 then clock_timestamp() else null end,
-                updated_by_user_id = $4, updated_at = clock_timestamp()
+            set maintenance_enabled = $1::boolean, maintenance_message = $2::text, revision = $3::bigint,
+                enabled_by_user_id = case when $1::boolean then $4::bigint else null::bigint end,
+                enabled_at = case when $1::boolean then clock_timestamp() else null::timestamptz end,
+                updated_by_user_id = $4::bigint, updated_at = clock_timestamp()
           where singleton = true`,
         [input.enabled, normalizedMessage, revision, input.actorUserId],
       )

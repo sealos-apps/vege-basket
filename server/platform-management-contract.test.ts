@@ -192,6 +192,7 @@ test('maintenance mode blocks business APIs while keeping administrator recovery
   assert.match(maintenanceSource, /'\/admin\/organizations'/u)
   assert.match(maintenanceSource, /PLATFORM_MAINTENANCE_DISABLE_BLOCKED/u)
   assert.match(maintenanceSource, /result_changed/u)
+  assert.match(maintenanceSource, /enabled_by_user_id = case when \$1::boolean then \$4::bigint else null::bigint end/u)
   assert.match(workbenchSource, /系统正在强制维护/u)
   assert.match(workbenchSource, /maintenanceAppliedCount/u)
   assert.match(workbenchSource, /platform-migration-row/u)
