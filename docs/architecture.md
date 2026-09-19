@@ -692,11 +692,13 @@ database and is not a read-only smoke test.
 Platform maintenance state is stored independently from configuration history. Manual maintenance,
 an incomplete or failed database migration, or a missing platform configuration blocks ordinary
 API routes with `503 PLATFORM_MAINTENANCE`. Health/status remain public; after migration, the
-built-in administrator can log in and use platform configuration, security, runtime, migration,
-and maintenance routes. PostgreSQL `LISTEN/NOTIFY` plus polling synchronizes maintenance state
-between replicas. System-forced maintenance cannot be disabled, and manual maintenance can end
-only after required platform configuration is valid and every online API replica has loaded the
-current configuration revision.
+built-in administrator can log in during system-forced maintenance and use platform configuration,
+security, runtime, migration, and maintenance routes. Manual maintenance rejects every new password
+and Feishu login; an already-authenticated platform administrator session remains available to end
+maintenance. Recovery login never accepts pending project or organization invitations. PostgreSQL
+`LISTEN/NOTIFY` plus polling synchronizes maintenance state between replicas. System-forced
+maintenance cannot be disabled, and manual maintenance can end only after required platform
+configuration is valid and every online API replica has loaded the current configuration revision.
 The image-sync surface uses the repository, workflow, branch, and token in the encrypted
 platform configuration. Only platform administrators may edit or test those values. Each dispatch carries a server-generated UUID as the workflow
 `request_id`; uncertain POST responses remain recoverable until a matching GitHub `run-name`

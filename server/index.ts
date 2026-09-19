@@ -224,6 +224,7 @@ import { runAutomaticDatabaseMigrations, stopAutomaticDatabaseMigrations } from 
 import {
   platformMaintenanceMiddleware,
   getPublicPlatformStatus,
+  platformLoginAccess,
   startPlatformMaintenanceRuntime,
   stopPlatformMaintenanceRuntime,
 } from './platform-maintenance.ts'
@@ -4840,10 +4841,21 @@ app.post('/api/auth/register', asyncHandler(async (_request, response) => {
 }))
 
 app.post('/api/auth/login', asyncHandler(async (request, response) => {
+  const platformStatus = getPublicPlatformStatus()
+  const loginAccess = platformLoginAccess(platformStatus)
+  if (loginAccess === 'blocked') {
+    response.setHeader('Retry-After', '5')
+    response.status(503).json({
+      error: platformStatus.maintenance.message || '平台正在维护，暂时无法登录。',
+      code: 'PLATFORM_MAINTENANCE',
+      maintenance: platformStatus.maintenance,
+    })
+    return
+  }
   const username = normalizeUsername(request.body.username ?? request.body.email)
   const password = String(request.body.password ?? '')
-  const user = await query<UserRow & { password_hash: string }>(
-    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, password_hash, account_status from users where email = $1',
+  const user = await query<UserRow & { is_builtin_admin: boolean; password_hash: string }>(
+    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, password_hash, account_status, is_builtin_admin from users where email = $1',
     [username],
   )
   const row = user.rows[0]
@@ -4854,16 +4866,19 @@ app.post('/api/auth/login', asyncHandler(async (request, response) => {
   }
 
   const userId = Number(row.id)
-  if (getPublicPlatformStatus().maintenance.active && !(await isPlatformAdmin(userId))) {
+  if (loginAccess === 'builtin-admin-only' && !row.is_builtin_admin) {
     response.status(503).json({
-      error: '平台正在维护，当前只允许超级管理员登录。',
+      error: '平台正在初始化，当前只允许内置 admin 登录。',
       code: 'PLATFORM_MAINTENANCE',
+      maintenance: platformStatus.maintenance,
     })
     return
   }
-  await linkPendingMemberships(userId, row.email)
-  await acceptProjectInviteToken(userId, request.body.inviteToken, request.body.invitePassword)
-  await acceptOrganizationInviteToken(userId, request.body.organizationInviteToken)
+  if (loginAccess === 'open') {
+    await linkPendingMemberships(userId, row.email)
+    await acceptProjectInviteToken(userId, request.body.inviteToken, request.body.invitePassword)
+    await acceptOrganizationInviteToken(userId, request.body.organizationInviteToken)
+  }
   const token = await createSession(userId)
   response.json({
     token,

@@ -105,6 +105,17 @@ export function getPublicPlatformStatus() {
   }
 }
 
+export type PlatformLoginAccess = 'blocked' | 'builtin-admin-only' | 'open'
+
+export function platformLoginAccess(status: {
+  maintenance: { active: boolean; systemForced: boolean }
+  migration: { phase: string }
+}): PlatformLoginAccess {
+  if (!status.maintenance.active) return 'open'
+  if (status.migration.phase !== 'completed') return 'blocked'
+  return status.maintenance.systemForced ? 'builtin-admin-only' : 'blocked'
+}
+
 function isAlwaysAllowed(request: Request) {
   if (request.path === '/health' || request.path === '/ready' || request.path === '/platform-status') return true
   if (getDatabaseMigrationStatus().phase !== 'completed') return false

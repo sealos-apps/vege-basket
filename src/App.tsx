@@ -3289,7 +3289,12 @@ function App() {
         clearOrganizationInviteTokenFromUrl()
       }
       void refreshNotifications()
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 503) {
+        setAuthError(error.message)
+        void fetchPlatformStatus().then(setPlatformStatus).catch(() => undefined)
+        return
+      }
       setAuthError('登录失败，请检查用户名和密码。')
     }
   }
@@ -5112,7 +5117,7 @@ ${packageTimelineText}`
         }}
         onVerifyInvitePassword={submitInvitePassword}
         onSignIn={signIn}
-        maintenanceMessage={platformStatus?.maintenance.active ? (platformStatus.maintenance.message || '当前只允许超级管理员登录。') : undefined}
+        maintenanceStatus={platformStatus?.maintenance.active ? platformStatus : undefined}
       />
     )
   }
@@ -5149,7 +5154,7 @@ ${packageTimelineText}`
         onVerifyInvitePassword={submitInvitePassword}
         onSignIn={signIn}
         shareBackLabel="返回待办分享"
-        maintenanceMessage={platformStatus?.maintenance.active ? (platformStatus.maintenance.message || '当前只允许超级管理员登录。') : undefined}
+        maintenanceStatus={platformStatus?.maintenance.active ? platformStatus : undefined}
       />
     )
   }
@@ -5185,7 +5190,7 @@ ${packageTimelineText}`
           }}
           onVerifyInvitePassword={submitInvitePassword}
           onSignIn={signIn}
-          maintenanceMessage={platformStatus?.maintenance.active ? (platformStatus.maintenance.message || '当前只允许超级管理员登录。') : undefined}
+          maintenanceStatus={platformStatus?.maintenance.active ? platformStatus : undefined}
         />
     )
   }
@@ -6092,7 +6097,7 @@ function LoginScreen({
   onInvitePasswordChange,
   onVerifyInvitePassword,
   onSignIn,
-  maintenanceMessage,
+  maintenanceStatus,
   shareBackLabel = '返回 Bug 分享',
 }: {
   error: string
@@ -6109,7 +6114,7 @@ function LoginScreen({
   onInvitePasswordChange: (value: string) => void
   onVerifyInvitePassword: () => Promise<void>
   onSignIn: (username: string, password: string) => void
-  maintenanceMessage?: string
+  maintenanceStatus?: PlatformStatus
   shareBackLabel?: string
 }) {
   const [username, setUsername] = useState('')
@@ -6130,11 +6135,22 @@ function LoginScreen({
     }
   }
 
-  const shouldGateInvitePassword =
+  const maintenance = maintenanceStatus?.maintenance
+  const shouldGateInvitePassword = !maintenance?.active &&
     hasProjectInvite && invitePasswordRequired && !invitePasswordVerified
-  const shouldWaitInviteCheck =
+  const shouldWaitInviteCheck = !maintenance?.active &&
     hasProjectInvite && invitePasswordChecking && !invitePasswordRequired && !invitePasswordVerified
   const shouldHideAuthForm = shouldGateInvitePassword || shouldWaitInviteCheck
+  const recoveryLogin = Boolean(
+    maintenance?.active && maintenance.systemForced && maintenanceStatus?.migration.phase === 'completed',
+  )
+  const loginBlocked = Boolean(maintenance?.active && !recoveryLogin)
+  const migrationPending = Boolean(
+    maintenance?.systemForced && maintenanceStatus?.migration.phase !== 'completed',
+  )
+  const maintenanceMessage = maintenance?.message || (
+    recoveryLogin ? '平台正在完成初始化，请使用内置 admin 账号恢复服务。' : '维护结束后即可重新登录。'
+  )
 
   return (
     <main className="login-screen">
@@ -6163,12 +6179,12 @@ function LoginScreen({
             onSignIn(username, password)
           }}
         >
-          {maintenanceMessage ? <div className="login-maintenance-notice" role="status"><WarningCircle /> <span><strong>平台维护中</strong>{maintenanceMessage || '只允许超级管理员登录。'}</span></div> : null}
+          {maintenance?.active ? <div className="login-maintenance-notice" role="status"><WarningCircle /> <span><strong>{maintenance.systemForced ? '平台初始化中' : '平台维护中'}</strong>{maintenanceMessage}</span></div> : null}
           <div className="login-form-heading">
-            <strong>登录</strong>
-            <span>{maintenanceMessage ? '当前只允许超级管理员使用密码登录。' : '新用户请使用飞书登录；历史账号可以继续使用用户名和密码。'}</span>
+            <strong>{migrationPending ? '登录暂不可用' : loginBlocked ? '登录已暂停' : recoveryLogin ? '内置管理员登录' : '登录'}</strong>
+            <span>{migrationPending ? '数据库迁移完成后才会开放内置管理员恢复登录。' : loginBlocked ? '维护期间不会创建新的登录会话。' : recoveryLogin ? '仅内置 admin 可以使用密码登录并完成平台恢复。' : '新用户请使用飞书登录；历史账号可以继续使用用户名和密码。'}</span>
           </div>
-          {hasProjectInvite && (
+          {!maintenance?.active && hasProjectInvite && (
             <div className="login-invite-note">
               <LinkSimple size={16} />
               <span>
@@ -6178,7 +6194,7 @@ function LoginScreen({
               </span>
             </div>
           )}
-          {!hasProjectInvite && hasOrganizationInvite ? (
+          {!maintenance?.active && !hasProjectInvite && hasOrganizationInvite ? (
             <div className="login-invite-note">
               <LinkSimple size={16} />
               <span>检测到组织邀请链接，通过飞书或历史账号登录后会自动加入组织。</span>
@@ -6213,7 +6229,7 @@ function LoginScreen({
           {shouldWaitInviteCheck ? (
             <p className="form-note">正在检查邀请链接...</p>
           ) : null}
-          {!shouldHideAuthForm && (
+          {!loginBlocked && !shouldHideAuthForm && (
             <>
           <Label>
             用户名
@@ -6248,7 +6264,7 @@ function LoginScreen({
           <Button className="solid-button wide" type="submit">
             <SignIn size={18} /> 进入驾驶舱
           </Button>
-          {!maintenanceMessage ? <><div className="auth-divider">
+          {!recoveryLogin ? <><div className="auth-divider">
             <span>或</span>
           </div>
           <Button

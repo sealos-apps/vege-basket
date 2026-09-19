@@ -1036,7 +1036,7 @@ export function PlatformManagementWorkbench({
 
           {tab === 'organizations' ? <div className="platform-organizations"><div className="platform-list-tools"><div className="platform-search"><MagnifyingGlass /><Input placeholder="搜索组织或所有者" value={organizationSearch} onChange={(event) => setOrganizationSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void loadOrganizations() }} /></div><Button variant="outline" onClick={() => void loadOrganizations()} disabled={busy}>查询</Button><Button onClick={() => setCreateOpen(true)} disabled={busy}><Plus />新建组织</Button></div><div className="platform-table-list">{organizations.map((organization) => <article className="platform-organization-row" key={organization.id}><div><strong>{organization.name}</strong><small>所有者：{organization.owner.displayName}</small></div><div className="platform-counts"><span>{organization.memberCount} 成员</span><span>{organization.projectCount} 项目</span><span>{organization.testSpaceCount} 测试空间</span></div><Badge variant={organization.canDelete ? 'secondary' : 'outline'}>{organization.canDelete ? '空组织' : `${organization.blockers.reduce((sum, item) => sum + item.count, 0)} 项关联数据`}</Badge><ConfirmActionDialog actionKey={`platform-organization-delete:${organization.id}`} title={`删除组织“${organization.name}”？`} description={organization.canDelete ? '仅删除组织壳和唯一所有者关系，操作不可恢复。' : '该组织仍有关联业务或历史数据，当前不能删除。'} confirmationName={organization.name} confirmLabel="删除组织" confirmDisabled={!organization.canDelete} trigger={<Button size="icon" variant="destructive" title="删除组织"><Trash /></Button>} onConfirm={async () => { await deletePlatformOrganization(organization.id, organization.name); await loadOrganizations(); return true }} /></article>)}</div></div> : null}
 
-          {tab === 'maintenance' ? <div className="platform-runtime">
+          {tab === 'maintenance' ? <div className="platform-maintenance">
             <div className="platform-runtime-summary">
               <div><span>当前状态</span><strong>{maintenance?.maintenance.active ? '维护中' : '正常运行'}</strong></div>
               <div><span>数据库迁移</span><strong>{maintenance?.migration.phase === 'completed' ? '已完成' : maintenance?.migration.phase === 'failed' ? '失败' : '进行中'}</strong></div>
@@ -1044,28 +1044,52 @@ export function PlatformManagementWorkbench({
               <div><span>实例已加载</span><strong>{maintenanceAppliedCount}/{onlineInstances.length}</strong></div>
             </div>
             {maintenance?.maintenance.systemForced ? <div className="platform-alert error" role="status"><WarningCircle />系统正在强制维护：{maintenance.maintenance.systemReasons.join('、')}</div> : null}
-            <section>
-              <h4>访问控制</h4>
-              <p>维护期间只保留健康检查、admin 登录和平台配置，其他业务接口返回 503。</p>
-              <Field label="维护说明" hint="用户在维护期间看到的提示"><Textarea disabled={busy} maxLength={500} value={maintenanceMessage} onChange={(event) => setMaintenanceMessage(event.target.value)} /></Field>
-              {maintenance?.maintenance.manual && maintenanceMessage !== maintenance.maintenance.message ? <Button type="button" variant="outline" disabled={busy} onClick={() => void changeMaintenance(true)}><CheckCircle />更新说明</Button> : null}
-              {maintenance?.maintenance.manual ? <ConfirmActionDialog
-                actionKey={`platform-maintenance-disable:${maintenance.maintenance.revision}`}
-                title="结束维护模式？"
-                description="系统会检查数据库迁移、必填平台配置和所有在线 API 实例的加载状态。"
-                confirmLabel="结束维护"
-                trigger={<Button disabled={busy || maintenance.maintenance.systemForced}><CheckCircle />结束维护</Button>}
-                onConfirm={() => changeMaintenance(false)}
-              /> : <ConfirmActionDialog
-                actionKey={`platform-maintenance-enable:${maintenance?.maintenance.revision ?? 0}`}
-                title="进入维护模式？"
-                description="普通用户的现有业务请求将被立即拒绝，超级管理员仍可登录并调整平台配置。"
-                confirmLabel="进入维护"
-                trigger={<Button disabled={busy} variant="destructive"><Wrench />进入维护</Button>}
-                onConfirm={() => changeMaintenance(true)}
-              />}
+            <section className="platform-maintenance-control">
+              <div className="platform-maintenance-heading">
+                <div>
+                  <h4>访问控制</h4>
+                  <p>{maintenance?.maintenance.systemForced
+                    ? '系统强制维护期间只允许内置 admin 登录；普通业务接口返回 503。'
+                    : maintenance?.maintenance.manual
+                      ? '手动维护期间禁止所有新登录；当前超级管理员会话仍可完成配置并结束维护。'
+                      : '进入维护后将禁止所有新登录，并暂停普通业务接口。'}</p>
+                </div>
+                <Badge className={maintenance?.maintenance.active ? 'platform-maintenance-status active' : 'platform-maintenance-status'} variant={maintenance?.maintenance.active ? 'outline' : 'secondary'}>{maintenance?.maintenance.active ? '维护中' : '业务开放'}</Badge>
+              </div>
+              <div className="platform-maintenance-form">
+                <Field label="维护说明" hint="登录页和已登录普通用户看到的提示"><Textarea disabled={busy} maxLength={500} value={maintenanceMessage} onChange={(event) => setMaintenanceMessage(event.target.value)} /></Field>
+                <div className="platform-maintenance-actions">
+                  {maintenance?.maintenance.manual && maintenanceMessage !== maintenance.maintenance.message ? <Button type="button" variant="outline" disabled={busy} onClick={() => void changeMaintenance(true)}><CheckCircle />更新说明</Button> : null}
+                  {maintenance?.maintenance.manual ? <ConfirmActionDialog
+                    actionKey={`platform-maintenance-disable:${maintenance.maintenance.revision}`}
+                    title="结束维护模式？"
+                    description="系统会检查数据库迁移、必填平台配置和所有在线 API 实例的加载状态。"
+                    confirmLabel="结束维护"
+                    trigger={<Button disabled={busy || maintenance.maintenance.systemForced}><CheckCircle />结束维护</Button>}
+                    onConfirm={() => changeMaintenance(false)}
+                  /> : <ConfirmActionDialog
+                    actionKey={`platform-maintenance-enable:${maintenance?.maintenance.revision ?? 0}`}
+                    title="进入维护模式？"
+                    description="所有新登录和普通业务请求将被立即拒绝；当前超级管理员会话可以继续完成平台管理。"
+                    confirmLabel="进入维护"
+                    trigger={<Button disabled={busy} variant="destructive"><Wrench />进入维护</Button>}
+                    onConfirm={() => changeMaintenance(true)}
+                  />}
+                </div>
+              </div>
             </section>
-            <section><h4>自动迁移记录</h4>{migrations.length > 0 ? migrations.map((migration) => <div className="platform-runtime-row" key={migration.id}><span className="platform-runtime-dot applied" /><code>{migration.id}</code><span>{migration.name}</span><strong>{migration.durationMs} ms</strong><time>{new Date(migration.appliedAt).toLocaleString('zh-CN')}</time></div>) : <p>暂无已完成的迁移。</p>}</section>
+            <section className="platform-migrations">
+              <div className="platform-maintenance-heading"><div><h4>自动迁移记录</h4><p>数据库结构与数据升级由应用副本协调执行。</p></div></div>
+              {migrations.length > 0 ? <div className="platform-migration-list">
+                <div className="platform-migration-header" aria-hidden><span>迁移版本</span><span>内容</span><span>耗时</span><span>完成时间</span></div>
+                {migrations.map((migration) => <div className="platform-migration-row" key={migration.id}>
+                  <code>{migration.id}</code>
+                  <span>{migration.name}</span>
+                  <strong>{migration.durationMs} ms</strong>
+                  <time>{new Date(migration.appliedAt).toLocaleString('zh-CN')}</time>
+                </div>)}
+              </div> : <p className="platform-empty-note">暂无已完成的迁移。</p>}
+            </section>
           </div> : null}
 
           {tab === 'security' ? <div className="platform-security"><div className="platform-runtime-summary"><div><span>应用加密</span><strong>{security?.configured ? '已启用' : '配置异常'}</strong></div><div><span>加密算法</span><strong>{security?.algorithm ?? '未知'}</strong></div><div><span>活动密钥标识</span><strong>{security?.activeKeyId || '未配置'}</strong></div></div><section><h4>密钥保留状态</h4><p>现有密文引用的旧密钥必须继续保留。这里只显示标识，不显示密钥材料。</p><div className="platform-key-list">{security?.retainedKeyIds.map((keyId) => <Badge key={keyId} variant={keyId === security.activeKeyId ? 'default' : 'outline'}>{keyId}{keyId === security.activeKeyId ? '（当前）' : ''}</Badge>)}</div></section><section><h4>加密覆盖</h4><div className="platform-security-check"><CheckCircle /><span>平台配置与历史版本使用应用层加密存储</span></div><div className="platform-security-check"><CheckCircle /><span>敏感业务文本使用应用层加密存储</span></div></section><section><h4>最近巡检</h4>{security?.lastInspection ? <div className="platform-inspection"><Badge variant={security.lastInspection.status === 'passed' ? 'secondary' : 'destructive'}>{security.lastInspection.status === 'passed' ? '通过' : '失败'}</Badge><span>{security.lastInspection.result.summary || '巡检已记录'}</span><time>{new Date(security.lastInspection.createdAt).toLocaleString('zh-CN')}</time></div> : <p>尚无巡检记录。迁移或密钥轮换后应运行已授权的数据加密巡检。</p>}</section></div> : null}

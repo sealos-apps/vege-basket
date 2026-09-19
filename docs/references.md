@@ -69,6 +69,13 @@ legacy password accounts may still sign in. `VEGES_ADMIN_USERNAMES` and the form
 environment variables are accepted only by the explicit, operator-run `platform:config import`
 compatibility command. Normal startup never imports them.
 
+Manual platform maintenance rejects all new password and Feishu logins and shows the configured
+maintenance message on the login page. After database migration completes, system-forced
+maintenance is the recovery exception: only the built-in `admin` may create a password session,
+and that recovery login does not process pending project or organization invitations. Login remains
+closed while migration is incomplete or failed because the authentication schema is not ready.
+Existing platform-administrator sessions retain access to the platform recovery routes.
+
 Successful Feishu OAuth is treated as internal identity and may create a user without a
 project invite. The Feishu custom application's availability scope must therefore be
 restricted to the intended company users; Veges has no separate tenant/domain allowlist.
