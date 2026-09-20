@@ -2388,11 +2388,21 @@ create table if not exists changelog_entries (
   title_encrypted text not null,
   version_encrypted text not null default '',
   content_encrypted text not null,
+  announce_on_login boolean not null default false,
   created_by_user_id bigint references users(id) on delete set null,
   updated_by_user_id bigint references users(id) on delete set null,
   published_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+alter table changelog_entries
+  add column if not exists announce_on_login boolean not null default false;
+
+create table if not exists user_changelog_announcement_states (
+  user_id bigint primary key references users(id) on delete cascade,
+  last_acknowledged_entry_id bigint not null references changelog_entries(id) on delete restrict,
+  acknowledged_at timestamptz not null default now()
 );
 
 create index if not exists idx_projects_user_id on projects(user_id);

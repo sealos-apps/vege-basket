@@ -120,6 +120,7 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import {
+  acknowledgeChangelogAnnouncement,
   acceptOrganizationInviteLink,
   acceptProjectInvitation,
   archiveDraft,
@@ -159,6 +160,7 @@ import {
   fetchAiStatus,
   fetchAiConversations,
   fetchAiConversationTurns,
+  fetchChangelogAnnouncement,
   fetchNavigationCounts,
   fetchOrganization,
   fetchOrganizations,
@@ -251,6 +253,7 @@ import type {
   AiTurn,
   AiTurnOutcome,
   AiTurnRunResponse,
+  ChangelogEntry,
   Todo,
   TodoNote,
 } from './types'
@@ -315,6 +318,7 @@ import { PlatformManagementWorkbench } from './components/platform-management-wo
 import { ProjectSubprojectsPanel } from './components/project-subprojects-panel'
 import { ProjectModulePicker } from './components/project-module-picker'
 import { ChangelogWorkbench } from './components/changelog-workbench'
+import { ChangelogAnnouncementDialog } from './components/changelog-announcement-dialog'
 import { ImageSyncWorkbench } from './components/image-sync-workbench'
 import { MarkdownPreview } from './components/markdown-preview'
 import {
@@ -1802,6 +1806,10 @@ function App() {
   const [changelogCanManage, setChangelogCanManage] = useState(false)
   const [changelogEditorOpen, setChangelogEditorOpen] = useState(false)
   const [changelogCreateRequest, setChangelogCreateRequest] = useState(0)
+  const [changelogAnnouncement, setChangelogAnnouncement] = useState<ChangelogEntry | null>(null)
+  const [changelogAnnouncementUnreadCount, setChangelogAnnouncementUnreadCount] = useState(0)
+  const [changelogAnnouncementBusy, setChangelogAnnouncementBusy] = useState(false)
+  const [changelogAnnouncementError, setChangelogAnnouncementError] = useState('')
 
   useEffect(() => {
     let active = true
@@ -2416,6 +2424,51 @@ function App() {
         if (authSessionGenerationRef.current === sessionGeneration) setWorkspaceLoaded(true)
       })
   }, [applyWorkspace, loggedIn, refreshNotifications, resetWorkspaceState])
+
+  useEffect(() => {
+    setChangelogAnnouncement(null)
+    setChangelogAnnouncementUnreadCount(0)
+    setChangelogAnnouncementBusy(false)
+    setChangelogAnnouncementError('')
+    if (!loggedIn || !workspaceLoaded || !authUserId) return
+
+    const sessionGeneration = authSessionGenerationRef.current
+    const controller = new AbortController()
+    let loading = false
+    let retryNeeded = false
+
+    const loadAnnouncement = async () => {
+      if (loading || controller.signal.aborted) return
+      loading = true
+      try {
+        const result = await fetchChangelogAnnouncement({ signal: controller.signal })
+        if (
+          controller.signal.aborted ||
+          authSessionGenerationRef.current !== sessionGeneration
+        ) return
+        setChangelogAnnouncement(result.entry)
+        setChangelogAnnouncementUnreadCount(result.unreadCount)
+        setChangelogAnnouncementError('')
+        retryNeeded = false
+      } catch {
+        if (!controller.signal.aborted) retryNeeded = true
+      } finally {
+        loading = false
+      }
+    }
+    const retryOnForeground = () => {
+      if (retryNeeded && document.visibilityState === 'visible') void loadAnnouncement()
+    }
+
+    void loadAnnouncement()
+    window.addEventListener('focus', retryOnForeground)
+    document.addEventListener('visibilitychange', retryOnForeground)
+    return () => {
+      controller.abort()
+      window.removeEventListener('focus', retryOnForeground)
+      document.removeEventListener('visibilitychange', retryOnForeground)
+    }
+  }, [authUserId, loggedIn, workspaceLoaded])
 
   useEffect(() => {
     if (!loggedIn || !authUserId) {
@@ -3316,6 +3369,50 @@ function App() {
     }
   }
 
+  async function acknowledgeCurrentChangelogAnnouncement() {
+    const entry = changelogAnnouncement
+    if (!entry || changelogAnnouncementBusy) return
+    const sessionGeneration = authSessionGenerationRef.current
+    setChangelogAnnouncementBusy(true)
+    setChangelogAnnouncementError('')
+    try {
+      await acknowledgeChangelogAnnouncement(entry.id)
+      if (authSessionGenerationRef.current !== sessionGeneration) return
+      setChangelogAnnouncement(null)
+      setChangelogAnnouncementUnreadCount(0)
+      try {
+        const result = await fetchChangelogAnnouncement()
+        if (authSessionGenerationRef.current !== sessionGeneration) return
+        setChangelogAnnouncement(result.entry)
+        setChangelogAnnouncementUnreadCount(result.unreadCount)
+      } catch {
+        // The acknowledgement is canonical; a later announcement can be loaded next session.
+      }
+    } catch (acknowledgeError) {
+      if (authSessionGenerationRef.current !== sessionGeneration) return
+      try {
+        const result = await fetchChangelogAnnouncement()
+        if (authSessionGenerationRef.current !== sessionGeneration) return
+        setChangelogAnnouncement(result.entry)
+        setChangelogAnnouncementUnreadCount(result.unreadCount)
+        if (result.entry?.id === entry.id) {
+          setChangelogAnnouncementError(formatApiErrorDiagnostic(
+            acknowledgeError,
+            '已读状态保存失败，请稍后重试。',
+          ))
+        }
+      } catch {
+        if (authSessionGenerationRef.current === sessionGeneration) {
+          setChangelogAnnouncementError('无法确认已读状态，请检查网络后重试。')
+        }
+      }
+    } finally {
+      if (authSessionGenerationRef.current === sessionGeneration) {
+        setChangelogAnnouncementBusy(false)
+      }
+    }
+  }
+
   const signOut = useCallback(() => {
     authSessionGenerationRef.current += 1
     notificationRefreshRequestIdRef.current += 1
@@ -3334,6 +3431,10 @@ function App() {
     setAuthUser(null)
     setAuthError('')
     setRoleSelectionOpen(false)
+    setChangelogAnnouncement(null)
+    setChangelogAnnouncementUnreadCount(0)
+    setChangelogAnnouncementBusy(false)
+    setChangelogAnnouncementError('')
     setWorkspaceError('')
     setWorkspaceLoaded(false)
     setNotifications(emptyNotifications)
@@ -5070,6 +5171,21 @@ ${packageTimelineText}`
     URL.revokeObjectURL(url)
   }
 
+  const changelogAnnouncementDialog = authUser ? (
+    <ChangelogAnnouncementDialog
+      busy={changelogAnnouncementBusy}
+      entry={changelogAnnouncement}
+      error={changelogAnnouncementError}
+      open={Boolean(
+        changelogAnnouncement &&
+        !roleSelectionOpen &&
+        !(inviteToken && invitePasswordRequired && !invitePasswordVerified)
+      )}
+      unreadCount={changelogAnnouncementUnreadCount}
+      onAcknowledge={() => void acknowledgeCurrentChangelogAnnouncement()}
+    />
+  ) : null
+
   if (bugShareToken && !loggedIn && bugShareLoginRequested) {
     return (
       <LoginScreen
@@ -5097,13 +5213,18 @@ ${packageTimelineText}`
   }
 
   if (bugShareToken) {
-    return <BugShareView
-      authUser={authUser}
-      onBackToVeges={authUser ? returnToVegesFromShare : undefined}
-      onLogin={() => setBugShareLoginRequested(true)}
-      onOpenAssignedBug={openAssignedBugFromShare}
-      token={bugShareToken}
-    />
+    return (
+      <>
+        {changelogAnnouncementDialog}
+        <BugShareView
+          authUser={authUser}
+          onBackToVeges={authUser ? returnToVegesFromShare : undefined}
+          onLogin={() => setBugShareLoginRequested(true)}
+          onOpenAssignedBug={openAssignedBugFromShare}
+          token={bugShareToken}
+        />
+      </>
+    )
   }
 
   if (todoShareToken && !loggedIn && todoShareLoginRequested) {
@@ -5135,12 +5256,15 @@ ${packageTimelineText}`
 
   if (todoShareToken) {
     return (
-      <TodoShareView
-        authUser={authUser}
-        onLogin={() => setTodoShareLoginRequested(true)}
-        onOpenTodo={openTodoFromShare}
-        token={todoShareToken}
-      />
+      <>
+        {changelogAnnouncementDialog}
+        <TodoShareView
+          authUser={authUser}
+          onLogin={() => setTodoShareLoginRequested(true)}
+          onOpenTodo={openTodoFromShare}
+          token={todoShareToken}
+        />
+      </>
     )
   }
 
@@ -5187,11 +5311,11 @@ ${packageTimelineText}`
       onSelect={(role) => void changeActiveUserRole(role)}
     />
   ) : null
-
   if (authUser?.activeRole === 'tester' && (view === 'testing' || view === 'changelog')) {
     return (
       <>
         {roleSelectionDialog}
+        {changelogAnnouncementDialog}
         <TestWorkbench
           accountMenu={(
             <AccountMenu
@@ -5229,6 +5353,7 @@ ${packageTimelineText}`
     <main className={hideSidebar ? 'app-shell sidebar-hidden' : 'app-shell'}>
       {confirmationDialog}
       {roleSelectionDialog}
+      {changelogAnnouncementDialog}
       {!hideSidebar && (
         <aside className="sidebar" aria-label="主导航">
           <div className="brand-block">

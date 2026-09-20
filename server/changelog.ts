@@ -10,12 +10,14 @@ export const changelogVersionMaxLength = 40
 export const changelogContentMaxLength = 50_000
 
 export type ChangelogPayload = {
+  announceOnLogin?: boolean
   content: string
   title: string
   version: string
 }
 
 type ChangelogRow = {
+  announce_on_login: boolean
   content_encrypted: string
   created_at: Date | string
   created_by_user_id: number | string | null
@@ -33,14 +35,19 @@ export function normalizeChangelogPayload(input: unknown): ChangelogPayload | nu
   const title = typeof value.title === 'string' ? value.title.trim() : ''
   const version = typeof value.version === 'string' ? value.version.trim() : ''
   const content = typeof value.content === 'string' ? value.content.trim() : ''
+  const announceOnLogin = value.announceOnLogin
   if (!title || title.length > changelogTitleMaxLength) return null
   if (version.length > changelogVersionMaxLength) return null
   if (!content || content.length > changelogContentMaxLength) return null
-  return { content, title, version }
+  if (announceOnLogin !== undefined && typeof announceOnLogin !== 'boolean') return null
+  return announceOnLogin === undefined
+    ? { content, title, version }
+    : { announceOnLogin, content, title, version }
 }
 
 function serializeChangelogEntry(row: ChangelogRow) {
   return {
+    announceOnLogin: row.announce_on_login,
     content: decryptText(row.content_encrypted),
     createdAt: new Date(row.created_at).toISOString(),
     createdByUserId: row.created_by_user_id == null ? null : Number(row.created_by_user_id),
@@ -81,7 +88,7 @@ changelogRouter.get('/changelog', async (request, response, next) => {
     if (!session) return
     const result = await query<ChangelogRow>(
       `
-      select id, title_encrypted, version_encrypted, content_encrypted,
+      select id, title_encrypted, version_encrypted, content_encrypted, announce_on_login,
         created_by_user_id, updated_by_user_id, published_at, created_at, updated_at
       from changelog_entries
       order by published_at desc, id desc
@@ -90,6 +97,86 @@ changelogRouter.get('/changelog', async (request, response, next) => {
     response.json({
       canManage: await isPlatformAdmin(session.userId),
       entries: result.rows.map(serializeChangelogEntry),
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+changelogRouter.get('/changelog/announcement', async (request, response, next) => {
+  try {
+    const session = await getSession(request, response)
+    if (!session) return
+    const result = await query<ChangelogRow & { unread_count: number | string }>(
+      `
+      with pending as (
+        select entry.id, entry.title_encrypted, entry.version_encrypted,
+          entry.content_encrypted, entry.announce_on_login,
+          entry.created_by_user_id, entry.updated_by_user_id,
+          entry.published_at, entry.created_at, entry.updated_at,
+          count(*) over () as unread_count
+        from changelog_entries entry
+        left join user_changelog_announcement_states state
+          on state.user_id = $1::bigint
+        where entry.announce_on_login = true
+          and entry.id > coalesce(state.last_acknowledged_entry_id, 0::bigint)
+      )
+      select *
+      from pending
+      order by id desc
+      limit 1
+      `,
+      [session.userId],
+    )
+    const row = result.rows[0]
+    response.json({
+      entry: row ? serializeChangelogEntry(row) : null,
+      unreadCount: row ? Number(row.unread_count) : 0,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+changelogRouter.put('/changelog/announcement-read-state', async (request, response, next) => {
+  try {
+    const session = await getSession(request, response)
+    if (!session) return
+    const throughEntryId = Number(request.body.throughEntryId)
+    if (!Number.isSafeInteger(throughEntryId) || throughEntryId <= 0) {
+      response.status(400).json({ error: 'Invalid changelog entry id' })
+      return
+    }
+    const result = await query<{ last_acknowledged_entry_id: number | string }>(
+      `
+      insert into user_changelog_announcement_states (
+        user_id, last_acknowledged_entry_id, acknowledged_at
+      )
+      select $1::bigint, entry.id, now()
+      from changelog_entries entry
+      where entry.id = $2::bigint
+        and entry.announce_on_login = true
+      on conflict (user_id) do update
+      set last_acknowledged_entry_id = greatest(
+            user_changelog_announcement_states.last_acknowledged_entry_id,
+            excluded.last_acknowledged_entry_id
+          ),
+          acknowledged_at = case
+            when excluded.last_acknowledged_entry_id >
+              user_changelog_announcement_states.last_acknowledged_entry_id
+              then now()
+            else user_changelog_announcement_states.acknowledged_at
+          end
+      returning last_acknowledged_entry_id
+      `,
+      [session.userId, throughEntryId],
+    )
+    if (!result.rows[0]) {
+      response.status(404).json({ error: 'Changelog announcement not found' })
+      return
+    }
+    response.json({
+      acknowledgedThroughEntryId: Number(result.rows[0].last_acknowledged_entry_id),
     })
   } catch (error) {
     next(error)
@@ -109,16 +196,17 @@ changelogRouter.post('/admin/changelog', async (request, response, next) => {
     const result = await query<ChangelogRow>(
       `
       insert into changelog_entries (
-        title_encrypted, version_encrypted, content_encrypted,
+        title_encrypted, version_encrypted, content_encrypted, announce_on_login,
         created_by_user_id, updated_by_user_id
-      ) values ($1, $2, $3, $4, $4)
-      returning id, title_encrypted, version_encrypted, content_encrypted,
+      ) values ($1, $2, $3, $4, $5, $5)
+      returning id, title_encrypted, version_encrypted, content_encrypted, announce_on_login,
         created_by_user_id, updated_by_user_id, published_at, created_at, updated_at
       `,
       [
         encryptText(payload.title),
         encryptText(payload.version),
         encryptText(payload.content),
+        payload.announceOnLogin ?? true,
         session?.userId,
       ],
     )
@@ -149,16 +237,18 @@ changelogRouter.patch('/admin/changelog/:id', async (request, response, next) =>
       set title_encrypted = $1,
           version_encrypted = $2,
           content_encrypted = $3,
-          updated_by_user_id = $4,
+          announce_on_login = coalesce($4::boolean, announce_on_login),
+          updated_by_user_id = $5,
           updated_at = now()
-      where id = $5
-      returning id, title_encrypted, version_encrypted, content_encrypted,
+      where id = $6
+      returning id, title_encrypted, version_encrypted, content_encrypted, announce_on_login,
         created_by_user_id, updated_by_user_id, published_at, created_at, updated_at
       `,
       [
         encryptText(payload.title),
         encryptText(payload.version),
         encryptText(payload.content),
+        payload.announceOnLogin ?? null,
         session?.userId,
         id,
       ],

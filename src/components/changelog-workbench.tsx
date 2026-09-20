@@ -15,6 +15,7 @@ import {
 } from '@/api'
 import { Button } from './ui/button'
 import { Card } from './ui/card'
+import { Checkbox } from './ui/checkbox'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
 import { MarkdownPreview } from './markdown-preview'
@@ -65,6 +66,7 @@ export function ChangelogWorkbench({
   const [titleDraft, setTitleDraft] = useState('')
   const [versionDraft, setVersionDraft] = useState('')
   const [contentDraft, setContentDraft] = useState('')
+  const [announceOnLoginDraft, setAnnounceOnLoginDraft] = useState(true)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -104,6 +106,7 @@ export function ChangelogWorkbench({
     setTitleDraft('')
     setVersionDraft('')
     setContentDraft('')
+    setAnnounceOnLoginDraft(true)
     setError('')
   }, [canManage, createRequest])
 
@@ -118,6 +121,7 @@ export function ChangelogWorkbench({
     setTitleDraft(entry.title)
     setVersionDraft(entry.version)
     setContentDraft(entry.content)
+    setAnnounceOnLoginDraft(entry.announceOnLogin)
     setError('')
   }
 
@@ -130,6 +134,7 @@ export function ChangelogWorkbench({
   async function saveEntry(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const payload = {
+      announceOnLogin: announceOnLoginDraft,
       content: contentDraft,
       title: titleDraft,
       version: versionDraft,
@@ -196,6 +201,17 @@ export function ChangelogWorkbench({
                 onChange={setContentDraft}
               />
             </div>
+            <Label className="changelog-announcement-setting">
+              <Checkbox
+                checked={announceOnLoginDraft}
+                disabled={saving}
+                onCheckedChange={(checked) => setAnnounceOnLoginDraft(checked === true)}
+              />
+              <span>
+                <strong>登录时展示</strong>
+                <small>所有尚未读到这条更新的用户会在进入工作区时看到公告。</small>
+              </span>
+            </Label>
             {error ? <p className="form-error">{error}</p> : null}
             <div className="changelog-editor-actions">
               <Button type="button" variant="outline" disabled={saving} onClick={closeEditor}>取消</Button>
@@ -246,6 +262,7 @@ export function ChangelogWorkbench({
                     <span className="changelog-entry-copy">
                       <span className="changelog-entry-meta">
                         {entry.version ? <span className="changelog-version">{entry.version}</span> : null}
+                        {entry.announceOnLogin ? <span className="changelog-announcement-badge">登录公告</span> : null}
                         <span>{formatChangelogDate(entry.publishedAt)}</span>
                       </span>
                       <strong>{entry.title}</strong>
