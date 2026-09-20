@@ -145,6 +145,7 @@ export type AuthUser = {
   feishuEmail: string
   feishuLinked: boolean
   id: number
+  isBuiltinAdmin: boolean
   isSystemAdmin: boolean
   roles: UserRole[]
   username: string
@@ -156,6 +157,7 @@ export type ManagedUser = {
   accountStatus: UserAccountStatus
   displayName: string
   feishuIdentityVerified: boolean
+  feishuLinked: boolean
   id: number
   isBuiltinAdmin: boolean
   permissionVersion: number
@@ -568,10 +570,23 @@ export function loginAccount(payload: {
 
 export function updateCurrentUser(payload: {
   displayName: string
+  expectedDisplayName: string
 }) {
-  return request<{ user: AuthUser }>('/api/auth/me', {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('users', requestId, () => request<{
+    changed: boolean
+    displayName: string
+    permissionVersion: number
+    replayed: boolean
+  }>('/api/auth/me', {
     method: 'PATCH',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, requestId }),
+  }))
+}
+
+export function syncCurrentUserFeishuName() {
+  return request<{ changed: boolean; user: AuthUser }>('/api/auth/feishu/name-sync', {
+    method: 'POST',
   })
 }
 
@@ -696,6 +711,18 @@ export function updateManagedUserPermissions(
       body: JSON.stringify({ ...payload, requestId }),
     },
   ))
+}
+
+export function syncManagedUserFeishuName(userId: number) {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('users', requestId, () => request<{
+    changed: boolean
+    displayName: string
+    replayed: boolean
+  }>(`/api/admin/users/${userId}/feishu-name-sync`, {
+    method: 'POST',
+    body: JSON.stringify({ requestId }),
+  }))
 }
 
 export function fetchPlatformConfig() {

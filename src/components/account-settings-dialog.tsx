@@ -1,5 +1,6 @@
 import { ConfirmActionDialog } from './confirm-action-dialog'
 import {
+  ArrowClockwise,
   Bell,
   LinkSimple,
   LockKey,
@@ -48,6 +49,7 @@ export type AccountSettingsDialogProps = {
   onDisconnectFeishu: () => Promise<AuthUser>
   onOpenChange: (open: boolean) => void
   onSaveProfile: (payload: { displayName: string }) => Promise<void>
+  onSyncFeishuName: () => Promise<AuthUser>
   returnFocusRef?: RefObject<HTMLElement | null>
 }
 
@@ -72,6 +74,7 @@ export function AccountSettingsDialog({
   onDisconnectFeishu,
   onOpenChange,
   onSaveProfile,
+  onSyncFeishuName,
   returnFocusRef,
 }: AccountSettingsDialogProps) {
   const [section, setSection] = useState<AccountSettingsSection>('profile')
@@ -110,12 +113,14 @@ export function AccountSettingsDialog({
   const activeMutationIdRef = useRef<number | null>(null)
   const subscriptionRequestIdRef = useRef(0)
   const profileInputRef = useRef<HTMLInputElement>(null)
+  const profilePrimaryActionRef = useRef<HTMLButtonElement>(null)
   const notificationPrimaryActionRef = useRef<HTMLButtonElement>(null)
   const securityInputRef = useRef<HTMLInputElement>(null)
 
   const displayName = savedDisplayName ?? getDisplayName(user)
   const feishuLinked = !feishuDisconnected && Boolean(user?.feishuLinked)
   const feishuEmail = feishuDisconnected ? '' : user?.feishuEmail ?? ''
+  const isBuiltinAdmin = user?.isBuiltinAdmin === true
   const profileChanged = profileDraft.trim() !== displayName.trim()
   const subscriptionChanged =
     subscriptionDraft.enabled !== persistedSubscription.enabled ||
@@ -238,7 +243,10 @@ export function AccountSettingsDialog({
     if (accountMutationBusy || nextSection === section) return
     setSection(nextSection)
     window.requestAnimationFrame(() => {
-      if (nextSection === 'profile') profileInputRef.current?.focus()
+      if (nextSection === 'profile') {
+        if (isBuiltinAdmin) profileInputRef.current?.focus()
+        else profilePrimaryActionRef.current?.focus()
+      }
       if (nextSection === 'notifications') notificationPrimaryActionRef.current?.focus()
       if (nextSection === 'security') securityInputRef.current?.focus()
     })
@@ -247,8 +255,8 @@ export function AccountSettingsDialog({
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const displayNameValue = profileDraft.trim()
-    if (!displayNameValue) {
-      setProfileError('昵称不能为空。')
+    if (isBuiltinAdmin && !displayNameValue) {
+      setProfileError('姓名不能为空。')
       return
     }
 
@@ -259,14 +267,22 @@ export function AccountSettingsDialog({
     setProfileError('')
     setProfileSuccess('')
     try {
-      await onSaveProfile({ displayName: displayNameValue })
+      let nextDisplayName = displayNameValue
+      if (isBuiltinAdmin) {
+        await onSaveProfile({ displayName: displayNameValue })
+      } else {
+        const syncedUser = await onSyncFeishuName()
+        nextDisplayName = syncedUser.displayName || displayNameValue
+      }
       if (!isMutationCurrent(mutation)) return
-      setSavedDisplayName(displayNameValue)
-      setProfileDraft(displayNameValue)
-      setProfileSuccess('个人资料已保存。')
+      setSavedDisplayName(nextDisplayName)
+      setProfileDraft(nextDisplayName)
+      setProfileSuccess(isBuiltinAdmin ? '姓名已保存。' : '飞书姓名已同步。')
     } catch (error) {
       if (isMutationCurrent(mutation)) {
-        setProfileError(getErrorMessage(error, '保存失败，请稍后重试。'))
+        setProfileError(getErrorMessage(error, isBuiltinAdmin
+          ? '保存失败，请稍后重试。'
+          : '飞书姓名同步失败，请稍后重试。'))
       }
     } finally {
       const isCurrent = isMutationCurrent(mutation)
@@ -484,14 +500,16 @@ export function AccountSettingsDialog({
           <>
             {renderDetailHeader(
               '个人资料',
-              user?.username ? `当前登录账号：${user.username}` : '维护当前账户的显示昵称。',
+              isBuiltinAdmin
+                ? '内置 admin 可以维护自己的显示姓名。'
+                : '姓名来自已绑定的飞书账号，不能手工修改。',
             )}
             <form className="account-settings-detail-form" onSubmit={saveProfile}>
               <div className="account-settings-detail-body">
                 <Label>
-                  昵称
+                  {isBuiltinAdmin ? '姓名' : '飞书姓名'}
                   <Input
-                    autoFocus
+                    autoFocus={isBuiltinAdmin}
                     ref={profileInputRef}
                     aria-describedby={profileError ? 'account-settings-profile-error' : undefined}
                     aria-invalid={Boolean(profileError)}
@@ -503,9 +521,11 @@ export function AccountSettingsDialog({
                     maxLength={32}
                     name="veges-account-display-name"
                     required
+                    readOnly={!isBuiltinAdmin}
                     spellCheck={false}
                     value={profileDraft}
                     onChange={(event) => {
+                      if (!isBuiltinAdmin) return
                       setProfileDraft(event.target.value)
                       setProfileError('')
                       setProfileSuccess('')
@@ -525,11 +545,17 @@ export function AccountSettingsDialog({
               </div>
               <DialogFooter className="account-settings-detail-actions">
                 <Button
+                  ref={profilePrimaryActionRef}
                   aria-busy={profileBusy}
-                  disabled={profileBusy || !profileDraft.trim() || !profileChanged}
+                  disabled={profileBusy || (isBuiltinAdmin
+                    ? !profileDraft.trim() || !profileChanged
+                    : !feishuLinked)}
                   type="submit"
                 >
-                  {profileBusy ? '保存中...' : '保存资料'}
+                  {!isBuiltinAdmin ? <ArrowClockwise size={16} /> : null}
+                  {profileBusy
+                    ? isBuiltinAdmin ? '保存中...' : '同步中...'
+                    : isBuiltinAdmin ? '保存姓名' : '同步飞书姓名'}
                 </Button>
               </DialogFooter>
             </form>
@@ -557,7 +583,7 @@ export function AccountSettingsDialog({
                           : '未绑定，绑定后可接收个人通知和群内 @。'}
                       </small>
                     </div>
-                    <div className="account-settings-notification-actions">
+                    {!isBuiltinAdmin ? <div className="account-settings-notification-actions">
                       <Button
                         ref={notificationPrimaryActionRef}
                         aria-busy={notificationMutationBusy}
@@ -589,7 +615,7 @@ export function AccountSettingsDialog({
                           )}
                         />
                       ) : null}
-                    </div>
+                    </div> : null}
                   </div>
                   {feishuError ? (
                     <p className="form-error" role="alert">

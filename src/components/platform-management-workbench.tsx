@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  ArrowClockwise,
   Buildings,
   CheckCircle,
   ClockCounterClockwise,
@@ -42,6 +43,7 @@ import {
   restorePlatformConfigRevision,
   savePlatformConfigSection,
   setPlatformAdmin,
+  syncManagedUserFeishuName,
   testPlatformConfigSection,
   updateManagedUserPermissions,
   updateManagedUserStatus,
@@ -386,11 +388,13 @@ export function PlatformManagementWorkbench({
   sidebarNavigationHost,
   topbarActionHost,
   onAuthorizationLost,
+  onCurrentUserDisplayNameChanged,
 }: {
   currentUserId: number
   sidebarNavigationHost: HTMLDivElement | null
   topbarActionHost: HTMLDivElement | null
   onAuthorizationLost: () => void
+  onCurrentUserDisplayNameChanged: (displayName: string) => void
 }) {
   const [tab, setTab] = useState<Tab>('general')
   const [userTab, setUserTab] = useState<UserTab>('users')
@@ -702,6 +706,24 @@ export function PlatformManagementWorkbench({
       setNotice(`已更新 ${user.displayName} 的角色与权限。`)
     } catch (saveError) {
       handleError(saveError, '用户权限保存失败。')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function syncFeishuName(user: ManagedUser) {
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const result = await syncManagedUserFeishuName(user.id)
+      setUsers((current) => current.map((item) => item.id === user.id
+        ? { ...item, displayName: result.displayName }
+        : item))
+      if (user.id === currentUserId) onCurrentUserDisplayNameChanged(result.displayName)
+      setNotice(result.changed ? `已同步 ${result.displayName} 的飞书姓名。` : '飞书姓名已是最新。')
+    } catch (syncError) {
+      handleError(syncError, '飞书姓名同步失败。')
     } finally {
       setBusy(false)
     }
@@ -1026,7 +1048,13 @@ export function PlatformManagementWorkbench({
               {users.filter((user) => userTab === 'users' || user.platformAdmin).map((user) => (
                 <article key={user.id} className="platform-user-row">
                   <div className="platform-user-name">
-                    <strong>{user.displayName}{user.isBuiltinAdmin ? <Badge>内置</Badge> : null}</strong>
+                    <strong>
+                      {user.displayName}
+                      {user.isBuiltinAdmin ? <Badge>内置</Badge> : null}
+                      {!user.isBuiltinAdmin ? <Badge variant={user.feishuLinked ? 'secondary' : 'outline'}>
+                        {user.feishuLinked ? '飞书已绑定' : '飞书未绑定'}
+                      </Badge> : null}
+                    </strong>
                     <small>
                       {user.username} · {user.registrationSource === 'feishu' ? '飞书注册' : user.registrationSource === 'builtin' ? '内置账号' : '历史账号'} · {user.accountStatus === 'active' ? '正常' : user.accountStatus === 'disabled' ? '已停用' : '已离职'}
                     </small>
@@ -1052,6 +1080,13 @@ export function PlatformManagementWorkbench({
                   ) : <div className="platform-admin-source"><ShieldCheck />{user.isBuiltinAdmin ? '系统内置' : '平台授权'}</div>}
                   <label className="platform-admin-option">{user.platformAdmin ? <Badge variant="secondary">超级管理员</Badge> : null}</label>
                   <div className="platform-user-actions">
+                    {!user.isBuiltinAdmin ? <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy || !user.feishuLinked}
+                      title={user.feishuLinked ? '从飞书同步姓名' : '该账号尚未绑定飞书'}
+                      onClick={() => void syncFeishuName(user)}
+                    ><ArrowClockwise />同步姓名</Button> : null}
                     {userTab === 'users' ? <Button size="sm" variant="outline" disabled={busy || user.roles.length === 0 || user.accountStatus === 'departed'} onClick={() => void saveUser(user)}>保存权限</Button> : user.isBuiltinAdmin ? <span className="platform-locked-admin"><ShieldCheck />不可移除</span> : <ConfirmActionDialog actionKey={`platform-admin-revoke:${user.id}`} title={`移除“${user.displayName}”的超级管理员权限？`} description="移除后该账号仍可使用已有职业角色，但不能进入平台管理。" confirmLabel="确认移除" trigger={<Button size="sm" variant="destructive" disabled={busy}>移除权限</Button>} onConfirm={() => revokePlatformAdmin(user)} />}
                     {userTab === 'users' ? (user.accountStatus === 'disabled' ? (
                       <Button size="sm" variant="outline" disabled={busy || user.isBuiltinAdmin} onClick={() => void enableUser(user)}>启用</Button>

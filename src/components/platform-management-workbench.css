@@ -63,7 +63,7 @@
 .platform-table-list { display: grid; gap: 1px; border-top: 1px solid var(--border); }
 .platform-user-row { display: grid; grid-template-columns: minmax(180px, 1.1fr) minmax(260px, 1.4fr) 130px minmax(220px, auto); align-items: center; gap: 14px; padding: 14px 6px; border-bottom: 1px solid var(--border); }
 .platform-user-name { display: grid; gap: 4px; min-width: 0; }
-.platform-user-name strong { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.platform-user-name strong { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-width: 0; }
 .platform-user-name small { overflow: hidden; color: var(--muted-foreground); text-overflow: ellipsis; white-space: nowrap; }
 .platform-role-options { display: flex; flex-wrap: wrap; gap: 8px 14px; }
 .platform-role-options label,
@@ -72,7 +72,7 @@
 .platform-locked-admin { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); font-size: .78rem; }
 .platform-admin-source svg,
 .platform-locked-admin svg { color: var(--platform-accent); }
-.platform-user-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.platform-user-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 
 .platform-list-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 15px; }
 .platform-search { position: relative; flex: 1; }
@@ -182,6 +182,7 @@
   .platform-organization-row,
   .platform-history-row { grid-template-columns: 1fr; }
   .platform-history-summary > span { white-space: normal; }
+  .platform-user-actions { justify-content: flex-start; }
   .platform-maintenance-form { grid-template-columns: 1fr; }
   .platform-maintenance-actions { justify-content: flex-start; }
   .platform-maintenance-record-header { display: none; }

@@ -193,6 +193,13 @@ Protected endpoints accept `Authorization: Bearer <token>`. Project-scoped route
 must resolve `getProjectAccess(projectId, userId)` before reading or mutating nested IDs;
 owner-only actions add an explicit role check.
 
+`users.display_name` follows the account's identity source. The built-in `admin` account may edit
+only its own display name and is excluded from Feishu binding and synchronization. Every other
+account receives its display name from verified Feishu OAuth or an explicit synchronization that
+reads the bound Open ID from Feishu's directory API. Both self-service and platform-administrator
+synchronization recheck the stored Open ID after the external request and before the database
+write; platform administrators cannot type or submit a replacement name for another account.
+
 `organization_admin` is an additive account capability rather than a session persona.
 The browser exposes it as a workspace identity in both login selection and the account
 role menu only when it is assigned in `user.roles`; system-administrator status alone

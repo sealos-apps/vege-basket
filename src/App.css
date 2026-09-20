@@ -240,14 +240,6 @@ textarea:focus {
   color: color-mix(in oklch, var(--brand) 78%, var(--foreground));
 }
 
-.display-name-onboarding-dialog {
-  width: min(92vw, 440px);
-}
-
-.display-name-onboarding-form {
-  gap: 12px;
-}
-
 .invite-password-dialog {
   width: min(92vw, 420px);
 }

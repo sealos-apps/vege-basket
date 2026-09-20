@@ -212,6 +212,7 @@ import {
   renameAiConversation,
   deleteAiConversation,
   switchActiveRole,
+  syncCurrentUserFeishuName,
   updateCurrentUser,
   type AiStatus,
   type AiTurnStreamHandlers,
@@ -1783,10 +1784,6 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [roleSelectionOpen, setRoleSelectionOpen] = useState(false)
   const [roleSelectionBusy, setRoleSelectionBusy] = useState(false)
-  const [displayNameOnboardingOpen, setDisplayNameOnboardingOpen] = useState(false)
-  const [displayNameOnboardingDraft, setDisplayNameOnboardingDraft] = useState('')
-  const [displayNameOnboardingError, setDisplayNameOnboardingError] = useState('')
-  const [displayNameOnboardingBusy, setDisplayNameOnboardingBusy] = useState(false)
   const [inviteToken, setInviteToken] = useState(getInviteTokenFromUrl)
   const [organizationInviteToken, setOrganizationInviteToken] = useState(
     getOrganizationInviteTokenFromUrl,
@@ -3272,11 +3269,6 @@ function App() {
       resetWorkspaceState()
       setAuthUser(result.user)
       setRoleSelectionOpen(getSelectableWorkspaceRoles(result.user.roles, result.user.isSystemAdmin).length > 1)
-      if (result.isNewUser) {
-        setDisplayNameOnboardingDraft('')
-        setDisplayNameOnboardingError('')
-        setDisplayNameOnboardingOpen(true)
-      }
       applyWorkspace(result.workspace)
       setLoggedIn(true)
       setWorkspaceLoaded(true)
@@ -3342,9 +3334,6 @@ function App() {
     setAuthUser(null)
     setAuthError('')
     setRoleSelectionOpen(false)
-    setDisplayNameOnboardingOpen(false)
-    setDisplayNameOnboardingDraft('')
-    setDisplayNameOnboardingError('')
     setWorkspaceError('')
     setWorkspaceLoaded(false)
     setNotifications(emptyNotifications)
@@ -3407,11 +3396,24 @@ function App() {
     try {
       const result = await updateCurrentUser({
         displayName: nextDisplayName,
+        expectedDisplayName: authUser?.displayName ?? '',
       })
-      setAuthUser(result.user)
+      setAuthUser((current) => current ? { ...current, displayName: result.displayName } : current)
       setWorkspaceError('')
     } catch (error) {
       setWorkspaceError('账户设置保存失败，请稍后再试。')
+      throw error
+    }
+  }
+
+  async function syncAccountFeishuName() {
+    try {
+      const result = await syncCurrentUserFeishuName()
+      setAuthUser(result.user)
+      setWorkspaceError('')
+      return result.user
+    } catch (error) {
+      setWorkspaceError('飞书姓名同步失败，请稍后再试。')
       throw error
     }
   }
@@ -3476,34 +3478,6 @@ function App() {
     window.history.replaceState({}, '', `/?todo=${todoId}`)
     setTodoShareLoginRequested(false)
     setPendingTodoDeepLinkId(todoId)
-  }
-
-  async function saveOnboardingDisplayName() {
-    const nextDisplayName = displayNameOnboardingDraft.trim()
-    if (!nextDisplayName) {
-      setDisplayNameOnboardingError('请填写真实姓名。')
-      return
-    }
-    if (authUser && nextDisplayName === authUser.username) {
-      setDisplayNameOnboardingError('请填写真实姓名，不要继续使用登录用户名。')
-      return
-    }
-
-    setDisplayNameOnboardingBusy(true)
-    setDisplayNameOnboardingError('')
-    try {
-      const result = await updateCurrentUser({
-        displayName: nextDisplayName,
-      })
-      setAuthUser(result.user)
-      setDisplayNameOnboardingOpen(false)
-      setDisplayNameOnboardingDraft('')
-      setWorkspaceError('')
-    } catch {
-      setDisplayNameOnboardingError('昵称保存失败，请稍后再试。')
-    } finally {
-      setDisplayNameOnboardingBusy(false)
-    }
   }
 
   async function disconnectFeishuBinding() {
@@ -5226,6 +5200,7 @@ ${packageTimelineText}`
               themeMode={themeMode}
               onDisconnectFeishu={disconnectFeishuBinding}
               onSaveAccountSettings={updateAccountSettings}
+              onSyncFeishuName={syncAccountFeishuName}
               onRoleChange={(role) => void changeActiveUserRole(role)}
               roleSelectionBusy={roleSelectionBusy}
               onOpenChangelog={() => setView('changelog')}
@@ -5358,6 +5333,7 @@ ${packageTimelineText}`
             themeMode={themeMode}
             onDisconnectFeishu={disconnectFeishuBinding}
             onSaveAccountSettings={updateAccountSettings}
+            onSyncFeishuName={syncAccountFeishuName}
             onRoleChange={(role) => void changeActiveUserRole(role)}
             roleSelectionBusy={roleSelectionBusy}
             onOpenChangelog={() => setView('changelog')}
@@ -5366,57 +5342,6 @@ ${packageTimelineText}`
           />
         </aside>
       )}
-
-      <Dialog
-        open={displayNameOnboardingOpen}
-        onOpenChange={(open) => {
-          if (open) setDisplayNameOnboardingOpen(true)
-        }}
-      >
-        <DialogContent className="display-name-onboarding-dialog" showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>请设置真实姓名</DialogTitle>
-            <DialogDescription>
-              Veges 会把你的姓名展示在待办、交付事件和飞书通知里。为了协作时能准确识别，请先把昵称改成真实姓名。
-            </DialogDescription>
-          </DialogHeader>
-          <form
-            className="new-project-dialog-form display-name-onboarding-form"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void saveOnboardingDisplayName()
-            }}
-          >
-            <Label>
-              真实姓名
-              <Input
-                autoFocus
-                maxLength={32}
-                placeholder="例如：张三"
-                required
-                value={displayNameOnboardingDraft}
-                onChange={(event) => {
-                  setDisplayNameOnboardingDraft(event.target.value)
-                  setDisplayNameOnboardingError('')
-                }}
-              />
-            </Label>
-            {displayNameOnboardingError ? (
-              <p className="form-error">{displayNameOnboardingError}</p>
-            ) : (
-              <p className="form-note">设置后也可以在左下角账户设置中修改。</p>
-            )}
-            <DialogFooter>
-              <Button
-                type="submit"
-                disabled={displayNameOnboardingBusy || !displayNameOnboardingDraft.trim()}
-              >
-                {displayNameOnboardingBusy ? '保存中...' : '保存并进入'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       <Dialog
         open={Boolean(loggedIn && inviteToken && invitePasswordRequired && !invitePasswordVerified)}
@@ -5912,6 +5837,9 @@ ${packageTimelineText}`
               setAuthUser((current) => current ? { ...current, isSystemAdmin: false } : current)
               setView(getRoleLandingView(authUser.activeRole))
             }}
+            onCurrentUserDisplayNameChanged={(displayName) => {
+              setAuthUser((current) => current ? { ...current, displayName } : current)
+            }}
           />
         ) : null}
 
@@ -6354,6 +6282,7 @@ function AccountMenu({
   user,
   themeMode,
   onSaveAccountSettings,
+  onSyncFeishuName,
   onRoleChange,
   roleSelectionBusy,
   onOpenChangelog,
@@ -6367,6 +6296,7 @@ function AccountMenu({
   onSaveAccountSettings: (payload: {
     displayName: string
   }) => Promise<void>
+  onSyncFeishuName: () => Promise<AuthUser>
   onRoleChange: (role: WorkspaceIdentity) => void
   roleSelectionBusy: boolean
   onOpenChangelog: () => void
@@ -6465,6 +6395,7 @@ function AccountMenu({
         onDisconnectFeishu={onDisconnectFeishu}
         onOpenChange={setAccountDialogOpen}
         onSaveProfile={onSaveAccountSettings}
+        onSyncFeishuName={onSyncFeishuName}
       />
 
     </div>

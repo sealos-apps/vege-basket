@@ -252,6 +252,7 @@ roleRouter.get('/admin/users', async (request, response, next) => {
           id: Number(row.id),
           accountStatus: row.account_status,
           feishuIdentityVerified,
+          feishuLinked: !row.is_builtin_admin && row.feishu_user_id.startsWith('ou_'),
           isBuiltinAdmin: row.is_builtin_admin,
           permissionVersion: Number(row.permission_version),
           platformAdmin: Boolean(row.grant_kind),

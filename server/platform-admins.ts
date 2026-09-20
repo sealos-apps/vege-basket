@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg'
 import { pool, query } from './db.ts'
-import { encryptText, keyedDigest } from './crypto.ts'
+import { decryptText, encryptText, keyedDigest } from './crypto.ts'
 
 type AssignableRole = 'developer' | 'tester' | 'organization_admin'
 type RegistrationSource = 'builtin' | 'feishu' | 'legacy_unknown'
@@ -348,6 +348,219 @@ export async function updateManagedUserPermissions(input: {
         (actor_user_id, action, target_type, target_id, changed_fields, request_id)
        values ($1, 'user.permissions_updated', 'user', $2::text, array['roles', 'platformAdmin'], $3::uuid)`,
       [input.actorUserId, input.targetUserId, input.requestId],
+    )
+    await client.query('commit')
+    return response
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function updateBuiltinAdminDisplayName(input: {
+  actorUserId: number
+  displayName: string
+  expectedDisplayName: string
+  requestId: string
+}) {
+  const digest = keyedDigest(JSON.stringify({
+    displayName: input.displayName,
+    expectedDisplayName: input.expectedDisplayName,
+  }))
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    await lockPlatformAdministration(client)
+    await requirePlatformAdminWithClient(client, input.actorUserId)
+    const receipt = await client.query<{
+      action: string
+      request_digest: string
+      result_encrypted: string | null
+      target_user_id: string
+    }>(
+      `select action, request_digest, result_encrypted, target_user_id
+         from platform_user_mutation_receipts
+        where actor_user_id = $1 and request_id = $2::uuid for update`,
+      [input.actorUserId, input.requestId],
+    )
+    if (receipt.rows[0]) {
+      if (
+        receipt.rows[0].action !== 'builtin-display-name' ||
+        receipt.rows[0].request_digest !== digest ||
+        Number(receipt.rows[0].target_user_id) !== input.actorUserId
+      ) {
+        throw new PlatformAdminError('REQUEST_ID_CONFLICT', '该请求编号已用于其他用户变更。')
+      }
+      await client.query('commit')
+      return receipt.rows[0].result_encrypted
+        ? { ...JSON.parse(decryptText(receipt.rows[0].result_encrypted)) as {
+            changed: boolean
+            displayName: string
+            permissionVersion: number
+          }, replayed: true }
+        : { changed: false, displayName: input.displayName, permissionVersion: 0, replayed: true }
+    }
+
+    const target = await client.query<{
+      display_name: string
+      grant_kind: 'builtin' | 'managed' | null
+      is_builtin_admin: boolean
+      revision: string
+    }>(
+      `select users.display_name, users.is_builtin_admin, grant_row.grant_kind,
+              coalesce(version.revision, 0)::text as revision
+         from users
+         left join platform_admin_grants grant_row on grant_row.user_id = users.id
+         left join platform_user_permission_versions version on version.user_id = users.id
+        where users.id = $1 for update of users`,
+      [input.actorUserId],
+    )
+    const row = target.rows[0]
+    if (!row || !row.is_builtin_admin || row.grant_kind !== 'builtin') {
+      throw new PlatformAdminError(
+        'DISPLAY_NAME_EDIT_FORBIDDEN',
+        '只有内置 admin 可以手工修改姓名。',
+        403,
+      )
+    }
+    if (row.display_name !== input.expectedDisplayName) {
+      throw new PlatformAdminError('USER_PROFILE_CONFLICT', '姓名已经发生变化，请刷新后重试。')
+    }
+    const changed = row.display_name !== input.displayName
+    let permissionVersion = Number(row.revision)
+    if (changed) {
+      await client.query('update users set display_name = $1 where id = $2', [input.displayName, input.actorUserId])
+      permissionVersion = Number((await client.query<{ revision: string }>(
+        `insert into platform_user_permission_versions (user_id, revision, updated_at)
+         values ($1, 1, now())
+         on conflict (user_id) do update
+           set revision = platform_user_permission_versions.revision + 1, updated_at = now()
+         returning revision`,
+        [input.actorUserId],
+      )).rows[0].revision)
+      await client.query(
+        `insert into platform_audit_events
+          (actor_user_id, action, target_type, target_id, changed_fields, request_id)
+         values ($1, 'user.display_name_updated', 'user', $1::text, array['displayName'], $2::uuid)`,
+        [input.actorUserId, input.requestId],
+      )
+    }
+    const response = {
+      changed,
+      displayName: input.displayName,
+      permissionVersion,
+      replayed: false,
+    }
+    await client.query(
+      `insert into platform_user_mutation_receipts
+        (actor_user_id, request_id, action, target_user_id, request_digest, result_revision, result_encrypted)
+       values ($1, $2::uuid, 'builtin-display-name', $1, $3, $4, $5)`,
+      [input.actorUserId, input.requestId, digest, permissionVersion, encryptText(JSON.stringify(response))],
+    )
+    await client.query('commit')
+    return response
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function syncManagedUserFeishuName(input: {
+  actorUserId: number
+  displayName: string
+  expectedFeishuUserId: string
+  requestId: string
+  targetUserId: number
+}) {
+  const digest = keyedDigest(JSON.stringify({
+    displayName: input.displayName,
+    expectedFeishuUserId: input.expectedFeishuUserId,
+    targetUserId: input.targetUserId,
+  }))
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    await lockPlatformAdministration(client)
+    await requirePlatformAdminWithClient(client, input.actorUserId)
+    const receipt = await client.query<{
+      action: string
+      request_digest: string
+      result_encrypted: string | null
+      target_user_id: string
+    }>(
+      `select action, request_digest, result_encrypted, target_user_id
+         from platform_user_mutation_receipts
+        where actor_user_id = $1 and request_id = $2::uuid for update`,
+      [input.actorUserId, input.requestId],
+    )
+    if (receipt.rows[0]) {
+      if (
+        receipt.rows[0].action !== 'feishu-name-sync' ||
+        receipt.rows[0].request_digest !== digest ||
+        Number(receipt.rows[0].target_user_id) !== input.targetUserId
+      ) {
+        throw new PlatformAdminError('REQUEST_ID_CONFLICT', '该请求编号已用于其他用户变更。')
+      }
+      await client.query('commit')
+      return receipt.rows[0].result_encrypted
+        ? { ...JSON.parse(decryptText(receipt.rows[0].result_encrypted)) as {
+            changed: boolean
+            displayName: string
+          }, replayed: true }
+        : { changed: false, displayName: input.displayName, replayed: true }
+    }
+
+    const target = await client.query<{
+      display_name: string
+      feishu_user_id: string
+      is_builtin_admin: boolean
+      revision: string
+    }>(
+      `select users.display_name, users.feishu_user_id, users.is_builtin_admin,
+              coalesce(version.revision, 0)::text as revision
+         from users
+         left join platform_user_permission_versions version on version.user_id = users.id
+        where users.id = $1 for update of users`,
+      [input.targetUserId],
+    )
+    const row = target.rows[0]
+    if (!row) throw new PlatformAdminError('USER_NOT_FOUND', '用户不存在。', 404)
+    if (row.is_builtin_admin) {
+      throw new PlatformAdminError('BUILTIN_ADMIN_FEISHU_FORBIDDEN', '内置 admin 不使用飞书姓名。', 409)
+    }
+    if (!row.feishu_user_id.startsWith('ou_')) {
+      throw new PlatformAdminError('FEISHU_ACCOUNT_NOT_LINKED', '该账号尚未绑定飞书。', 409)
+    }
+    if (row.feishu_user_id !== input.expectedFeishuUserId) {
+      throw new PlatformAdminError('FEISHU_BINDING_CHANGED', '飞书绑定已经变化，请重新同步。', 409)
+    }
+    const changed = row.display_name !== input.displayName
+    if (changed) {
+      await client.query('update users set display_name = $1 where id = $2', [input.displayName, input.targetUserId])
+      await client.query(
+        `insert into platform_audit_events
+          (actor_user_id, action, target_type, target_id, changed_fields, request_id)
+         values ($1, 'user.feishu_name_synced', 'user', $2::text, array['displayName'], $3::uuid)`,
+        [input.actorUserId, input.targetUserId, input.requestId],
+      )
+    }
+    const response = { changed, displayName: input.displayName, replayed: false }
+    await client.query(
+      `insert into platform_user_mutation_receipts
+        (actor_user_id, request_id, action, target_user_id, request_digest, result_revision, result_encrypted)
+       values ($1, $2::uuid, 'feishu-name-sync', $3, $4, $5, $6)`,
+      [
+        input.actorUserId,
+        input.requestId,
+        input.targetUserId,
+        digest,
+        Number(row.revision),
+        encryptText(JSON.stringify(response)),
+      ],
     )
     await client.query('commit')
     return response

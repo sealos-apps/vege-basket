@@ -187,6 +187,7 @@ import {
   getAuthenticatedRoleSession,
   getUserRoleContext,
   getSwitchableUserRoles,
+  requirePlatformAdminSession,
   roleRouter,
   type UserRole,
 } from './roles.ts'
@@ -200,7 +201,16 @@ import {
 import { buildBugShareUrl, configureBugSharePublicUrl } from './bug-share.ts'
 import type { UserAccountStatus } from '../shared/user-lifecycle.ts'
 import { getDepartedUserIds } from './user-lifecycle.ts'
-import { isPlatformAdmin } from './platform-admins.ts'
+import {
+  isPlatformAdmin,
+  PlatformAdminError,
+  syncManagedUserFeishuName,
+  updateBuiltinAdminDisplayName,
+} from './platform-admins.ts'
+import {
+  FeishuUserNameError,
+  fetchFeishuUserName,
+} from './feishu-user-name.ts'
 import {
   buildFeishuOAuthBindRedirect,
   buildFeishuOAuthSigninRedirect,
@@ -307,6 +317,7 @@ type UserRow = {
   feishu_email?: string | null
   feishu_receive_id_type?: string | null
   feishu_user_id?: string | null
+  is_builtin_admin?: boolean
 }
 type ChatMessage = { role: 'user' | 'assistant'; content: string }
 type AiAgentType =
@@ -448,6 +459,16 @@ const todoShareCommentTokenConcurrencyLimiter = createAiConcurrencyLimiter<strin
   globalLimit: 20,
   perUserLimit: 1,
 })
+const feishuNameSyncRateLimiter = createAiRateLimiter({
+  globalLimit: 60,
+  perUserLimit: 10,
+  windowMs: 60_000,
+})
+const feishuNameSyncConcurrencyLimiter = createAiConcurrencyLimiter({
+  globalLimit: 5,
+  perUserLimit: 1,
+})
+const displayNameMutationRequestIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 let nextAiIntentReceiptCleanupAt = 0
 const aiIntentRoutingDependencies = {
   database: pool,
@@ -867,13 +888,15 @@ function displayNameFromUser(row?: Pick<UserRow, 'email' | 'display_name'> | nul
 
 function serializeUser(row: UserRow) {
   const feishuOpenId = String(row.feishu_user_id ?? '').trim()
+  const isBuiltinAdmin = row.is_builtin_admin === true
   return {
     id: Number(row.id),
     accountStatus: row.account_status,
     displayName: row.display_name,
-    feishuEmail: row.feishu_email || (feishuOpenId.includes('@') ? feishuOpenId : ''),
-    feishuLinked: feishuOpenId.startsWith('ou_'),
+    feishuEmail: isBuiltinAdmin ? '' : row.feishu_email || (feishuOpenId.includes('@') ? feishuOpenId : ''),
+    feishuLinked: !isBuiltinAdmin && feishuOpenId.startsWith('ou_'),
     username: row.email,
+    isBuiltinAdmin,
   }
 }
 
@@ -1160,6 +1183,23 @@ async function getFeishuTenantAccessToken() {
   return feishuTenantAccessToken.token
 }
 
+async function fetchConfiguredFeishuUserName(openId: string) {
+  if (!openId.startsWith('ou_')) {
+    throw new FeishuUserNameError('FEISHU_ACCOUNT_NOT_LINKED', '该账号尚未绑定飞书。', 409)
+  }
+  let token: string
+  try {
+    token = await getFeishuTenantAccessToken()
+  } catch {
+    throw new FeishuUserNameError(
+      'FEISHU_CONFIGURATION_UNAVAILABLE',
+      '飞书应用配置暂不可用。',
+      503,
+    )
+  }
+  return fetchFeishuUserName({ openId, token })
+}
+
 async function resolveFeishuOpenIdByEmail(email: string) {
   const normalizedEmail = normalizeUsername(email)
   if (!normalizedEmail) return ''
@@ -1288,6 +1328,9 @@ async function fetchFeishuOAuthUserInfo(accessToken: string) {
       data.data?.en_name ??
       data.en_name,
   )
+  if (!displayName) {
+    throw new FeishuUserNameError('FEISHU_NAME_EMPTY', '飞书没有返回可用的姓名。', 422)
+  }
   return {
     email: normalizeUsername(data.data?.email ?? data.email),
     name: displayName,
@@ -1311,17 +1354,14 @@ async function findOrCreateFeishuOAuthUser(
   const byOpenId = await query<UserRow>(
     `
     update users
-    set display_name = case
-          when $2 <> '' then $2
-          else display_name
-        end,
+    set display_name = $2,
         feishu_email = case
           when $3 <> '' then $3
           else feishu_email
         end,
         feishu_receive_id_type = 'open_id',
         feishu_identity_verified_at = now()
-    where feishu_user_id = $1
+    where feishu_user_id = $1 and not is_builtin_admin
     returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
     `,
     [feishuUser.openId, displayName, feishuUser.email],
@@ -1343,10 +1383,7 @@ async function findOrCreateFeishuOAuthUser(
           feishu_user_id = $2,
           feishu_receive_id_type = 'open_id',
           feishu_identity_verified_at = now(),
-          display_name = case
-            when $3 <> '' then $3
-            else display_name
-          end
+          display_name = $3
       where email = $1
         and lower(btrim(email)) <> 'admin'
         and (feishu_user_id = '' or feishu_user_id = $2)
@@ -1365,7 +1402,6 @@ async function findOrCreateFeishuOAuthUser(
   }
 
   const username = feishuUser.email || getFeishuGeneratedUsername(feishuUser.openId)
-  const newDisplayName = displayName || feishuUser.email || '飞书用户'
   const created = await query<UserRow>(
     `
     insert into users
@@ -1374,7 +1410,7 @@ async function findOrCreateFeishuOAuthUser(
     values ($1, $2, $3, $4, $5, 'open_id', 'feishu', now())
     returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
     `,
-    [username, '', newDisplayName, feishuUser.email, feishuUser.openId],
+    [username, '', displayName, feishuUser.email, feishuUser.openId],
   )
   const userId = Number(created.rows[0].id)
   await linkPendingMemberships(userId, username)
@@ -1390,6 +1426,7 @@ async function findMaintenanceFeishuPlatformAdmin(openId: string) {
        from users
        join platform_admin_grants grant_row on grant_row.user_id = users.id
       where users.feishu_user_id = $1::text and users.account_status = 'active'
+        and not users.is_builtin_admin
       limit 1`,
     [openId],
   )
@@ -1433,49 +1470,23 @@ async function resolveFeishuUserName(openId: string) {
   if (feishuUserNameCache.has(openId)) return feishuUserNameCache.get(openId) ?? ''
 
   try {
-    const token = await getFeishuTenantAccessToken()
-    const result = await fetch(
-      `https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      },
-    )
-    const data = await result.json() as {
-      code?: number
-      data?: { user?: { avatar?: unknown; en_name?: unknown; name?: unknown; nickname?: unknown } }
-      msg?: string
-    }
-    const name = data.code === 0
-      ? sanitizeDisplayName(
-          data.data?.user?.name ??
-          data.data?.user?.nickname ??
-          data.data?.user?.en_name,
-        )
-      : ''
+    const name = await fetchConfiguredFeishuUserName(openId)
     feishuUserNameCache.set(openId, name)
-    if (!name && data.code !== 0) {
-      const warningKey = String(data.code ?? 'unknown')
-      if (!feishuUserLookupWarnings.has(warningKey)) {
-        feishuUserLookupWarnings.add(warningKey)
-        console.warn('Feishu user name lookup failed', {
-          code: data.code,
-          requiredScopes: [
-            'contact:contact.base:readonly',
-            'contact:contact:access_as_app',
-            'contact:contact:readonly',
-            'contact:contact:readonly_as_app',
-          ],
-        })
-      }
-    }
     return name
   } catch (error) {
     feishuUserNameCache.set(openId, '')
-    if (!feishuUserLookupWarnings.has('network')) {
-      feishuUserLookupWarnings.add('network')
-      console.warn('Feishu user name lookup failed', error)
+    const warningKey = error instanceof FeishuUserNameError ? error.code : 'network'
+    if (!feishuUserLookupWarnings.has(warningKey)) {
+      feishuUserLookupWarnings.add(warningKey)
+      console.warn('Feishu user name lookup failed', {
+        code: warningKey,
+        requiredScopes: [
+          'contact:contact.base:readonly',
+          'contact:contact:access_as_app',
+          'contact:contact:readonly',
+          'contact:contact:readonly_as_app',
+        ],
+      })
     }
     return ''
   }
@@ -4927,7 +4938,7 @@ app.get('/api/auth/me', asyncHandler(async (request, response) => {
   if (!userId) return
 
   const user = await query<UserRow>(
-    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status from users where id = $1',
+    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status, is_builtin_admin from users where id = $1',
     [userId],
   )
   response.json({
@@ -4941,7 +4952,7 @@ app.get('/api/auth/context', asyncHandler(async (request, response) => {
   if (!userId) return
 
   const user = await query<UserRow>(
-    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status from users where id = $1',
+    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status, is_builtin_admin from users where id = $1',
     [userId],
   )
   response.json({
@@ -4953,28 +4964,144 @@ app.patch('/api/auth/me', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
 
-  const displayName = sanitizeDisplayName(request.body.displayName)
-  if (!displayName) {
-    response.status(400).json({ error: 'Display name is required' })
+  const displayName = String(request.body?.displayName ?? '').trim()
+  const expectedDisplayName = String(request.body?.expectedDisplayName ?? '')
+  const requestId = String(request.body?.requestId ?? '')
+  if (!displayName || displayName.length > 32 || !displayNameMutationRequestIdPattern.test(requestId)) {
+    response.status(400).json({ error: '姓名、当前值或请求编号无效。' })
     return
   }
+  response.json(await updateBuiltinAdminDisplayName({
+    actorUserId: userId,
+    displayName,
+    expectedDisplayName,
+    requestId,
+  }))
+}))
 
-  const user = await query<UserRow>(
-    `
-    update users
-    set display_name = $1,
-        feishu_receive_id_type = case
-          when feishu_user_id like 'ou_%' then 'open_id'
-          else feishu_receive_id_type
-        end
-    where id = $2
-    returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
-    `,
-    [displayName, userId],
-  )
-  response.json({
-    user: await serializeUserWithRoleContext(user.rows[0], getTokenFromRequest(request)),
-  })
+app.post('/api/auth/feishu/name-sync', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  if (!feishuNameSyncRateLimiter.allow(userId)) {
+    response.status(429).json({ code: 'FEISHU_NAME_SYNC_RATE_LIMITED', error: '姓名同步过于频繁，请稍后再试。' })
+    return
+  }
+  const release = feishuNameSyncConcurrencyLimiter.acquire(userId)
+  if (!release) {
+    response.status(429).json({ code: 'FEISHU_NAME_SYNC_BUSY', error: '已有姓名同步正在进行。' })
+    return
+  }
+  try {
+    const target = await query<{
+      feishu_user_id: string
+      is_builtin_admin: boolean
+    }>(
+      'select feishu_user_id, is_builtin_admin from users where id = $1',
+      [userId],
+    )
+    const row = target.rows[0]
+    if (!row) {
+      response.status(404).json({ code: 'USER_NOT_FOUND', error: '用户不存在。' })
+      return
+    }
+    if (row.is_builtin_admin) {
+      response.status(409).json({ code: 'BUILTIN_ADMIN_FEISHU_FORBIDDEN', error: '内置 admin 不使用飞书姓名。' })
+      return
+    }
+    if (!row.feishu_user_id.startsWith('ou_')) {
+      response.status(409).json({ code: 'FEISHU_ACCOUNT_NOT_LINKED', error: '该账号尚未绑定飞书。' })
+      return
+    }
+    const displayName = await fetchConfiguredFeishuUserName(row.feishu_user_id)
+    const updated = await pool.connect()
+    try {
+      await updated.query('begin')
+      const locked = await updated.query<UserRow & { is_builtin_admin: boolean }>(
+        `select id, email, display_name, feishu_email, feishu_user_id,
+                feishu_receive_id_type, account_status, is_builtin_admin
+           from users where id = $1 for update`,
+        [userId],
+      )
+      const lockedRow = locked.rows[0]
+      if (!lockedRow || lockedRow.is_builtin_admin || lockedRow.feishu_user_id !== row.feishu_user_id) {
+        throw new FeishuUserNameError('FEISHU_BINDING_CHANGED', '飞书绑定已经变化，请重新同步。', 409)
+      }
+      if (lockedRow.display_name !== displayName) {
+        const result = await updated.query<UserRow & { is_builtin_admin: boolean }>(
+          `update users set display_name = $1 where id = $2
+           returning id, email, display_name, feishu_email, feishu_user_id,
+                     feishu_receive_id_type, account_status, is_builtin_admin`,
+          [displayName, userId],
+        )
+        locked.rows[0] = result.rows[0]
+      }
+      await updated.query('commit')
+      feishuUserNameCache.set(row.feishu_user_id, displayName)
+      response.json({
+        changed: lockedRow.display_name !== displayName,
+        user: await serializeUserWithRoleContext(locked.rows[0], getTokenFromRequest(request)),
+      })
+    } catch (error) {
+      await updated.query('rollback')
+      throw error
+    } finally {
+      updated.release()
+    }
+  } finally {
+    release()
+  }
+}))
+
+app.post('/api/admin/users/:userId/feishu-name-sync', asyncHandler(async (request, response) => {
+  const session = await requirePlatformAdminSession(request, response)
+  if (!session) return
+  const targetUserId = Number(request.params.userId)
+  const requestId = String(request.body?.requestId ?? '')
+  if (!Number.isSafeInteger(targetUserId) || targetUserId <= 0 ||
+      !displayNameMutationRequestIdPattern.test(requestId)) {
+    response.status(400).json({ error: '用户或请求编号无效。' })
+    return
+  }
+  if (!feishuNameSyncRateLimiter.allow(session.userId)) {
+    response.status(429).json({ code: 'FEISHU_NAME_SYNC_RATE_LIMITED', error: '姓名同步过于频繁，请稍后再试。' })
+    return
+  }
+  const release = feishuNameSyncConcurrencyLimiter.acquire(session.userId)
+  if (!release) {
+    response.status(429).json({ code: 'FEISHU_NAME_SYNC_BUSY', error: '已有姓名同步正在进行。' })
+    return
+  }
+  try {
+    const target = await query<{ feishu_user_id: string; is_builtin_admin: boolean }>(
+      'select feishu_user_id, is_builtin_admin from users where id = $1',
+      [targetUserId],
+    )
+    const row = target.rows[0]
+    if (!row) {
+      response.status(404).json({ code: 'USER_NOT_FOUND', error: '用户不存在。' })
+      return
+    }
+    if (row.is_builtin_admin) {
+      response.status(409).json({ code: 'BUILTIN_ADMIN_FEISHU_FORBIDDEN', error: '内置 admin 不使用飞书姓名。' })
+      return
+    }
+    if (!row.feishu_user_id.startsWith('ou_')) {
+      response.status(409).json({ code: 'FEISHU_ACCOUNT_NOT_LINKED', error: '该账号尚未绑定飞书。' })
+      return
+    }
+    const displayName = await fetchConfiguredFeishuUserName(row.feishu_user_id)
+    const result = await syncManagedUserFeishuName({
+      actorUserId: session.userId,
+      displayName,
+      expectedFeishuUserId: row.feishu_user_id,
+      requestId,
+      targetUserId,
+    })
+    feishuUserNameCache.set(row.feishu_user_id, displayName)
+    response.json(result)
+  } finally {
+    release()
+  }
 }))
 
 app.post('/api/auth/feishu/oauth/url', asyncHandler(async (request, response) => {
@@ -4987,6 +5114,19 @@ app.post('/api/auth/feishu/oauth/url', asyncHandler(async (request, response) =>
     return
   }
   const userId = await requireUserId(request)
+  if (userId) {
+    const account = await query<{ is_builtin_admin: boolean }>(
+      'select is_builtin_admin from users where id = $1',
+      [userId],
+    )
+    if (account.rows[0]?.is_builtin_admin) {
+      response.status(409).json({
+        code: 'BUILTIN_ADMIN_FEISHU_FORBIDDEN',
+        error: '内置 admin 不支持绑定飞书。',
+      })
+      return
+    }
+  }
   if (loginAccess === 'platform-admin-only' && userId && !(await isPlatformAdmin(userId))) {
     response.status(503).json({
       error: '平台正在维护，当前只允许超级管理员登录。',
@@ -5073,7 +5213,7 @@ app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response
     const accessToken = await exchangeFeishuOAuthCode(code, state.redirectUri)
     const feishuUser = await fetchFeishuOAuthUserInfo(accessToken)
     if (state.intent === 'bind') {
-      await query(
+      const bound = await query(
         `
         update users
         set feishu_email = case
@@ -5083,14 +5223,12 @@ app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response
             feishu_user_id = $2,
             feishu_receive_id_type = 'open_id',
             feishu_identity_verified_at = now(),
-            display_name = case
-              when $4 <> '' then $4
-              else display_name
-            end
-        where id = $3
+            display_name = $4
+        where id = $3 and not is_builtin_admin
         `,
         [feishuUser.email, feishuUser.openId, state.userId, feishuUser.name],
       )
+      if (bound.rowCount !== 1) throw new Error('内置 admin 不支持绑定飞书。')
       response.redirect(buildFeishuOAuthBindRedirect(platformPublicUrl(), state.returnTo, 'success'))
       return
     }
@@ -5126,6 +5264,18 @@ app.delete('/api/auth/feishu/oauth', asyncHandler(async (request, response) => {
   const client = await pool.connect()
   try {
     await client.query('begin')
+    const account = await client.query<{ is_builtin_admin: boolean }>(
+      'select is_builtin_admin from users where id = $1 for update',
+      [userId],
+    )
+    if (account.rows[0]?.is_builtin_admin) {
+      await client.query('rollback')
+      response.status(409).json({
+        code: 'BUILTIN_ADMIN_FEISHU_FORBIDDEN',
+        error: '内置 admin 不使用飞书绑定。',
+      })
+      return
+    }
     const user = await client.query<UserRow>(
       `
       update users
@@ -5133,7 +5283,8 @@ app.delete('/api/auth/feishu/oauth', asyncHandler(async (request, response) => {
           feishu_user_id = '',
           feishu_receive_id_type = 'open_id'
       where id = $1
-      returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
+      returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type,
+                account_status, is_builtin_admin
       `,
       [userId],
     )
@@ -13759,6 +13910,7 @@ app.post('/api/integrations/feishu/card-actions', (request, response, next) => {
 })
 
 app.use('/api', createOrganizationRouter({
+  fetchFeishuUserName: fetchConfiguredFeishuUserName,
   generateWeeklySummary: async (userId, source) => {
     const result = await createAiAgentResponse(
       userId,
@@ -13826,6 +13978,10 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
     return
   }
   if (error instanceof ProjectSubprojectError) {
+    response.status(error.status).json({ error: error.message, code: error.code })
+    return
+  }
+  if (error instanceof PlatformAdminError || error instanceof FeishuUserNameError) {
     response.status(error.status).json({ error: error.message, code: error.code })
     return
   }

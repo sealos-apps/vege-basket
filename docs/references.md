@@ -82,6 +82,11 @@ Existing platform-administrator sessions retain access to the platform recovery 
 Successful Feishu OAuth is treated as internal identity and may create a user without a
 project invite. The Feishu custom application's availability scope must therefore be
 restricted to the intended company users; Veges has no separate tenant/domain allowlist.
+For every non-built-in account, `users.display_name` is the current Feishu directory name.
+OAuth refreshes it automatically, and the account or a platform administrator may explicitly
+synchronize it through the bound Open ID. Synchronization requires the Feishu application's
+contact-read permission and matching availability scope. The built-in `admin` account cannot
+bind or synchronize Feishu and may manually change only its own display name.
 
 When Feishu AI chat is enabled, `im.message.receive_v1` accepts only `p2p` text and
 `merge_forward` messages from a `users.feishu_user_id` binding. Each Feishu message is
@@ -166,7 +171,7 @@ an in-flight flow retains the exact redirect URL stored in its signed state.
 | Family | Routes |
 | --- | --- |
 | Health | `GET /api/health` (public) |
-| Authentication | `/api/auth/register`, `/api/auth/login`, `/api/auth/me`, lightweight current-role refresh through `GET /api/auth/context`, `/api/auth/password`, `/api/auth/feishu/oauth/*` |
+| Authentication | `/api/auth/register`, `/api/auth/login`, `GET /api/auth/me`, built-in-admin-only `PATCH /api/auth/me`, `POST /api/auth/feishu/name-sync` for a non-built-in account's own bound identity, lightweight current-role refresh through `GET /api/auth/context`, `/api/auth/password`, `/api/auth/feishu/oauth/*` |
 | Workspace | Compatibility `GET /api/workspace`; live scoped reads under `GET /api/workspace/{catalog,overview,inbox,documents,search}`, `GET /api/projects/:projectId/{overview,journals,todos}`, and `GET /api/todos/:todoId/detail`; `GET /api/my-work?organizationId=:id|personal`; lightweight `GET /api/navigation-counts?organizationId=:id|personal`; `GET /api/notifications`, notification read/dismiss routes, `GET/PUT /api/notification-subscription` |
 | Assigned Bugs | `GET /api/test-bugs/assigned?organizationId=:id|personal` and all `/api/test-bugs/:bugId/assigned*` mutations require the same active organization context; verification submissions require either package snapshots or one or more validated, pinned cluster-image references, and create an immutable acceptance comment in the same transaction. CI package snapshots retain their validated branch when the object path uses the canonical `/ci/<branch>/<hash>/` layout; branchless middleware CI snapshots remain valid without one. `GET /api/test-bugs/:bugId/verification-submissions/:submissionId/script?expireMinutes=30|60|120` rechecks tester/developer access and returns an ephemeral script; package URLs are signed only for that response, while cluster images run directly. |
 | Changelog | `GET /api/changelog` for authenticated readers; writes require an active database-backed platform administrator grant |
@@ -178,7 +183,7 @@ an in-flight flow retains the exact redirect URL stored in its signed state.
 | Image sync | `POST /api/image-sync-runs`, `GET /api/image-sync-runs`, `GET /api/image-sync-runs/:runId?refresh=true`, `DELETE /api/image-sync-runs/:runId`; every route is session-protected and owner-scoped, and deletion accepts failed local records only |
 | AI | `GET /api/ai/status`, `POST /api/ai/intent-classifications`, `GET/POST /api/ai/conversations/:conversationId/turns`, `POST .../turns/:turnId/document`, `POST .../turns/:turnId/retry`, `POST .../turns/:turnId/cancel`, `POST .../turns/:turnId/reconcile`, `GET /api/ai/conversations`, `PATCH/DELETE /api/ai/conversations/:conversationId`, `POST /api/projects/:projectId/summaries`, todo-proposal read/confirm routes |
 | Feishu events | `/api/integrations/feishu/events` |
-| Platform management | `/api/admin/platform-config`, config test/history/restore/runtime routes, `/api/admin/users`, platform grants, and platform organization create/delete routes require a platform administrator |
+| Platform management | `/api/admin/platform-config`, config test/history/restore/runtime routes, `/api/admin/users`, `POST /api/admin/users/:userId/feishu-name-sync`, platform grants, and platform organization create/delete routes require a platform administrator. The name-sync route accepts no caller-supplied name and rejects the built-in `admin`. |
 | Roles | `POST /api/auth/active-role`, `GET /api/admin/users`, `PATCH /api/admin/users/:userId/roles` |
 | Organizations | `/api/organizations/*`, system-admin organization creation, owner/admin organization rename, week-start setting and confirmed deletion, direct member admission, expiring `/api/organization-invite-links/*` browser links, legacy Feishu invitations, resource attachment, organization-admin project governance, test-environment `POST/PATCH/DELETE /api/organizations/:organizationId/test-environments(/:environmentId)`, direct organization-member admission to organization projects without invite notifications, milestones including inline `PATCH .../milestones/:milestoneId/status`, task overview, weekly reports, weekly summaries, and the dedicated package-market catalog/policy settings Tab |
 | Organization project modules | `POST /api/organizations/:organizationId/project-modules` with `{ name }`; `PATCH .../project-modules/:moduleId` with nonempty `{ name?, enabled? }`; returns `OrganizationDetail` (201/200). Requires `organization_admin` and active organization owner/admin. Names trim to 1–40 characters, exact case-sensitive uniqueness including disabled names. Invalid input 400; permission change 403; missing nested resource 404; duplicate/legacy rename collision 409. |

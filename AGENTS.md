@@ -68,6 +68,10 @@ historical product context; current code and these operational docs take precede
 - Shared AI uses only the platform configuration's API base, API key, and model. Do not restore
   user-level AI settings. New ordinary accounts come only from Feishu OAuth; keep both per-user
   and instance-wide request limits.
+- Keep `users.display_name` source-bound. The built-in `admin` account may manually update only
+  its own name and cannot bind or synchronize Feishu. Every non-built-in account name update must
+  come from verified Feishu OAuth or an explicit Feishu synchronization. Recheck the target Open ID
+  after the external lookup and before writing the synchronized name.
 - AI conversations are private to one user and have an immutable `general`, `project`, or
   `conversation-analysis` context. Changing or removing `@项目` starts a blank conversation;
   never rebind an existing conversation or combine history from different contexts. General

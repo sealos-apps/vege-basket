@@ -75,6 +75,7 @@ import {
 import { lockProjectMutation } from './project-lock.ts'
 
 type OrganizationRouterDependencies = {
+  fetchFeishuUserName: (openId: string) => Promise<string>
   generateWeeklySummary: (userId: number, source: string) => Promise<{
     error?: string
     message?: string
@@ -3457,6 +3458,9 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       response.status(400).json({ error: 'Invalid organization invitation action' })
       return
     }
+    const operatorDisplayName = inviteAction === 'organization_invitation_accept'
+      ? await dependencies.fetchFeishuUserName(operatorOpenId)
+      : ''
     const client = await pool.connect()
     try {
       await client.query('begin')
@@ -3515,11 +3519,17 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         const matchedUsers = await client.query<{
           feishu_user_id: string
           id: string
+          is_builtin_admin: boolean
         }>(
-          `select id, feishu_user_id from users where feishu_user_id = $1 or email = $2 for update`,
+          `select id, feishu_user_id, is_builtin_admin
+             from users where feishu_user_id = $1 or email = $2 for update`,
           [operatorOpenId, email],
         )
-        if (matchedUsers.rows.length > 1 || (matchedUsers.rows[0]?.feishu_user_id && matchedUsers.rows[0].feishu_user_id !== operatorOpenId)) {
+        if (
+          matchedUsers.rows.length > 1 ||
+          matchedUsers.rows[0]?.is_builtin_admin ||
+          (matchedUsers.rows[0]?.feishu_user_id && matchedUsers.rows[0].feishu_user_id !== operatorOpenId)
+        ) {
           await client.query('rollback')
           response.status(409).json({ error: 'Feishu identity conflicts with an existing account' })
           return
@@ -3529,9 +3539,9 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           await client.query(
             `update users set feishu_user_id = $1, feishu_receive_id_type = 'open_id',
               feishu_email = case when feishu_email = '' then $2 else feishu_email end,
-              feishu_identity_verified_at = now()
-             where id = $3`,
-            [operatorOpenId, email, respondedByUserId],
+              feishu_identity_verified_at = now(), display_name = $3
+             where id = $4 and not is_builtin_admin`,
+            [operatorOpenId, email, operatorDisplayName, respondedByUserId],
           )
         } else {
           const created = await client.query<{ id: string }>(
@@ -3539,7 +3549,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
               (email, password_hash, display_name, feishu_email, feishu_user_id,
                feishu_receive_id_type, registration_source, feishu_identity_verified_at)
              values ($1, '', $2, $1, $3, 'open_id', 'feishu', now()) returning id`,
-            [email, email.split('@')[0], operatorOpenId],
+            [email, operatorDisplayName, operatorOpenId],
           )
           respondedByUserId = Number(created.rows[0].id)
         }
