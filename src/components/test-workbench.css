@@ -994,7 +994,7 @@
 .test-plan-detail .test-execution-list {
   min-height: 0;
   align-content: start;
-  grid-auto-rows: minmax(80px, auto);
+  grid-auto-rows: minmax(108px, auto);
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-color: transparent transparent;
@@ -2305,10 +2305,10 @@
 }
 
 .test-execution-list article {
-  min-height: 100px;
+  min-height: 108px;
   padding: 10px 12px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(190px, 220px);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
   grid-template-areas:
     "copy result"
     "copy actions";
@@ -2369,6 +2369,7 @@
   display: flex;
   justify-content: flex-end;
   gap: 6px;
+  row-gap: 4px;
   align-items: center;
   flex-wrap: wrap;
 }

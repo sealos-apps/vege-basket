@@ -8,6 +8,7 @@ const workbench = readFileSync(new URL('./test-workbench.ts', import.meta.url), 
 const image = readFileSync(new URL('./test-plan-image.ts', import.meta.url), 'utf8')
 const api = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8')
 const component = readFileSync(new URL('../src/components/test-plan-execution.tsx', import.meta.url), 'utf8')
+const workbenchComponent = readFileSync(new URL('../src/components/test-workbench.tsx', import.meta.url), 'utf8')
 const styles = readFileSync(new URL('../src/components/test-workbench.css', import.meta.url), 'utf8')
 
 test('test plan execution history schema keeps encrypted evidence and idempotency boundaries', () => {
@@ -40,7 +41,6 @@ test('execution image transport uses a dedicated allowlisted signed object path'
 })
 
 test('real workbench exposes history, recording, Bug evidence, and PDF entry points', () => {
-  const workbenchComponent = readFileSync(new URL('../src/components/test-workbench.tsx', import.meta.url), 'utf8')
   assert.match(workbenchComponent, /TestPlanExecutionPanel/u)
   assert.match(workbenchComponent, /TestPlanExecutionReport/u)
   assert.match(workbenchComponent, /记录执行/u)
@@ -50,6 +50,10 @@ test('real workbench exposes history, recording, Bug evidence, and PDF entry poi
 
 test('execution layout and PDF export degrade gracefully under constrained space or image failures', () => {
   assert.match(styles, /container: test-plan-detail \/ inline-size/u)
+  assert.match(workbenchComponent, /PLAN_EXECUTION_ROW_BLOCK_SIZE = 116/u)
+  assert.match(styles, /grid-auto-rows: minmax\(108px, auto\)/u)
+  assert.match(styles, /min-height: 108px/u)
+  assert.match(styles, /minmax\(300px, 360px\)/u)
   assert.match(styles, /grid-template-areas:[\s\S]*"copy result"[\s\S]*"copy actions"/u)
   assert.match(styles, /content-visibility: auto/u)
   assert.match(styles, /test-plan-execution-report\.is-printing/u)

@@ -472,7 +472,7 @@ function uniqueBugFilterOptions(
     left.label.localeCompare(right.label, 'zh-CN')
   ))
 }
-const PLAN_EXECUTION_ROW_BLOCK_SIZE = 88
+const PLAN_EXECUTION_ROW_BLOCK_SIZE = 116
 const emptyTestSpaceSettings: TestSpaceSettings = { invitations: [], organizations: [], spaces: [] }
 const testSpaceInviteParam = 'testSpaceInvite'
 const seenBugCommentStoragePrefix = 'veges.testWorkbench.seenBugComments.v1'
