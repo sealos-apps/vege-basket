@@ -4,6 +4,7 @@ import type {
   AiConversationPage,
   AiTurnPage,
   AiTurnRunResponse,
+  ChangelogAnnouncementResponse,
   ChangelogEntry,
   ImageSyncArchitecture,
   ImageSyncArtifactKind,
@@ -448,11 +449,22 @@ export function fetchTodoDetail(todoId: number, options: Pick<RequestInit, 'sign
   return request<{ todo: Todo }>(`/api/todos/${todoId}/detail`, options)
 }
 
-export function fetchChangelog() {
-  return request<ChangelogResponse>('/api/changelog')
+export function fetchChangelog(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<ChangelogResponse>('/api/changelog', options)
 }
 
-export function createChangelogEntry(payload: Pick<ChangelogEntry, 'content' | 'title' | 'version'>) {
+export function fetchChangelogAnnouncement(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<ChangelogAnnouncementResponse>('/api/changelog/announcement', options)
+}
+
+export function acknowledgeChangelogAnnouncement(throughEntryId: number) {
+  return request<{ acknowledgedThroughEntryId: number }>('/api/changelog/announcement-read-state', {
+    body: JSON.stringify({ throughEntryId }),
+    method: 'PUT',
+  })
+}
+
+export function createChangelogEntry(payload: Pick<ChangelogEntry, 'announceOnLogin' | 'content' | 'title' | 'version'>) {
   return request<{ entry: ChangelogEntry }>('/api/admin/changelog', {
     body: JSON.stringify(payload),
     method: 'POST',
@@ -461,7 +473,7 @@ export function createChangelogEntry(payload: Pick<ChangelogEntry, 'content' | '
 
 export function updateChangelogEntry(
   entryId: number,
-  payload: Pick<ChangelogEntry, 'content' | 'title' | 'version'>,
+  payload: Pick<ChangelogEntry, 'announceOnLogin' | 'content' | 'title' | 'version'>,
 ) {
   return request<{ entry: ChangelogEntry }>(`/api/admin/changelog/${entryId}`, {
     body: JSON.stringify(payload),

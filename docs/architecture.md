@@ -93,7 +93,8 @@ The production image builds `src/` into `dist/`, copies `server/`, and starts
   organization collection status, AI draft generation, Feishu reminder delivery, and
   authenticated browser deep links.
 - `server/changelog.ts`: authenticated global update-log reads, encrypted Markdown
-  persistence, and system-administrator-only create/update authorization.
+  persistence, system-administrator-only create/update authorization, and per-user monotonic
+  acknowledgement of login announcements.
 - `server/roles.ts`, `server/organization-scope.ts`, `server/test-workbench.ts`:
   session-scoped business personas, additive organization-administrator capability,
   and resource-scoped read/write authorization boundaries.
@@ -443,9 +444,12 @@ The schema is normalized around these groups:
   weekday-based week-start preference, from Monday through Sunday; member reports and
   administrator summaries derive the current seven-day period from that shared setting.
 - Product updates: `changelog_entries` stores encrypted title, version, and Markdown content,
-  with queryable publication timestamps and nullable creator/editor references. Entries are
-  immediately visible after a system administrator saves them; there is no draft or delete
-  lifecycle.
+  with queryable publication timestamps, a login-announcement flag, and nullable creator/editor
+  references. Existing entries remain non-announcements; newly created entries default to login
+  announcements. `user_changelog_announcement_states` stores one monotonic acknowledgement cursor
+  per user so the latest unread announcement can cover earlier unread entries across devices.
+  Entries are immediately visible after a system administrator saves them; there is no draft or
+  delete lifecycle. Editing an acknowledged entry does not move users' cursors backward.
 - Projects and collaboration: `projects`, `project_memberships`,
   `project_invite_links`, `project_integrations`, `collaborators`.
 - Personal image-sync history: `image_sync_workflow_runs` binds each local request to its

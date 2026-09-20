@@ -13976,6 +13976,15 @@ textarea:focus {
   font-weight: 650;
 }
 
+.changelog-announcement-badge {
+  border: 1px solid color-mix(in srgb, var(--muted-text) 28%, var(--line));
+  border-radius: 5px;
+  padding: 2px 6px;
+  color: var(--strong);
+  background: color-mix(in srgb, var(--muted-text) 8%, var(--surface));
+  font-weight: 650;
+}
+
 .changelog-entry-copy strong {
   color: var(--strong);
   font-size: 16px;
@@ -14075,8 +14084,131 @@ textarea:focus {
   min-height: 0;
   flex: 1 1 auto;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-auto-rows: auto;
   gap: 18px;
+}
+
+.changelog-announcement-setting {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: fit-content;
+  cursor: pointer;
+}
+
+.changelog-announcement-setting [data-slot='checkbox'] {
+  margin-top: 2px;
+}
+
+.changelog-announcement-setting > span {
+  display: grid;
+  gap: 2px;
+}
+
+.changelog-announcement-setting strong {
+  color: var(--strong);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.changelog-announcement-setting small {
+  color: var(--muted-text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.changelog-announcement-dialog {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  width: min(92vw, 660px);
+  max-height: min(86vh, 760px);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.changelog-announcement-header {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 22px 24px 18px;
+}
+
+.changelog-announcement-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.changelog-announcement-header [data-slot='dialog-title'] {
+  overflow-wrap: anywhere;
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.changelog-announcement-header [data-slot='dialog-description'] {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.changelog-announcement-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid color-mix(in srgb, var(--brand) 28%, var(--line));
+  border-radius: 8px;
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface));
+}
+
+.changelog-announcement-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.changelog-announcement-meta > span {
+  border: 1px solid color-mix(in srgb, var(--brand) 28%, var(--line));
+  border-radius: 5px;
+  padding: 2px 6px;
+  color: var(--brand);
+  font-weight: 650;
+}
+
+.changelog-announcement-content {
+  min-height: 140px;
+  overflow-y: auto;
+  border-block: 1px solid var(--line);
+  padding: 20px 24px;
+  background: color-mix(in srgb, var(--surface) 96%, var(--control-bg));
+}
+
+.changelog-announcement-content .markdown-preview {
+  padding: 0;
+}
+
+.changelog-announcement-dialog > .form-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 24px 0;
+}
+
+.changelog-announcement-footer {
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+}
+
+.changelog-announcement-footer p {
+  margin: 0;
+  color: var(--muted-text);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .changelog-editor-fields {
@@ -14130,6 +14262,11 @@ textarea:focus {
   .changelog-entry-trigger { padding: 14px 10px; }
   .changelog-entry-detail { padding: 0 10px 16px; }
   .changelog-entry-excerpt { white-space: normal; }
+  .changelog-announcement-header { padding: 18px 18px 14px; }
+  .changelog-announcement-content { padding: 18px; }
+  .changelog-announcement-dialog > .form-error { padding-inline: 18px; }
+  .changelog-announcement-footer { align-items: stretch; padding: 14px 18px 18px; }
+  .changelog-announcement-footer button { width: 100%; }
 }
 .role-managed-user strong {
   display: inline-flex;
