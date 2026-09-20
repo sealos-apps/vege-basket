@@ -8,6 +8,7 @@ const workbench = readFileSync(new URL('./test-workbench.ts', import.meta.url), 
 const image = readFileSync(new URL('./test-plan-image.ts', import.meta.url), 'utf8')
 const api = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8')
 const component = readFileSync(new URL('../src/components/test-plan-execution.tsx', import.meta.url), 'utf8')
+const styles = readFileSync(new URL('../src/components/test-workbench.css', import.meta.url), 'utf8')
 
 test('test plan execution history schema keeps encrypted evidence and idempotency boundaries', () => {
   for (const source of [schema, migration]) {
@@ -45,4 +46,13 @@ test('real workbench exposes history, recording, Bug evidence, and PDF entry poi
   assert.match(workbenchComponent, /记录执行/u)
   assert.match(workbenchComponent, /导出 PDF/u)
   assert.match(workbenchComponent, /testPlanExecutionBugEvidence/u)
+})
+
+test('execution layout and PDF export degrade gracefully under constrained space or image failures', () => {
+  assert.match(styles, /container: test-plan-detail \/ inline-size/u)
+  assert.match(styles, /@container test-plan-detail \(max-width: 980px\)/u)
+  assert.match(component, /printImageTimeoutMs = 2500/u)
+  assert.match(component, /window\.setTimeout\(\(\) => finish\(false\), printImageTimeoutMs\)/u)
+  assert.match(component, /if \(!ready\) images\[index\]\.removeAttribute\('src'\)/u)
+  assert.match(component, /部分截图加载超时，已继续导出/u)
 })

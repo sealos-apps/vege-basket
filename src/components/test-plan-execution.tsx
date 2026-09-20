@@ -14,11 +14,29 @@ import type { TestPlan, TestPlanCase, TestPlanExecutionImage, TestResult, TestWo
 const imageLimits = { maxCount: 6, maxFileBytes: 10 * 1024 * 1024, maxTotalBytes: 30 * 1024 * 1024 } as const
 const imageTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 const resultLabels: Record<TestResult, string> = { untested: '未执行', passed: '通过', failed: '失败', blocked: '阻塞', skipped: '跳过' }
+const printImageTimeoutMs = 2500
 
 type DraftImage = TestPlanExecutionImage & { objectKey?: string; uploading?: boolean }
 
 function formatExecutionTime(value: string) {
   return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
+
+function waitForPrintImage(image: HTMLImageElement) {
+  if (image.complete) return Promise.resolve(true)
+  return new Promise<boolean>((resolve) => {
+    const finish = (loaded: boolean) => {
+      window.clearTimeout(timer)
+      image.removeEventListener('load', onLoad)
+      image.removeEventListener('error', onError)
+      resolve(loaded)
+    }
+    const onLoad = () => finish(true)
+    const onError = () => finish(false)
+    image.addEventListener('load', onLoad, { once: true })
+    image.addEventListener('error', onError, { once: true })
+    const timer = window.setTimeout(() => finish(false), printImageTimeoutMs)
+  })
 }
 
 function imageError(existing: DraftImage[], files: File[]) {
@@ -171,18 +189,29 @@ export function TestPlanExecutionReport({ plan, planCases, onClose }: {
   planCases: TestPlanCase[]
 }) {
   const counts = Object.keys(resultLabels).map((result) => ({ label: resultLabels[result as TestResult], result: result as TestResult, total: planCases.filter((item) => item.result === result).length }))
+  const [printing, setPrinting] = useState(false)
+  const [printStatus, setPrintStatus] = useState('')
   async function printReport() {
+    if (printing) return
+    setPrinting(true)
+    setPrintStatus('正在准备 PDF，图片加载最长等待 2.5 秒。')
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
     const images = Array.from(document.querySelectorAll<HTMLImageElement>('.test-plan-execution-report-images img'))
-    await Promise.all(images.map((image) => image.complete
-      ? Promise.resolve()
-      : new Promise<void>((resolve) => {
-        image.addEventListener('load', () => resolve(), { once: true })
-        image.addEventListener('error', () => resolve(), { once: true })
-      })))
-    window.print()
+    const loaded = await Promise.all(images.map(waitForPrintImage))
+    loaded.forEach((ready, index) => {
+      if (!ready) images[index].removeAttribute('src')
+    })
+    if (loaded.some((item) => !item)) setPrintStatus('部分截图加载超时，已继续导出文字和已加载内容。')
+    try {
+      window.print()
+    } finally {
+      setPrinting(false)
+      if (!loaded.some((item) => !item)) setPrintStatus('已打开系统打印窗口。')
+    }
   }
   return <Dialog open onOpenChange={(open) => { if (!open) onClose() }}><DialogContent className="test-plan-execution-report" showCloseButton={false} aria-describedby={undefined}>
-    <header className="test-plan-execution-report-toolbar"><Button variant="ghost" onClick={onClose}><ArrowLeft />返回测试计划</Button><div><strong>执行文档预览</strong><Badge variant="outline">全计划 · {planCases.length} 个用例</Badge></div><Button onClick={() => void printReport()}><DownloadSimple />打印 / 保存 PDF</Button></header>
+    <header className="test-plan-execution-report-toolbar"><Button variant="ghost" onClick={onClose}><ArrowLeft />返回测试计划</Button><div><strong>执行文档预览</strong><Badge variant="outline">全计划 · {planCases.length} 个用例</Badge></div><Button disabled={printing} onClick={() => void printReport()}><DownloadSimple />{printing ? '准备导出…' : '打印 / 保存 PDF'}</Button></header>
+    {printStatus ? <p className="test-plan-execution-print-status" role="status" aria-live="polite">{printStatus}</p> : null}
     <main className="test-plan-execution-report-paper"><div className="test-plan-execution-report-brand"><strong>Veges</strong><span>测试执行文档</span></div><code>PLAN-{plan.id}</code><h1>{plan.name}</h1><p>执行环境：{plan.environment || '未设置'} · 版本：{plan.versionLabel || '未设置'}</p><p>导出范围：全计划 {planCases.length} 个用例，含未执行用例</p>
       <h2>结果汇总</h2><div className="test-plan-execution-report-counts">{counts.map((item) => <div key={item.result}><strong>{item.total}</strong><span>{item.label}</span></div>)}</div>
       {planCases.map((item) => <section className="test-plan-execution-report-case" key={item.id}><code>CASE-{item.testCaseId ?? 'SNAPSHOT'}</code><h2>{item.snapshotTitle}</h2><p><strong>最终结果：{resultLabels[item.result]}</strong></p><dl><dt>前置条件</dt><dd>{item.snapshotPreconditions || '未填写'}</dd><dt>测试步骤</dt><dd>{item.snapshotSteps || '未填写'}</dd><dt>预期结果</dt><dd>{item.snapshotExpectedResult || '未填写'}</dd></dl><h3>执行记录（{item.executions?.length ?? 0}）</h3>{item.executions?.length ? [...item.executions].sort((a, b) => a.id - b.id).map((record) => <article key={record.id}><strong>{resultLabels[record.result]}</strong><span>{record.actorName || '未知执行人'} · {formatExecutionTime(record.executedAt)}</span><p>{record.actualResult || '未填写'}</p><p>{record.note || '未填写'}</p>{record.images.length ? <div className="test-plan-execution-report-images">{record.images.map((image) => <img key={image.id} src={image.src} alt={image.name} />)}</div> : null}</article>) : <p>暂无可追溯执行记录。</p>}</section>)}
