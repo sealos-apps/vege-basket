@@ -196,6 +196,7 @@ export function TestPlanExecutionReport({ plan, planCases, onClose }: {
     setPrinting(true)
     setPrintStatus('正在准备 PDF，图片加载最长等待 2.5 秒。')
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
     const images = Array.from(document.querySelectorAll<HTMLImageElement>('.test-plan-execution-report-images img'))
     const loaded = await Promise.all(images.map(waitForPrintImage))
     loaded.forEach((ready, index) => {
@@ -209,7 +210,7 @@ export function TestPlanExecutionReport({ plan, planCases, onClose }: {
       if (!loaded.some((item) => !item)) setPrintStatus('已打开系统打印窗口。')
     }
   }
-  return <Dialog open onOpenChange={(open) => { if (!open) onClose() }}><DialogContent className="test-plan-execution-report" showCloseButton={false} aria-describedby={undefined}>
+  return <Dialog open onOpenChange={(open) => { if (!open) onClose() }}><DialogContent className={`test-plan-execution-report${printing ? ' is-printing' : ''}`} showCloseButton={false} aria-describedby={undefined}>
     <header className="test-plan-execution-report-toolbar"><Button variant="ghost" onClick={onClose}><ArrowLeft />返回测试计划</Button><div><strong>执行文档预览</strong><Badge variant="outline">全计划 · {planCases.length} 个用例</Badge></div><Button disabled={printing} onClick={() => void printReport()}><DownloadSimple />{printing ? '准备导出…' : '打印 / 保存 PDF'}</Button></header>
     {printStatus ? <p className="test-plan-execution-print-status" role="status" aria-live="polite">{printStatus}</p> : null}
     <main className="test-plan-execution-report-paper"><div className="test-plan-execution-report-brand"><strong>Veges</strong><span>测试执行文档</span></div><code>PLAN-{plan.id}</code><h1>{plan.name}</h1><p>执行环境：{plan.environment || '未设置'} · 版本：{plan.versionLabel || '未设置'}</p><p>导出范围：全计划 {planCases.length} 个用例，含未执行用例</p>

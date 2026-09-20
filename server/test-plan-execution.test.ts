@@ -50,9 +50,12 @@ test('real workbench exposes history, recording, Bug evidence, and PDF entry poi
 
 test('execution layout and PDF export degrade gracefully under constrained space or image failures', () => {
   assert.match(styles, /container: test-plan-detail \/ inline-size/u)
-  assert.match(styles, /@container test-plan-detail \(max-width: 980px\)/u)
+  assert.match(styles, /grid-template-areas:[\s\S]*"copy result"[\s\S]*"copy actions"/u)
+  assert.match(styles, /content-visibility: auto/u)
+  assert.match(styles, /test-plan-execution-report\.is-printing/u)
   assert.match(component, /printImageTimeoutMs = 2500/u)
   assert.match(component, /window\.setTimeout\(\(\) => finish\(false\), printImageTimeoutMs\)/u)
+  assert.match(component, /requestAnimationFrame\(\(\) => resolve\(\)\)/u)
   assert.match(component, /if \(!ready\) images\[index\]\.removeAttribute\('src'\)/u)
   assert.match(component, /部分截图加载超时，已继续导出/u)
 })

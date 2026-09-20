@@ -2590,14 +2590,18 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
                 </p>
               </div>
               <div className="test-plan-heading-actions">
-                {presentation?.planActions?.(selected) ?? <Button variant="outline" onClick={() => setReportOpen(true)}><DownloadSimple />导出 PDF</Button>}
-                <Select value={selected.status} onValueChange={(value) => onStatus(selected, value as TestPlan['status'])} disabled={busy || readOnly}>
-                  <SelectTrigger aria-label={`${selected.name} 计划状态`} className="test-status-select"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem value="draft">草稿</SelectItem><SelectItem value="in_progress">执行中</SelectItem><SelectItem value="completed">已完成</SelectItem><SelectItem value="aborted">已终止</SelectItem></SelectContent>
-                </Select>
+                <div className="test-plan-primary-actions">
+                  {presentation?.planActions?.(selected) ?? <Button variant="outline" onClick={() => setReportOpen(true)}><DownloadSimple />导出 PDF</Button>}
+                  <Select value={selected.status} onValueChange={(value) => onStatus(selected, value as TestPlan['status'])} disabled={busy || readOnly}>
+                    <SelectTrigger aria-label={`${selected.name} 计划状态`} className="test-status-select"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="draft">草稿</SelectItem><SelectItem value="in_progress">执行中</SelectItem><SelectItem value="completed">已完成</SelectItem><SelectItem value="aborted">已终止</SelectItem></SelectContent>
+                  </Select>
+                </div>
                 {selected.canManage && !readOnly ? <>
-                  <Button variant="outline" disabled={busy} onClick={() => onEdit(selected)}><PencilSimple /> 编辑</Button>
-                  <Button variant="destructive" disabled={busy} onClick={() => onDelete(selected)}><Trash /> 删除</Button>
+                  <div className="test-plan-manage-actions">
+                    <Button variant="outline" disabled={busy} onClick={() => onEdit(selected)}><PencilSimple /> 编辑</Button>
+                    <Button variant="destructive" disabled={busy} onClick={() => onDelete(selected)}><Trash /> 删除</Button>
+                  </div>
                 </> : null}
               </div>
             </div>
@@ -2607,7 +2611,7 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
             <div ref={executionListRef} className="test-execution-list">
               {visibleExecutions.map((row) => <article key={row.id}>
                 <div className="test-execution-copy"><code>CASE-{row.testCaseId ?? 'SNAPSHOT'}</code><strong>{row.snapshotTitle}</strong><small>{data.subjects.find((subject) => subject.id === row.testSubjectId)?.name || '未知一级目录'}</small>{presentation?.caseMetadata?.(row) ?? <small>{row.executions?.length ? `${row.executions.length} 次执行记录` : row.result === 'untested' ? '暂无执行记录' : '历史结果 · 暂无执行记录'}</small>}</div>
-                <Select value={row.result} onValueChange={(value) => onResult(row.id, value as TestResult)} disabled={busy || readOnly}><SelectTrigger aria-label={`${row.snapshotTitle} 执行结果`}><SelectValue /></SelectTrigger><SelectContent>{Object.entries(resultLabel).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
+                <div className="test-execution-result"><span>执行结果</span><Select value={row.result} onValueChange={(value) => onResult(row.id, value as TestResult)} disabled={busy || readOnly}><SelectTrigger aria-label={`${row.snapshotTitle} 执行结果`}><SelectValue /></SelectTrigger><SelectContent>{Object.entries(resultLabel).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></div>
                 <div className="test-execution-actions">
                   <Button variant="outline" onClick={() => setDetailExecutionId(row.id)}><ClipboardText /> 详情</Button>
                   {!readOnly ? presentation?.caseActions?.(row, () => setDetailExecutionId(row.id)) ?? <Button variant="outline" onClick={() => setDetailExecutionId(row.id)}><NotePencil />记录执行</Button> : null}
