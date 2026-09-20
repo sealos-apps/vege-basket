@@ -5196,3 +5196,326 @@
   .test-directory-drawer { left: 0; top: 0; translate: 0 0; height: 100dvh; width: min(88vw, 360px); max-width: none; border-radius: 0 10px 10px 0; align-content: start; }
   .test-directory-drawer .test-directory-panel { height: calc(100dvh - 130px); max-height: none; }
 }
+.test-plan-execution-panel {
+  display: grid;
+  gap: 18px;
+  margin-top: 20px;
+}
+
+.test-plan-execution-success {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 14px 0 0;
+  color: var(--success, #2f8f5b);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.test-plan-execution-history {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.test-plan-execution-history article {
+  padding: 14px 16px;
+  border: 1px solid color-mix(in oklch, var(--line) 86%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface, var(--background)) 94%, var(--control-bg));
+}
+
+.test-plan-execution-history header,
+.test-plan-execution-form-heading,
+.test-plan-execution-image-editor > div:first-child,
+.test-plan-execution-form footer,
+.test-plan-execution-report-toolbar,
+.test-plan-execution-report-case article > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.test-plan-execution-history header > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.test-plan-execution-history header > div > span {
+  color: var(--accent, #5b68d8);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.test-plan-execution-history header small,
+.test-plan-execution-form-heading span,
+.test-plan-execution-image-editor small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.test-plan-execution-history dl {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 14px 0 0;
+  font-size: 13px;
+}
+
+.test-plan-execution-history dt,
+.test-plan-execution-report-case dt {
+  color: var(--muted-foreground);
+}
+
+.test-plan-execution-history dd,
+.test-plan-execution-report-case dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.test-plan-execution-empty {
+  margin: 16px 0;
+  padding: 20px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted-foreground);
+}
+
+.test-plan-execution-empty strong,
+.test-plan-execution-empty p {
+  display: block;
+  margin: 0;
+}
+
+.test-plan-execution-empty p { margin-top: 5px; }
+
+.test-plan-execution-form {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.test-plan-execution-form-heading { padding-bottom: 2px; }
+
+.test-plan-execution-form > label {
+  display: grid;
+  gap: 7px;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.test-plan-execution-image-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.test-plan-execution-image-editor > div:first-child > div {
+  display: grid;
+  gap: 3px;
+}
+
+.test-plan-execution-dropzone {
+  min-height: 126px;
+  padding: 12px;
+  border: 1px dashed color-mix(in oklch, var(--line) 88%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface, var(--background)) 95%, var(--control-bg));
+  cursor: pointer;
+}
+
+.test-plan-execution-dropzone > div:not(.test-plan-execution-images) {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  min-height: 98px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.test-plan-execution-dropzone > div > svg { font-size: 25px; }
+
+.test-plan-execution-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+}
+
+.test-plan-execution-image {
+  position: relative;
+  min-width: 0;
+  margin: 0;
+}
+
+.test-plan-execution-image > button:first-child {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--control-bg);
+  cursor: zoom-in;
+}
+
+.test-plan-execution-image > button:first-child img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.test-plan-execution-image > button:first-child span {
+  position: absolute;
+  inset: auto 4px 4px;
+  padding: 3px 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, .72);
+  color: #fff;
+  font-size: 11px;
+}
+
+.test-plan-execution-image > button:nth-child(2) {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .72);
+  color: #fff;
+}
+
+.test-plan-execution-image figcaption {
+  overflow: hidden;
+  margin-top: 5px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.test-plan-execution-form footer {
+  padding-top: 2px;
+  border-top: 1px solid var(--line);
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.test-plan-execution-preview > div {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+}
+
+.test-plan-execution-preview img {
+  display: block;
+  max-width: min(78vw, 720px);
+  max-height: 68vh;
+  object-fit: contain;
+}
+
+.test-plan-execution-report {
+  width: min(1180px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.test-plan-execution-report-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface, var(--background));
+}
+
+.test-plan-execution-report-toolbar > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.test-plan-execution-report-paper {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 42px 56px 64px;
+  overflow: auto;
+  background: #fff;
+  color: #1c2430;
+}
+
+.test-plan-execution-report-brand {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  color: #5870d8;
+  font-size: 13px;
+}
+
+.test-plan-execution-report-paper > code { display: block; margin-top: 36px; color: #64748b; }
+.test-plan-execution-report-paper > h1 { margin: 8px 0 10px; font-size: 30px; }
+.test-plan-execution-report-paper > p { margin: 5px 0; color: #526172; }
+.test-plan-execution-report-paper > h2 { margin: 30px 0 14px; font-size: 20px; }
+
+.test-plan-execution-report-counts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.test-plan-execution-report-counts > div {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid #dbe2eb;
+  border-radius: 6px;
+}
+
+.test-plan-execution-report-counts strong { font-size: 24px; }
+.test-plan-execution-report-counts span { color: #64748b; font-size: 12px; }
+
+.test-plan-execution-report-case {
+  break-inside: avoid;
+  margin-top: 34px;
+  padding-top: 22px;
+  border-top: 1px solid #dbe2eb;
+}
+
+.test-plan-execution-report-case h2 { margin: 8px 0; font-size: 21px; }
+.test-plan-execution-report-case > p { margin: 8px 0 16px; }
+.test-plan-execution-report-case dl { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 9px 14px; }
+.test-plan-execution-report-case h3 { margin: 24px 0 12px; font-size: 15px; }
+.test-plan-execution-report-case article { margin-top: 10px; padding: 11px 13px; border: 1px solid #dbe2eb; border-radius: 6px; }
+.test-plan-execution-report-case article > span { color: #64748b; font-size: 12px; }
+.test-plan-execution-report-case article > p { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.test-plan-execution-report-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.test-plan-execution-report-images img { width: 110px; height: 82px; object-fit: cover; border: 1px solid #dbe2eb; border-radius: 4px; }
+
+@media (max-width: 700px) {
+  .test-plan-execution-history header { align-items: flex-start; flex-direction: column; }
+  .test-plan-execution-form footer { align-items: flex-start; flex-direction: column; }
+  .test-plan-execution-report-paper { padding: 30px 22px 46px; }
+  .test-plan-execution-report-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .test-plan-execution-report-toolbar { align-items: flex-start; flex-wrap: wrap; }
+}
+
+@media print {
+  body * { visibility: hidden !important; }
+  .test-plan-execution-report, .test-plan-execution-report * { visibility: visible !important; }
+  .test-plan-execution-report { position: absolute; inset: 0; width: 100%; max-height: none; overflow: visible; border: 0; box-shadow: none; }
+  .test-plan-execution-report-toolbar { display: none !important; }
+  .test-plan-execution-report-paper { max-width: none; padding: 0; }
+  .test-plan-execution-report-case { break-inside: auto; }
+}

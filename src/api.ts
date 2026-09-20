@@ -231,6 +231,12 @@ export type TodoImageUploadResponse = {
   objectKey: string
 }
 
+export type TestPlanExecutionImageUploadResponse = {
+  contentType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+  imageUrl: string
+  objectKey: string
+}
+
 function inferTodoAttachmentContentType(file: File) {
   const declaredType = file.type.split(';')[0].trim().toLowerCase()
   if (
@@ -1503,6 +1509,30 @@ export async function uploadTodoImage(file: File) {
   }
 
   return response.json() as Promise<TodoImageUploadResponse>
+}
+
+export async function uploadTestPlanExecutionImage(file: File) {
+  const contentType = inferTodoAttachmentContentType(file)
+  if (!contentType.startsWith('image/')) throw new Error('执行截图仅支持图片文件。')
+  const response = await fetch('/api/test-plan-images', {
+    method: 'POST',
+    headers: {
+      'Content-Type': contentType,
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    body: file,
+  })
+  if (!response.ok) {
+    const fallbackMessage = `Request failed: ${response.status}`
+    let data: { error?: string }
+    try {
+      data = await response.json() as { error?: string }
+    } catch (error) {
+      throw new Error(fallbackMessage, { cause: error })
+    }
+    throw new Error(data.error || fallbackMessage)
+  }
+  return response.json() as Promise<TestPlanExecutionImageUploadResponse>
 }
 
 export const uploadWorkbenchAttachment = uploadTodoImage

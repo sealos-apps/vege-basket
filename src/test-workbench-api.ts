@@ -345,11 +345,30 @@ export function deleteTestPlan(spaceId: number, planId: number) {
 }
 
 export function updateTestPlanCase(spaceId: number, planCaseId: number, payload: {
+  clientId?: string
   result: TestResult
   resultNote?: string
 }) {
   return request<TestWorkbenchData>(`/api/test-spaces/${spaceId}/plan-cases/${planCaseId}`, {
     method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function appendTestPlanExecution(spaceId: number, planCaseId: number, payload: {
+  actualResult?: string
+  clientId: string
+  images?: Array<{
+    contentType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+    fileName: string
+    fileSize: number
+    objectKey: string
+  }>
+  note?: string
+  result: TestResult
+}) {
+  return request<TestWorkbenchData>(`/api/test-spaces/${spaceId}/plan-cases/${planCaseId}/executions`, {
+    method: 'POST',
     body: JSON.stringify(payload),
   })
 }

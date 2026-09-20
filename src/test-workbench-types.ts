@@ -183,6 +183,7 @@ export type TestPlanCase = {
   id: number
   result: TestResult
   resultNote: string
+  executions?: TestPlanExecution[]
   snapshotCaseVersion: number
   snapshotExpectedResult: string
   snapshotPreconditions: string
@@ -191,6 +192,25 @@ export type TestPlanCase = {
   testCaseId?: number
   testPlanId: number
   testSubjectId?: number
+}
+
+export type TestPlanExecutionImage = {
+  id: number
+  name: string
+  size: number
+  src: string
+  type: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+}
+
+export type TestPlanExecution = {
+  actualResult: string
+  actorName?: string
+  actorUserId?: number
+  executedAt: string
+  id: number
+  images: TestPlanExecutionImage[]
+  note: string
+  result: TestResult
 }
 
 export type TestBugComment = {
