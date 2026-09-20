@@ -308,8 +308,7 @@ export async function backfillProjectModuleNames(client: ModuleClient) {
 
 // Startup runs this after schemaSql and before accepting requests. GET never writes.
 // The singleton receipt makes the name-union import one-time, including after restarts.
-export async function initializeProjectModules(pool: Pick<Pool, 'connect'>, encryptExisting = false) {
-  const client = await pool.connect()
+export async function initializeProjectModulesWithClient(client: PoolClient, encryptExisting = false) {
   try {
     await client.query('begin')
     await client.query('select pg_advisory_xact_lock(hashtextextended($1::text, 0))', ['project-modules-migration-v1'])
@@ -342,6 +341,13 @@ export async function initializeProjectModules(pool: Pick<Pool, 'connect'>, encr
   } catch (error) {
     await client.query('rollback')
     throw error
+  }
+}
+
+export async function initializeProjectModules(pool: Pick<Pool, 'connect'>, encryptExisting = false) {
+  const client = await pool.connect()
+  try {
+    await initializeProjectModulesWithClient(client, encryptExisting)
   } finally {
     client.release()
   }

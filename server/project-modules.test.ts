@@ -253,13 +253,21 @@ test('catalog writes and deletion take project locks before manager row locks, w
   const catalogStart = moduleSource.indexOf('export async function lockOrganizationModuleCatalog(')
   const catalogEnd = moduleSource.indexOf('\nexport async function ', catalogStart + 1)
   assert.match(moduleSource.slice(catalogStart, catalogEnd), /from organizations where id = \$1 for key share/u)
-  const source = readFileSync(new URL('./organizations.ts', import.meta.url), 'utf8')
-  for (const anchor of ['async function mutateOrganizationProjectModule(', "router.delete('/organizations/:organizationId',"]) {
-    const start = source.indexOf(anchor)
-    assert.ok(start >= 0)
-    const catalogLock = source.indexOf('await lockOrganizationModuleCatalog(', start)
-    const projectLocks = source.indexOf('await lockOrganizationModuleProjects(', catalogLock)
-    const managerLock = source.indexOf('await lockManagedOrganization(', catalogLock)
-    assert.ok(catalogLock < projectLocks && projectLocks < managerLock)
-  }
+  const organizationSource = readFileSync(new URL('./organizations.ts', import.meta.url), 'utf8')
+  const mutationStart = organizationSource.indexOf('async function mutateOrganizationProjectModule(')
+  assert.ok(mutationStart >= 0)
+  const catalogLock = organizationSource.indexOf('await lockOrganizationModuleCatalog(', mutationStart)
+  const projectLocks = organizationSource.indexOf('await lockOrganizationModuleProjects(', catalogLock)
+  const managerLock = organizationSource.indexOf('await lockManagedOrganization(', catalogLock)
+  assert.ok(catalogLock < projectLocks && projectLocks < managerLock)
+
+  const platformSource = readFileSync(new URL('./platform-organizations.ts', import.meta.url), 'utf8')
+  const deletionStart = platformSource.indexOf('export async function deletePlatformOrganization(')
+  assert.ok(deletionStart >= 0)
+  const deletionCatalogLock = platformSource.indexOf('await lockOrganizationModuleCatalog(', deletionStart)
+  const deletionProjectLocks = platformSource.indexOf('await lockOrganizationModuleProjects(', deletionCatalogLock)
+  const organizationRowLock = platformSource.indexOf('for update', deletionProjectLocks)
+  assert.ok(
+    deletionCatalogLock < deletionProjectLocks && deletionProjectLocks < organizationRowLock,
+  )
 })

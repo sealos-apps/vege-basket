@@ -1,4 +1,5 @@
 export const notificationRefreshIntervalMs = 15_000
+export const authContextRefreshIntervalMs = 15_000
 export const workspaceRefreshIntervalMs = 15_000
 export const workspaceCatalogRefreshIntervalMs = 30_000
 

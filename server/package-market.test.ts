@@ -7,6 +7,7 @@ import test from 'node:test'
 import {
   formatPackageMarketTimestamp,
   isAllowedPackageMarketObjectKey,
+  isPackageMarketObjectKeyAllowedForRule,
   isSafePackageMarketObjectKey,
   listPackageMarketRules,
   matchesPackageMarketCiFileName,
@@ -14,6 +15,7 @@ import {
   normalizeOssEndpoint,
   normalizePackageMarketExpireMinutes,
   packageMarketExpireMinuteOptions,
+  parsePackageMarketRulesYaml,
   resolvePackageMarketAppRuleId,
 } from './package-market.ts'
 
@@ -33,6 +35,30 @@ test('keeps base package ids while resolving their reads through apps rules', ()
   assert.equal(resolvePackageMarketAppRuleId('base-pro'), 'sealos-pro')
   assert.equal(resolvePackageMarketAppRuleId('base-oss'), 'sealos-oss')
   assert.equal(resolvePackageMarketAppRuleId('offline-center'), '')
+})
+
+test('parses an immutable historical rule set for persisted package validation', () => {
+  const rules = parsePackageMarketRulesYaml(`
+page_kinds:
+  apps:
+    key: app
+    label_zh: 应用
+rules:
+  historical-app:
+    name: Historical App
+    category: apps
+    roots:
+      - archive/historical-app/
+    file_name_formats:
+      - historical-app-%s-%s.tar.gz
+`)
+  assert.equal(rules.length, 1)
+  assert.equal(isPackageMarketObjectKeyAllowedForRule({
+    channel: 'release',
+    objectKey: 'archive/historical-app/release/v1.0.0/historical-app-v1.0.0-amd64.tar.gz',
+    packageId: 'historical-app',
+    rules,
+  }), true)
 })
 
 test('formats package market timestamps in Shanghai time', () => {
@@ -122,8 +148,9 @@ test('keeps HTTPS OSS endpoints unchanged', () => {
 test('rejects HTTP endpoints outside Alibaba OSS', () => {
   assert.throws(
     () => normalizeOssEndpoint('http://example.com'),
-    /OSS_ENDPOINT must be an HTTPS origin/,
+    /阿里云 OSS HTTPS/u,
   )
+  assert.throws(() => normalizeOssEndpoint('https://storage.example.com'), /阿里云 OSS HTTPS/u)
 })
 
 test('allows package cache-cluster attachments under matching app release roots', () => {
@@ -294,6 +321,17 @@ rules:
       process.execPath,
       ['--import', 'tsx', '--input-type=module', '-e', `
         const market = await import(${JSON.stringify(moduleUrl)})
+        const { readFileSync } = await import('node:fs')
+        market.configurePackageMarketRuntime(() => ({
+          packages: {
+            downloadExpireSeconds: 1800,
+            legacyBaseListPrefixTemplate: '',
+            legacyBaseObjectTemplate: '',
+            legacyMiddlewareRoots: [],
+            rulesYaml: readFileSync(${JSON.stringify(rulesFile)}, 'utf8'),
+          },
+          storage: { accessKeyId: '', accessKeySecret: '', bucket: '', endpoint: '' },
+        }))
         console.log(JSON.stringify({
           configured: market.isAllowedPackageMarketObjectKey('custom/middleware/mysql/mysql-v1-amd64.tar.gz'),
           default: market.isAllowedPackageMarketObjectKey('offline/sealos-pro/mysql/mysql-v1-amd64.tar.gz'),
@@ -302,14 +340,7 @@ rules:
       `],
       {
         cwd: process.cwd(),
-        env: {
-          ...process.env,
-          PACKAGE_MARKET_RULES_FILE: rulesFile,
-          OSS_ENDPOINT: '',
-          OSS_ACCESS_KEY_ID: '',
-          OSS_ACCESS_KEY_SECRET: '',
-          OSS_BUCKET: '',
-        },
+        env: process.env,
         encoding: 'utf8',
       },
     )

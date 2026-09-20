@@ -1,8 +1,9 @@
 import type { PoolClient } from 'pg'
-import { decryptText, encryptText } from './crypto.ts'
+import { decryptText, encryptText, keyedDigest } from './crypto.ts'
 import { pool, query } from './db.ts'
 import type { UserAccountStatus } from '../shared/user-lifecycle.ts'
 import { formatTestSpaceReference } from '../shared/test-space-reference.ts'
+import { lockPlatformAdministration, requirePlatformAdminWithClient } from './platform-admins.ts'
 
 export type OffboardingAdmin = {
   displayName: string
@@ -67,6 +68,8 @@ export type OffboardingResult = {
     transferredProjectCount: number
     transferredTestSpaceCount: number
   }>
+  permissionVersion: number
+  replayed: boolean
 }
 
 function positiveId(value: unknown) {
@@ -198,11 +201,14 @@ export async function getOffboardingPreview(userId: number): Promise<Offboarding
   }
 }
 
-export async function offboardUser(
-  userId: number,
-  actorUserId: number,
-  selections: OffboardingSelection[],
-): Promise<OffboardingResult> {
+export async function offboardUser(input: {
+  actorUserId: number
+  expectedVersion: number
+  requestId: string
+  selections: OffboardingSelection[]
+  userId: number
+}): Promise<OffboardingResult> {
+  const { actorUserId, expectedVersion, requestId, selections, userId } = input
   if (userId === actorUserId) throw operationError('Super administrator cannot offboard the current account', 400)
   const normalizedSelections = new Map<number, number>()
   for (const selection of selections) {
@@ -216,19 +222,62 @@ export async function offboardUser(
     }
     normalizedSelections.set(organizationId, targetAdminUserId)
   }
+  const requestDigest = keyedDigest(JSON.stringify({
+    expectedVersion,
+    selections: [...normalizedSelections.entries()].sort(([left], [right]) => left - right),
+    userId,
+  }))
 
   const client = await pool.connect()
   try {
     await client.query('begin')
+    await lockPlatformAdministration(client)
+    await requirePlatformAdminWithClient(client, actorUserId)
+    const receipt = await client.query<{
+      action: string
+      request_digest: string
+      result_encrypted: string | null
+      target_user_id: string
+    }>(
+      `select action, request_digest, result_encrypted, target_user_id
+         from platform_user_mutation_receipts
+        where actor_user_id = $1 and request_id = $2::uuid for update`,
+      [actorUserId, requestId],
+    )
+    if (receipt.rows[0]) {
+      if (
+        receipt.rows[0].action !== 'offboard' ||
+        receipt.rows[0].request_digest !== requestDigest ||
+        Number(receipt.rows[0].target_user_id) !== userId
+      ) {
+        throw operationError('该请求编号已用于其他用户操作。')
+      }
+      if (!receipt.rows[0].result_encrypted) throw operationError('用户操作回执不完整。', 500)
+      const result = JSON.parse(decryptText(receipt.rows[0].result_encrypted)) as OffboardingResult
+      await client.query('commit')
+      return { ...result, replayed: true }
+    }
     const lockedUser = await client.query<{
       account_status: UserAccountStatus
       display_name: string
       email: string
+      is_builtin_admin: boolean
+      revision: string
     }>(
-      'select email, display_name, account_status from users where id = $1 for update',
+      `select users.email, users.display_name, users.account_status, users.is_builtin_admin,
+              coalesce(version.revision, 0)::text as revision
+         from users
+         left join platform_user_permission_versions version on version.user_id = users.id
+        where users.id = $1 for update of users`,
       [userId],
     )
     if (!lockedUser.rows[0]) throw operationError('User not found', 404)
+    if (lockedUser.rows[0].is_builtin_admin) {
+      throw operationError('内置 admin 不可办理离职。')
+    }
+    if (Number(lockedUser.rows[0].revision) !== expectedVersion) {
+      throw operationError('用户权限已更新，请刷新后重试。')
+    }
     if (lockedUser.rows[0].account_status === 'departed') {
       throw operationError('This account has already completed offboarding')
     }
@@ -532,6 +581,18 @@ export async function offboardUser(
     }
 
     await client.query(
+      `delete from platform_admin_grants where user_id = $1 and grant_kind = 'managed'`,
+      [userId],
+    )
+    const permissionVersion = Number((await client.query<{ revision: string }>(
+      `insert into platform_user_permission_versions (user_id, revision, updated_at)
+       values ($1, 1, now())
+       on conflict (user_id) do update
+         set revision = platform_user_permission_versions.revision + 1, updated_at = now()
+       returning revision`,
+      [userId],
+    )).rows[0].revision)
+    await client.query(
       `update users
        set account_status = 'departed', departed_at = now(), departed_by_user_id = $1,
            disabled_at = coalesce(disabled_at, now()), disabled_by_user_id = coalesce(disabled_by_user_id, $1)
@@ -554,14 +615,30 @@ export async function offboardUser(
       )
       notificationIds.push({ notificationId: Number(notification.rows[0].id), recipientUserId })
     }
-    await client.query('commit')
-    for (const event of notificationIds) accountOffboardingNotificationHandler?.(event)
-    return {
+    const result: OffboardingResult = {
       accountStatus: 'departed',
       bugCount: totalBugs,
       offboardingId,
       organizations: organizationResults,
+      permissionVersion,
+      replayed: false,
     }
+    await client.query(
+      `insert into platform_user_mutation_receipts
+        (actor_user_id, request_id, action, target_user_id, request_digest, result_revision, result_encrypted)
+       values ($1, $2::uuid, 'offboard', $3, $4, $5, $6)`,
+      [actorUserId, requestId, userId, requestDigest, permissionVersion, encryptText(JSON.stringify(result))],
+    )
+    await client.query(
+      `insert into platform_audit_events
+        (actor_user_id, action, target_type, target_id, changed_fields, request_id)
+       values ($1, 'user.offboarded', 'user', $2::text,
+               array['accountStatus', 'platformAdmin', 'memberships'], $3::uuid)`,
+      [actorUserId, userId, requestId],
+    )
+    await client.query('commit')
+    for (const event of notificationIds) accountOffboardingNotificationHandler?.(event)
+    return result
   } catch (error) {
     await client.query('rollback')
     throw error
@@ -570,21 +647,120 @@ export async function offboardUser(
   }
 }
 
-export async function updateManagedAccountStatus(
-  userId: number,
-  actorUserId: number,
-  status: 'active' | 'disabled',
-) {
-  const result = await query<{ account_status: UserAccountStatus }>(
-    `update users
-     set account_status = $1,
-         disabled_at = case when $1 = 'disabled' then coalesce(disabled_at, now()) else null end,
-         disabled_by_user_id = case when $1 = 'disabled' then $2 else null end
-     where id = $3 and account_status <> 'departed'
-     returning account_status`,
-    [status, actorUserId, userId],
-  )
-  if (!result.rows[0]) throw operationError('User not found or has already departed', 404)
-  if (status === 'disabled') await query('delete from sessions where user_id = $1', [userId])
-  return result.rows[0].account_status
+export async function updateManagedAccountStatus(input: {
+  actorUserId: number
+  expectedVersion: number
+  requestId: string
+  status: 'active' | 'disabled'
+  userId: number
+}) {
+  const requestDigest = keyedDigest(JSON.stringify({
+    expectedVersion: input.expectedVersion,
+    status: input.status,
+    userId: input.userId,
+  }))
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    await lockPlatformAdministration(client)
+    await requirePlatformAdminWithClient(client, input.actorUserId)
+    const receipt = await client.query<{
+      action: string
+      request_digest: string
+      result_encrypted: string | null
+      target_user_id: string
+    }>(
+      `select action, request_digest, result_encrypted, target_user_id
+         from platform_user_mutation_receipts
+        where actor_user_id = $1 and request_id = $2::uuid for update`,
+      [input.actorUserId, input.requestId],
+    )
+    if (receipt.rows[0]) {
+      if (
+        receipt.rows[0].action !== 'status' ||
+        receipt.rows[0].request_digest !== requestDigest ||
+        Number(receipt.rows[0].target_user_id) !== input.userId
+      ) {
+        throw operationError('该请求编号已用于其他用户操作。')
+      }
+      if (!receipt.rows[0].result_encrypted) throw operationError('用户操作回执不完整。', 500)
+      const replayed = JSON.parse(decryptText(receipt.rows[0].result_encrypted)) as {
+        accountStatus: UserAccountStatus
+        permissionVersion: number
+      }
+      await client.query('commit')
+      return { ...replayed, replayed: true }
+    }
+    const target = await client.query<{
+      account_status: UserAccountStatus
+      is_builtin_admin: boolean
+      revision: string
+    }>(
+      `select users.account_status, users.is_builtin_admin,
+              coalesce(version.revision, 0)::text as revision
+         from users
+         left join platform_user_permission_versions version on version.user_id = users.id
+        where users.id = $1 for update of users`,
+      [input.userId],
+    )
+    if (!target.rows[0] || target.rows[0].account_status === 'departed') {
+      throw operationError('User not found or has already departed', 404)
+    }
+    if (target.rows[0].is_builtin_admin) throw operationError('内置 admin 不可禁用。')
+    if (Number(target.rows[0].revision) !== input.expectedVersion) {
+      throw operationError('用户权限已更新，请刷新后重试。')
+    }
+    const result = await client.query<{ account_status: UserAccountStatus }>(
+      `update users
+       set account_status = $1::text,
+           disabled_at = case when $1::text = 'disabled' then coalesce(disabled_at, now()) else null::timestamptz end,
+           disabled_by_user_id = case when $1::text = 'disabled' then $2::bigint else null::bigint end
+       where id = $3::bigint
+       returning account_status`,
+      [input.status, input.actorUserId, input.userId],
+    )
+    if (input.status === 'disabled') {
+      await client.query('delete from sessions where user_id = $1', [input.userId])
+    }
+    const permissionVersion = Number((await client.query<{ revision: string }>(
+      `insert into platform_user_permission_versions (user_id, revision, updated_at)
+       values ($1, 1, now())
+       on conflict (user_id) do update
+         set revision = platform_user_permission_versions.revision + 1, updated_at = now()
+       returning revision`,
+      [input.userId],
+    )).rows[0].revision)
+    const response = { accountStatus: result.rows[0].account_status, permissionVersion, replayed: false }
+    await client.query(
+      `insert into platform_user_mutation_receipts
+        (actor_user_id, request_id, action, target_user_id, request_digest, result_revision, result_encrypted)
+       values ($1, $2::uuid, 'status', $3, $4, $5, $6)`,
+      [
+        input.actorUserId,
+        input.requestId,
+        input.userId,
+        requestDigest,
+        permissionVersion,
+        encryptText(JSON.stringify(response)),
+      ],
+    )
+    await client.query(
+      `insert into platform_audit_events
+        (actor_user_id, action, target_type, target_id, changed_fields, request_id)
+       values ($1, $2, 'user', $3::text, array['accountStatus'], $4::uuid)`,
+      [
+        input.actorUserId,
+        input.status === 'active' ? 'user.enabled' : 'user.disabled',
+        input.userId,
+        input.requestId,
+      ],
+    )
+    await client.query('commit')
+    return response
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
 }

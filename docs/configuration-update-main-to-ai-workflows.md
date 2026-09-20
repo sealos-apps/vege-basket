@@ -49,7 +49,7 @@ FEISHU_DELIVERY_ENABLED=false
 | OAuth 重定向 URL | `https://<生产域名>/api/auth/feishu/oauth/callback` |
 | 事件回调 URL | `https://<生产域名>/api/integrations/feishu/events` |
 
-`FEISHU_OAUTH_REDIRECT_URI` 未显式设置时，服务端会从当前请求来源生成 OAuth 回调地址。已有自定义值应继续保留，并与飞书开放平台完全一致。
+事件回调 URL 和 OAuth 重定向 URL 都由平台管理中的公网地址生成，不再读取 `FEISHU_OAUTH_REDIRECT_URI`，也不会根据请求来源推断。修改公网地址后需把页面展示的两条地址同步到飞书开放平台；已经开始的 OAuth 流程继续使用其签名 state 中保存的原重定向地址。
 
 飞书自建应用的可用范围应只包含预期内部用户。Veges 会把成功的飞书 OAuth 当作内部身份，当前没有额外的租户或邮箱域名白名单。还需确认应用具有向绑定用户 `open_id` 发送消息的权限。
 

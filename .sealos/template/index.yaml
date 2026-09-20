@@ -40,116 +40,11 @@ spec:
       type: string
       default: ''
       required: true
-    VEGES_ADMIN_USERNAMES:
-      description: Comma-separated trusted Veges usernames allowed to assign account roles. Empty disables role administration.
-      type: string
-      default: ''
-      required: false
-    AI_API_BASE:
-      description: Optional OpenAI-compatible AI API base URL saved as the default per-instance provider endpoint.
-      type: string
-      default: ''
-      required: false
-    AI_API_KEY:
-      description: Optional default AI API key for this instance.
-      type: string
-      default: ''
-      required: false
-    AI_MODEL:
-      description: Optional default AI model name.
-      type: string
-      default: ''
-      required: false
-    AI_GLOBAL_RATE_LIMIT:
-      description: Maximum shared AI requests accepted by one application replica per rate window.
-      type: string
-      default: '30'
-      required: false
-    FEISHU_WEBHOOK_USER_EMAIL:
-      description: Username that receives Feishu conversation analysis drafts.
-      type: string
-      default: ''
-      required: false
-    FEISHU_WEBHOOK_BASIC_USER:
-      description: Optional HTTP basic auth username for the Feishu webhook endpoint.
-      type: string
-      default: ''
-      required: false
-    FEISHU_WEBHOOK_BASIC_PASSWORD:
-      description: Optional HTTP basic auth password for the Feishu webhook endpoint.
-      type: string
-      default: ''
-      required: false
-    FEISHU_APP_ID:
-      description: Optional Feishu application id for message fetch and sender lookup.
-      type: string
-      default: ''
-      required: false
-    FEISHU_APP_SECRET:
-      description: Optional Feishu application secret.
-      type: string
-      default: ''
-      required: false
-    FEISHU_DELIVERY_ENABLED:
-      description: Set to false to stop all outbound Feishu notification delivery.
-      type: string
-      default: 'true'
-      required: false
-    FEISHU_AI_CHAT_ENABLED:
-      description: Enable Veges AI conversations and todo proposal cards in private Feishu bot chats.
-      type: string
-      default: 'false'
-      required: false
-    FEISHU_VERIFICATION_TOKEN:
-      description: Required Feishu webhook verification token used before accepting challenge or event payloads.
+    VEGES_BOOTSTRAP_ADMIN_PASSWORD:
+      description: Initial password for the built-in admin account. Mounted as a secret file and used only when the account does not exist. Must contain at least 12 characters.
       type: string
       default: ''
       required: true
-    FEISHU_ENCRYPT_KEY:
-      description: Optional Feishu webhook encrypt key.
-      type: string
-      default: ''
-      required: false
-    OSS_ENDPOINT:
-      description: Alibaba OSS endpoint required for todo image uploads and package timeline features.
-      type: string
-      default: ''
-      required: true
-    OSS_ACCESS_KEY_ID:
-      description: Alibaba OSS access key id required for todo image uploads and package timeline features.
-      type: string
-      default: ''
-      required: true
-    OSS_ACCESS_KEY_SECRET:
-      description: Alibaba OSS access key secret required for todo image uploads and package timeline features.
-      type: string
-      default: ''
-      required: true
-    OSS_BUCKET:
-      description: Alibaba OSS bucket name required for todo image uploads and package timeline features.
-      type: string
-      default: ''
-      required: true
-    PACKAGE_MARKET_MIDDLEWARE_ROOT:
-      description: Compatibility fallback for middleware discovery; preferred roots are configured in package-market YAML page_kinds.middleware.discovery.roots.
-      type: string
-      default: ''
-      required: false
-    PACKAGE_MARKET_BASE_OBJECT_TEMPLATE:
-      description: Optional legacy base-package object template; apps rules take precedence.
-      type: string
-      default: ''
-      required: false
-    PACKAGE_MARKET_BASE_LIST_PREFIX_TEMPLATE:
-      description: Optional legacy base-package listing prefix; apps rules take precedence.
-      type: string
-      default: ''
-      required: false
-    PACKAGE_MARKET_DOWNLOAD_EXPIRE_SECONDS:
-      description: Optional signed URL expiry time in seconds for package downloads.
-      type: string
-      default: '1800'
-      required: false
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -284,6 +179,14 @@ spec:
       restartPolicy: OnFailure
   ttlSecondsAfterFinished: 300
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${{ defaults.app_name }}-bootstrap-admin
+type: Opaque
+stringData:
+  password: ${{ inputs.VEGES_BOOTSTRAP_ADMIN_PASSWORD }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -293,11 +196,11 @@ metadata:
     cloud.sealos.io/app-deploy-manager: ${{ defaults.app_name }}
   annotations:
     originImageName: ${{ inputs.VEGES_IMAGE }}
-    deploy.cloud.sealos.io/minReplicas: '1'
-    deploy.cloud.sealos.io/maxReplicas: '1'
+    deploy.cloud.sealos.io/minReplicas: '2'
+    deploy.cloud.sealos.io/maxReplicas: '2'
 spec:
   revisionHistoryLimit: 1
-  replicas: 1
+  replicas: 2
   strategy:
     type: Recreate
   selector:
@@ -311,45 +214,10 @@ spec:
       automountServiceAccountToken: false
       imagePullSecrets:
         - name: ${{ defaults.app_name }}
-      initContainers:
-        - name: wait-postgres
-          image: postgres:16-alpine
-          imagePullPolicy: IfNotPresent
-          env:
-            - name: PG_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: ${{ defaults.app_name }}-pg-conn-credential
-                  key: password
-            - name: PG_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: ${{ defaults.app_name }}-pg-conn-credential
-                  key: endpoint
-            - name: PG_DATABASE
-              value: vegebasket
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -eu
-              for i in $(seq 1 90); do
-                if pg_isready -h "${PG_ENDPOINT%:*}" -p "${PG_ENDPOINT##*:}" -U postgres -d postgres >/dev/null 2>&1; then
-                  break
-                fi
-                sleep 2
-              done
-              pg_isready -h "${PG_ENDPOINT%:*}" -p "${PG_ENDPOINT##*:}" -U postgres -d postgres >/dev/null 2>&1
-              if ! psql "postgresql://postgres:${PG_PASSWORD}@${PG_ENDPOINT}/postgres" -tAc "SELECT 1 FROM pg_database WHERE datname='${PG_DATABASE}'" | grep -q 1; then
-                psql "postgresql://postgres:${PG_PASSWORD}@${PG_ENDPOINT}/postgres" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"${PG_DATABASE}\";"
-              fi
-          resources:
-            requests:
-              cpu: 20m
-              memory: 25Mi
-            limits:
-              cpu: 200m
-              memory: 256Mi
+      volumes:
+        - name: bootstrap-admin-password
+          secret:
+            secretName: ${{ defaults.app_name }}-bootstrap-admin
       containers:
         - name: ${{ defaults.app_name }}
           image: ${{ inputs.VEGES_IMAGE }}
@@ -361,8 +229,6 @@ spec:
               value: production
             - name: PORT
               value: '8787'
-            - name: APP_PUBLIC_URL
-              value: https://${{ defaults.app_host }}.${{ SEALOS_CLOUD_DOMAIN }}
             - name: PG_HOST
               valueFrom:
                 secretKeyRef:
@@ -395,63 +261,13 @@ spec:
               value: ${{ inputs.APP_ENCRYPTION_ACTIVE_KEY_ID }}
             - name: APP_ENCRYPTION_KEYS
               value: ${{ inputs.APP_ENCRYPTION_KEYS }}
-            - name: VEGES_ADMIN_USERNAMES
-              value: ${{ inputs.VEGES_ADMIN_USERNAMES }}
-            - name: AI_API_BASE
-              value: ${{ inputs.AI_API_BASE }}
-            - name: AI_API_KEY
-              value: ${{ inputs.AI_API_KEY }}
-            - name: AI_MODEL
-              value: ${{ inputs.AI_MODEL }}
-            - name: AI_RATE_LIMIT
-              value: '5'
-            - name: AI_GLOBAL_RATE_LIMIT
-              value: ${{ inputs.AI_GLOBAL_RATE_LIMIT }}
-            - name: AI_RATE_WINDOW_MS
-              value: '60000'
-            - name: AI_MAX_MESSAGE_LENGTH
-              value: '2000'
-            - name: AI_MAX_CONTEXT_CHARS
-              value: '12000'
-            - name: FEISHU_WEBHOOK_USER_EMAIL
-              value: ${{ inputs.FEISHU_WEBHOOK_USER_EMAIL }}
-            - name: FEISHU_WEBHOOK_BASIC_USER
-              value: ${{ inputs.FEISHU_WEBHOOK_BASIC_USER }}
-            - name: FEISHU_WEBHOOK_BASIC_PASSWORD
-              value: ${{ inputs.FEISHU_WEBHOOK_BASIC_PASSWORD }}
-            - name: FEISHU_APP_ID
-              value: ${{ inputs.FEISHU_APP_ID }}
-            - name: FEISHU_APP_SECRET
-              value: ${{ inputs.FEISHU_APP_SECRET }}
-            - name: FEISHU_DELIVERY_ENABLED
-              value: ${{ inputs.FEISHU_DELIVERY_ENABLED }}
-            - name: FEISHU_AI_CHAT_ENABLED
-              value: ${{ inputs.FEISHU_AI_CHAT_ENABLED }}
-            - name: FEISHU_VERIFICATION_TOKEN
-              value: ${{ inputs.FEISHU_VERIFICATION_TOKEN }}
-            - name: FEISHU_ENCRYPT_KEY
-              value: ${{ inputs.FEISHU_ENCRYPT_KEY }}
-            - name: OSS_ENDPOINT
-              value: ${{ inputs.OSS_ENDPOINT }}
-            - name: OSS_ACCESS_KEY_ID
-              value: ${{ inputs.OSS_ACCESS_KEY_ID }}
-            - name: OSS_ACCESS_KEY_SECRET
-              value: ${{ inputs.OSS_ACCESS_KEY_SECRET }}
-            - name: OSS_BUCKET
-              value: ${{ inputs.OSS_BUCKET }}
-            - name: PACKAGE_MARKET_RULES_FILE
-              value: /app/server/trial-combo-package-rules.yaml
-            - name: PACKAGE_MARKET_MIDDLEWARE_ROOT
-              value: ${{ inputs.PACKAGE_MARKET_MIDDLEWARE_ROOT }}
-            - name: PACKAGE_MARKET_BASE_OBJECT_TEMPLATE
-              value: ${{ inputs.PACKAGE_MARKET_BASE_OBJECT_TEMPLATE }}
-            - name: PACKAGE_MARKET_BASE_LIST_PREFIX_TEMPLATE
-              value: ${{ inputs.PACKAGE_MARKET_BASE_LIST_PREFIX_TEMPLATE }}
-            - name: PACKAGE_MARKET_DOWNLOAD_EXPIRE_SECONDS
-              value: ${{ inputs.PACKAGE_MARKET_DOWNLOAD_EXPIRE_SECONDS }}
+          volumeMounts:
+            - name: bootstrap-admin-password
+              mountPath: /run/secrets/veges-bootstrap-admin-password
+              readOnly: true
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: /api/ready
               port: 8787
             initialDelaySeconds: 10
             periodSeconds: 10
@@ -509,8 +325,6 @@ spec:
               env:
                 - name: NODE_ENV
                   value: production
-                - name: APP_PUBLIC_URL
-                  value: https://${{ defaults.app_host }}.${{ SEALOS_CLOUD_DOMAIN }}
                 - name: PG_HOST
                   valueFrom:
                     secretKeyRef:
@@ -543,12 +357,6 @@ spec:
                   value: ${{ inputs.APP_ENCRYPTION_ACTIVE_KEY_ID }}
                 - name: APP_ENCRYPTION_KEYS
                   value: ${{ inputs.APP_ENCRYPTION_KEYS }}
-                - name: FEISHU_APP_ID
-                  value: ${{ inputs.FEISHU_APP_ID }}
-                - name: FEISHU_APP_SECRET
-                  value: ${{ inputs.FEISHU_APP_SECRET }}
-                - name: FEISHU_DELIVERY_ENABLED
-                  value: ${{ inputs.FEISHU_DELIVERY_ENABLED }}
               resources:
                 requests:
                   cpu: 20m

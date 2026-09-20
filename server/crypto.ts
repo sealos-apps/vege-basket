@@ -56,6 +56,17 @@ export function assertEncryptionConfigured() {
   getActiveKey()
 }
 
+export function getEncryptionKeyStatus() {
+  const keys = parseKeys()
+  const activeKeyId = getActiveKeyId()
+  return {
+    activeKeyId,
+    algorithm: 'AES-256-GCM' as const,
+    configured: Boolean(activeKeyId && keys.has(activeKeyId)),
+    retainedKeyIds: [...keys.keys()].sort(),
+  }
+}
+
 export function isEncryptedText(value: unknown) {
   return typeof value === 'string' && value.startsWith(encryptedPrefix)
 }

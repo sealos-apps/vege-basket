@@ -16,7 +16,7 @@ const priorityLabels: Record<AiTodoPriority, string> = {
   medium: '中',
 }
 
-export function isFeishuAiChatEnabled(value = process.env.FEISHU_AI_CHAT_ENABLED) {
+export function isFeishuAiChatEnabled(value: unknown = false) {
   return String(value ?? '').trim().toLowerCase() === 'true'
 }
 
@@ -32,7 +32,7 @@ export function shouldRetainFeishuAiSource(params: {
 
 export function buildFeishuAiReviewUrl(
   batchId: number,
-  publicAppUrl = process.env.APP_PUBLIC_URL,
+  publicAppUrl = '',
   nodeEnv = process.env.NODE_ENV,
 ) {
   if (!Number.isSafeInteger(batchId) || batchId <= 0) return null

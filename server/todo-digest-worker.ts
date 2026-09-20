@@ -3,6 +3,8 @@ import { pathToFileURL } from 'node:url'
 import type { QueryResultRow } from 'pg'
 import { decryptText, encryptText } from './crypto.ts'
 import { pool } from './db.ts'
+import { getCurrentPlatformConfig } from './platform-config-store.ts'
+import type { PlatformConfig } from './platform-config-schema.ts'
 import {
   buildFeishuDigestCardContent,
   dailyTodoDigestKind,
@@ -63,15 +65,30 @@ type OutstandingRow = QueryResultRow & {
 }
 
 type FeishuToken = {
+  appId: string
+  configRevision: number
   expireAt: number
   token: string
 }
 
 let feishuToken: FeishuToken | null = null
 let publicAppUrlWarningShown = false
+let workerConfig: { config: PlatformConfig; revision: number } | null = null
+
+async function refreshWorkerConfig() {
+  const current = await getCurrentPlatformConfig()
+  if (!current) throw new Error('Platform configuration is not initialized')
+  workerConfig = { config: current.config, revision: current.revision }
+  return workerConfig.config
+}
+
+function getWorkerConfig() {
+  if (!workerConfig) throw new Error('Platform configuration is not loaded')
+  return workerConfig.config
+}
 
 function getDigestPublicAppUrl() {
-  const publicAppUrl = normalizePublicAppUrl(process.env.APP_PUBLIC_URL)
+  const publicAppUrl = normalizePublicAppUrl(getWorkerConfig().general.publicUrl)
   if (!publicAppUrl && !publicAppUrlWarningShown) {
     publicAppUrlWarningShown = true
     console.warn('APP_PUBLIC_URL is missing or invalid; Feishu digest todo titles will not be linked')
@@ -84,8 +101,9 @@ function safeErrorMessage(error: unknown) {
 }
 
 function ensureWorkerConfigured() {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return false
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) {
+  const feishu = getWorkerConfig().feishu
+  if (!feishu.deliveryEnabled) return false
+  if (!(feishu.appId && feishu.appSecret)) {
     throw new Error('Feishu app credentials are not configured')
   }
   return true
@@ -346,15 +364,21 @@ async function isDigestSubscriptionEnabled(subscriptionId: number, userId: numbe
 
 async function getFeishuTenantAccessToken() {
   const now = Date.now()
-  if (feishuToken && feishuToken.expireAt > now + 60_000) return feishuToken.token
+  const { appId, appSecret } = getWorkerConfig().feishu
+  const configRevision = workerConfig?.revision ?? 0
+  if (
+    feishuToken?.appId === appId &&
+    feishuToken.configRevision === configRevision &&
+    feishuToken.expireAt > now + 60_000
+  ) return feishuToken.token
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), feishuRequestTimeoutMs)
 
   try {
     const result = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
       body: JSON.stringify({
-        app_id: process.env.FEISHU_APP_ID,
-        app_secret: process.env.FEISHU_APP_SECRET,
+        app_id: appId,
+        app_secret: appSecret,
       }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',
@@ -370,6 +394,8 @@ async function getFeishuTenantAccessToken() {
       throw new Error(`Failed to fetch Feishu tenant token: ${data.msg ?? result.statusText}`)
     }
     feishuToken = {
+      appId,
+      configRevision,
       expireAt: now + Math.max(60, data.expire ?? 7_000) * 1_000,
       token: data.tenant_access_token,
     }
@@ -467,6 +493,11 @@ async function markDigestFailed(run: DigestRunRow, error: unknown) {
 
 async function processDigestRun(run: DigestRunRow) {
   try {
+    await refreshWorkerConfig()
+    if (!ensureWorkerConfigured()) {
+      await markDigestSkipped(Number(run.id), 'Feishu delivery is disabled')
+      return 'skipped' as const
+    }
     if (!await isDigestSubscriptionEnabled(Number(run.subscription_id), Number(run.user_id))) {
       await markDigestSkipped(Number(run.id), 'Daily todo digest subscription is disabled')
       return 'skipped' as const
@@ -496,6 +527,7 @@ async function processDigestRun(run: DigestRunRow) {
 }
 
 export async function runTodoDigestWorker(now = new Date()) {
+  await refreshWorkerConfig()
   if (!ensureWorkerConfigured()) {
     return { failed: 0, processed: 0, retry: 0, seeded: 0, sent: 0, skipped: 0 }
   }

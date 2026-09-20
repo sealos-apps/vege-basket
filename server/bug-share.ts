@@ -112,9 +112,15 @@ async function transaction<T>(handler: (client: PoolClient) => Promise<T>) {
   }
 }
 
+let publicUrlProvider = () => ''
+
+export function configureBugSharePublicUrl(provider: () => string) {
+  publicUrlProvider = provider
+}
+
 export function buildBugShareUrl(token: string) {
   const path = `/share/bug/${encodeURIComponent(token)}`
-  const origin = normalizePublicAppUrl(process.env.APP_PUBLIC_URL)
+  const origin = normalizePublicAppUrl(publicUrlProvider())
   return origin ? `${origin}${path}` : path
 }
 
