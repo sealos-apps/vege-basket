@@ -443,7 +443,7 @@ export async function updateBuiltinAdminDisplayName(input: {
       await client.query(
         `insert into platform_audit_events
           (actor_user_id, action, target_type, target_id, changed_fields, request_id)
-         values ($1, 'user.display_name_updated', 'user', $1::text, array['displayName'], $2::uuid)`,
+         values ($1::bigint, 'user.display_name_updated', 'user', $1::text, array['displayName'], $2::uuid)`,
         [input.actorUserId, input.requestId],
       )
     }

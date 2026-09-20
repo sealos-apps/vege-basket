@@ -21,6 +21,7 @@ test('only the builtin administrator can write a display name directly', () => {
   assert.match(platformAdminSource, /!row\.is_builtin_admin \|\| row\.grant_kind !== 'builtin'/u)
   assert.match(platformAdminSource, /DISPLAY_NAME_EDIT_FORBIDDEN/u)
   assert.match(platformAdminSource, /input\.actorUserId/u)
+  assert.match(platformAdminSource, /values \(\$1::bigint, 'user\.display_name_updated', 'user', \$1::text/u)
   assert.doesNotMatch(appSource, /update users\s+set display_name = \$1,[\s\S]*where id = \$2[\s\S]*app\.post\('\/api\/auth\/feishu\/name-sync'/u)
 })
 
