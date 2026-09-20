@@ -7,6 +7,10 @@ const workbenchSource = readFileSync(
   'utf8',
 )
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+const platformWorkbenchSource = readFileSync(
+  new URL('../src/components/platform-management-workbench.tsx', import.meta.url),
+  'utf8',
+)
 const workbenchCssSource = readFileSync(
   new URL('../src/components/organization-workbench.css', import.meta.url),
   'utf8',
@@ -28,7 +32,8 @@ test('organization weekly collection does not reload from whole detail object re
 
 test('organization detail loading cannot render the empty organization state early', () => {
   assert.match(workbenchSource, /const \[detailLoading, setDetailLoading\] = useState\(false\)/u)
-  assert.match(workbenchSource, /setDetailLoading\(nextId !== 0\)/u)
+  assert.match(workbenchSource, /setDetailLoading\(true\)[\s\S]*?fetchOrganization\(selectedOrganizationId/u)
+  assert.match(workbenchSource, /if \(!selectedOrganizationId\) \{[\s\S]*?setDetailLoading\(false\)/u)
   assert.match(
     workbenchSource,
     /if \(\(!detail \|\| detail\.id !== selectedOrganizationId\) && \(loading \|\| detailLoading\)\)/u,
@@ -39,7 +44,7 @@ test('organization detail loading cannot render the empty organization state ear
 test('organization management replaces the workspace navigation in the existing sidebar', () => {
   assert.match(appSource, /view === 'organization'[\s\S]*?ref=\{setOrganizationSidebarHost\}/u)
   assert.match(appSource, /sidebarNavigationHost=\{organizationSidebarHost\}/u)
-  assert.match(appSource, /ref=\{view === 'organization' \? setOrganizationTopbarHost : undefined\}/u)
+  assert.match(appSource, /view === 'organization'[\s\S]*?setOrganizationTopbarHost[\s\S]*?view === 'platform'[\s\S]*?setPlatformTopbarHost/u)
   assert.match(appSource, /topbarActionHost=\{organizationTopbarHost\}/u)
   assert.match(appSource, /onRoleChange=\{\(role\) => void changeActiveUserRole\(role\)\}/u)
   assert.doesNotMatch(appSource, /onCloseOrganization/u)
@@ -59,6 +64,18 @@ test('organization management replaces the workspace navigation in the existing 
     workbenchCssSource,
     /\.organization-sidebar-nav\s*\{[\s\S]*?align-content: start;/u,
   )
+})
+
+test('platform management uses the application shell without a nested navigation frame', () => {
+  assert.match(appSource, /view === 'platform'[\s\S]*?ref=\{setPlatformSidebarHost\}/u)
+  assert.match(appSource, /sidebarNavigationHost=\{platformSidebarHost\}/u)
+  assert.match(appSource, /topbarActionHost=\{platformTopbarHost\}/u)
+  assert.match(platformWorkbenchSource, /createPortal\([\s\S]*?platform-sidebar-nav[\s\S]*?sidebarNavigationHost/u)
+  assert.match(platformWorkbenchSource, /createPortal\([\s\S]*?platform-topbar-status[\s\S]*?topbarActionHost/u)
+  assert.match(platformWorkbenchSource, /id: 'history', label: '配置历史'/u)
+  assert.doesNotMatch(platformWorkbenchSource, /className="platform-layout"/u)
+  assert.doesNotMatch(platformWorkbenchSource, /className="platform-heading"/u)
+  assert.doesNotMatch(platformWorkbenchSource, /返回工作台/u)
 })
 
 test('global package market uses the selected sidebar organization as its only context', () => {

@@ -4,6 +4,7 @@ import type {
   AiConversationPage,
   AiTurnPage,
   AiTurnRunResponse,
+  ChangelogAnnouncementResponse,
   ChangelogEntry,
   ImageSyncArchitecture,
   ImageSyncArtifactKind,
@@ -35,6 +36,7 @@ import type {
   NotificationSubscription,
 } from './types'
 import { ApiError } from './api-error'
+import { isUncertainActionError } from './confirmed-action'
 import {
   decodeAiTurnStreamEvent,
   ServerSentEventDecoder,
@@ -69,6 +71,19 @@ import type {
   WeeklyReportSourceRef,
 } from './organization-types'
 import type { MyWorkData, MyWorkFilters } from './my-work-types'
+import type {
+  PlatformAdmin,
+  PlatformConfigResponse,
+  PlatformConfigHistoryDetail,
+  PlatformConfigHistoryItem,
+  PlatformConfigSection,
+  PlatformMaintenanceHistory,
+  PlatformOrganization,
+  PlatformRuntimeStatus,
+  PlatformSecurityStatus,
+  PlatformStatus,
+  ApplicationMigration,
+} from './platform-management-types'
 import {
   serializeOrganizationContext,
   type OrganizationContext,
@@ -79,8 +94,13 @@ export type { AiTurnStreamPhase } from '../shared/server-sent-events'
 export type WorkspaceData = {
   departedUserIds: number[]
   inbox: InboxItem[]
+  loadedSections?: Array<'catalog' | 'inbox' | 'journals' | 'overview' | 'summaries' | 'todos'>
   memberships: ProjectMembership[]
   projects: Project[]
+  scope?: {
+    projectId?: number
+    todoId?: number
+  }
   summaries: Summary[]
   todos: Todo[]
 }
@@ -93,6 +113,12 @@ export type AiTurnDocumentResponse = {
 
 export type NotificationResponse = {
   notifications: NotificationCenterData
+}
+
+export type NavigationCounts = {
+  assignedBugCount: number
+  openTodoCount: number
+  organizationId: OrganizationContext
 }
 
 export type PackageMarketRulesResponse = {
@@ -120,6 +146,7 @@ export type AuthUser = {
   feishuEmail: string
   feishuLinked: boolean
   id: number
+  isBuiltinAdmin: boolean
   isSystemAdmin: boolean
   roles: UserRole[]
   username: string
@@ -130,7 +157,15 @@ export type UserRole = 'developer' | 'tester' | 'organization_admin'
 export type ManagedUser = {
   accountStatus: UserAccountStatus
   displayName: string
+  feishuIdentityVerified: boolean
+  feishuLinked: boolean
   id: number
+  isBuiltinAdmin: boolean
+  permissionVersion: number
+  platformAdmin: boolean
+  platformAdminEligible: boolean
+  platformAdminKind: 'builtin' | 'managed' | null
+  registrationSource: 'builtin' | 'feishu' | 'legacy_unknown'
   roles: UserRole[]
   username: string
 }
@@ -380,11 +415,58 @@ export function fetchWorkspace() {
   return request<WorkspaceData>('/api/workspace')
 }
 
-export function fetchChangelog() {
-  return request<ChangelogResponse>('/api/changelog')
+export function fetchProjectCatalog(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<WorkspaceData>('/api/workspace/catalog', options)
 }
 
-export function createChangelogEntry(payload: Pick<ChangelogEntry, 'content' | 'title' | 'version'>) {
+export function fetchWorkspaceOverview(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<WorkspaceData>('/api/workspace/overview', options)
+}
+
+export function fetchWorkspaceInbox(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<WorkspaceData>('/api/workspace/inbox', options)
+}
+
+export function fetchWorkspaceDocuments(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<WorkspaceData>('/api/workspace/documents', options)
+}
+
+export function fetchWorkspaceSearch(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<WorkspaceData>('/api/workspace/search', options)
+}
+
+export function fetchProjectOverview(projectId: number, options: Pick<RequestInit, 'signal'> = {}) {
+  return request<WorkspaceData>(`/api/projects/${projectId}/overview`, options)
+}
+
+export function fetchProjectJournals(projectId: number, options: Pick<RequestInit, 'signal'> = {}) {
+  return request<WorkspaceData>(`/api/projects/${projectId}/journals`, options)
+}
+
+export function fetchProjectTodos(projectId: number, options: Pick<RequestInit, 'signal'> = {}) {
+  return request<WorkspaceData>(`/api/projects/${projectId}/todos?subprojectId=all`, options)
+}
+
+export function fetchTodoDetail(todoId: number, options: Pick<RequestInit, 'signal'> = {}) {
+  return request<{ todo: Todo }>(`/api/todos/${todoId}/detail`, options)
+}
+
+export function fetchChangelog(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<ChangelogResponse>('/api/changelog', options)
+}
+
+export function fetchChangelogAnnouncement(options: Pick<RequestInit, 'signal'> = {}) {
+  return request<ChangelogAnnouncementResponse>('/api/changelog/announcement', options)
+}
+
+export function acknowledgeChangelogAnnouncement(throughEntryId: number) {
+  return request<{ acknowledgedThroughEntryId: number }>('/api/changelog/announcement-read-state', {
+    body: JSON.stringify({ throughEntryId }),
+    method: 'PUT',
+  })
+}
+
+export function createChangelogEntry(payload: Pick<ChangelogEntry, 'announceOnLogin' | 'content' | 'title' | 'version'>) {
   return request<{ entry: ChangelogEntry }>('/api/admin/changelog', {
     body: JSON.stringify(payload),
     method: 'POST',
@@ -393,7 +475,7 @@ export function createChangelogEntry(payload: Pick<ChangelogEntry, 'content' | '
 
 export function updateChangelogEntry(
   entryId: number,
-  payload: Pick<ChangelogEntry, 'content' | 'title' | 'version'>,
+  payload: Pick<ChangelogEntry, 'announceOnLogin' | 'content' | 'title' | 'version'>,
 ) {
   return request<{ entry: ChangelogEntry }>(`/api/admin/changelog/${entryId}`, {
     body: JSON.stringify(payload),
@@ -435,6 +517,14 @@ export function fetchNotifications() {
   return request<NotificationResponse>('/api/notifications')
 }
 
+export function fetchNavigationCounts(
+  organizationId: OrganizationContext,
+  options: RequestInit = {},
+) {
+  const params = new URLSearchParams({ organizationId: serializeOrganizationContext(organizationId) })
+  return request<NavigationCounts>(`/api/navigation-counts?${params.toString()}`, options)
+}
+
 export function markAllNotificationsRead() {
   return request<NotificationResponse>('/api/notifications/read-all', {
     method: 'PATCH',
@@ -458,6 +548,10 @@ export function fetchMyWork(organizationId: OrganizationContext, filters: MyWork
 
 export function fetchCurrentUser() {
   return request<{ user: AuthUser; workspace: WorkspaceData }>('/api/auth/me')
+}
+
+export function fetchCurrentAuthContext() {
+  return request<{ user: AuthUser }>('/api/auth/context')
 }
 
 export function registerAccount(payload: {
@@ -488,10 +582,23 @@ export function loginAccount(payload: {
 
 export function updateCurrentUser(payload: {
   displayName: string
+  expectedDisplayName: string
 }) {
-  return request<{ user: AuthUser }>('/api/auth/me', {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('users', requestId, () => request<{
+    changed: boolean
+    displayName: string
+    permissionVersion: number
+    replayed: boolean
+  }>('/api/auth/me', {
     method: 'PATCH',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, requestId }),
+  }))
+}
+
+export function syncCurrentUserFeishuName() {
+  return request<{ changed: boolean; user: AuthUser }>('/api/auth/feishu/name-sync', {
+    method: 'POST',
   })
 }
 
@@ -528,11 +635,33 @@ export function fetchOffboardingPreview(userId: number) {
   return request<OffboardingPreview>(`/api/admin/users/${userId}/offboarding-preview`)
 }
 
-export function offboardManagedUser(userId: number, selections: Array<{
+async function requestPlatformMutation<T>(
+  scope: 'config' | 'maintenance' | 'organizations' | 'users',
+  requestId: string,
+  write: () => Promise<T>,
+) {
+  try {
+    return await write()
+  } catch (error) {
+    if (!isUncertainActionError(error)) throw error
+    try {
+      const receipt = await request<{ found: boolean; result?: T }>(
+        `/api/admin/platform-mutations/${scope}/${requestId}`,
+      )
+      if (receipt.found && receipt.result !== undefined) return receipt.result
+    } catch {
+      // Preserve the original uncertain write result when reconciliation also fails.
+    }
+    throw error
+  }
+}
+
+export function offboardManagedUser(user: ManagedUser, selections: Array<{
   organizationId: number
   targetAdminUserId: number
 }>) {
-  return request<{
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('users', requestId, () => request<{
     accountStatus: 'departed'
     bugCount: number
     offboardingId: string
@@ -545,24 +674,226 @@ export function offboardManagedUser(userId: number, selections: Array<{
       transferredProjectCount: number
       transferredTestSpaceCount: number
     }>
-  }>(`/api/admin/users/${userId}/offboard`, {
+    permissionVersion: number
+    replayed: boolean
+  }>(`/api/admin/users/${user.id}/offboard`, {
     method: 'POST',
-    body: JSON.stringify({ selections }),
+    body: JSON.stringify({
+      expectedVersion: user.permissionVersion,
+      requestId,
+      selections,
+    }),
+  }))
+}
+
+export function updateManagedUserStatus(user: ManagedUser, status: 'active' | 'disabled') {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('users', requestId, () => request<{ accountStatus: UserAccountStatus; permissionVersion: number; replayed: boolean }>(`/api/admin/users/${user.id}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      expectedVersion: user.permissionVersion,
+      requestId,
+      status,
+    }),
+  }))
+}
+
+export function updateManagedUserRoles(user: ManagedUser, roles: UserRole[]) {
+  const userId = user.id
+  return request<{ roles: UserRole[]; version: number }>(`/api/admin/users/${userId}/roles`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      expectedVersion: user.permissionVersion,
+      platformAdmin: user.platformAdmin,
+      requestId: crypto.randomUUID(),
+      roles,
+    }),
   })
 }
 
-export function updateManagedUserStatus(userId: number, status: 'active' | 'disabled') {
-  return request<{ accountStatus: UserAccountStatus }>(`/api/admin/users/${userId}/status`, {
-    method: 'PATCH',
-    body: JSON.stringify({ status }),
+export function updateManagedUserPermissions(
+  userId: number,
+  payload: { expectedVersion: number; platformAdmin: boolean; roles: UserRole[] },
+) {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('users', requestId, () => request<{ platformAdmin: boolean; replayed: boolean; roles: UserRole[]; version: number }>(
+    `/api/admin/users/${userId}/permissions`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ ...payload, requestId }),
+    },
+  ))
+}
+
+export function syncManagedUserFeishuName(userId: number) {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('users', requestId, () => request<{
+    changed: boolean
+    displayName: string
+    replayed: boolean
+  }>(`/api/admin/users/${userId}/feishu-name-sync`, {
+    method: 'POST',
+    body: JSON.stringify({ requestId }),
+  }))
+}
+
+export function fetchPlatformConfig() {
+  return request<PlatformConfigResponse>('/api/admin/platform-config')
+}
+
+export function savePlatformConfigSection(
+  section: PlatformConfigSection,
+  payload: {
+    expectedRevision: number
+    fields: Record<string, unknown>
+    requestId: string
+    secrets: Record<string, { action: 'clear' | 'keep' | 'replace'; value?: string }>
+  },
+) {
+  return requestPlatformMutation('config', payload.requestId, () => request<{ changed: boolean; replayed: boolean; revision: number }>(`/api/admin/platform-config/${section}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  }))
+}
+
+export function revealPlatformSecret(section: string, field: string, expectedRevision: number) {
+  return request<{ configured: boolean; revision: number; value: string }>(
+    `/api/admin/platform-config/${section}/secrets/${field}/reveal`,
+    { method: 'POST', body: JSON.stringify({ expectedRevision }) },
+  )
+}
+
+export function validatePlatformPackageRules(rulesYaml: string) {
+  return request<{
+    errors: Array<{ column?: number; line?: number; message: string; path?: string }>
+    ruleCount: number
+    valid: boolean
+    warnings: string[]
+  }>('/api/admin/platform-config/packages/validate', {
+    method: 'POST',
+    body: JSON.stringify({ rulesYaml }),
   })
 }
 
-export function updateManagedUserRoles(userId: number, roles: UserRole[]) {
-  return request<{ roles: UserRole[] }>(`/api/admin/users/${userId}/roles`, {
-    method: 'PATCH',
-    body: JSON.stringify({ roles }),
+export function testPlatformConfigSection(
+  section: PlatformConfigSection,
+  payload: {
+    action?: 'connect' | 'send-email'
+    expectedRevision: number
+    fields: Record<string, unknown>
+    recipient?: string
+    secrets: Record<string, { action: 'clear' | 'keep' | 'replace'; value?: string }>
+  },
+) {
+  return request<{
+    checks: Array<{ label: string; message: string; ok: boolean }>
+    ok: boolean
+  }>(`/api/admin/platform-config/${section}/test`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
+}
+
+export function fetchPlatformConfigHistory() {
+  return request<{ history: PlatformConfigHistoryItem[] }>(
+    '/api/admin/platform-config/history',
+  )
+}
+
+export function fetchPlatformConfigHistoryDetail(revision: number) {
+  return request<PlatformConfigHistoryDetail>(
+    `/api/admin/platform-config/history/${revision}`,
+  )
+}
+
+export function restorePlatformConfigRevision(targetRevision: number, expectedRevision: number) {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('config', requestId, () => request<{ changed: boolean; replayed: boolean; revision: number }>('/api/admin/platform-config/restore', {
+    method: 'POST',
+    body: JSON.stringify({ targetRevision, expectedRevision, requestId }),
+  }))
+}
+
+export function fetchPlatformRuntimeStatus() {
+  return request<PlatformRuntimeStatus>('/api/admin/platform-config/runtime')
+}
+
+export function fetchPlatformStatus() {
+  return request<PlatformStatus>('/api/platform-status')
+}
+
+export function fetchPlatformMaintenance() {
+  return request<PlatformStatus>('/api/admin/platform-maintenance')
+}
+
+export function fetchPlatformMaintenanceHistory(beforeId?: number) {
+  const query = new URLSearchParams({ limit: '20' })
+  if (beforeId) query.set('beforeId', String(beforeId))
+  return request<PlatformMaintenanceHistory>(`/api/admin/platform-maintenance/history?${query}`)
+}
+
+export function updatePlatformMaintenance(
+  enabled: boolean,
+  message: string,
+  expectedRevision: number,
+) {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('maintenance', requestId, () => request<{
+    changed: boolean
+    enabled: boolean
+    replayed: boolean
+    revision: number
+  }>('/api/admin/platform-maintenance', {
+    method: 'PUT',
+    body: JSON.stringify({ enabled, message, expectedRevision, requestId }),
+  }))
+}
+
+export function fetchApplicationMigrations() {
+  return request<{ migrations: ApplicationMigration[] }>('/api/admin/platform-migrations')
+}
+
+export function fetchPlatformSecurityStatus() {
+  return request<PlatformSecurityStatus>('/api/admin/platform-security')
+}
+
+export function fetchPlatformAdmins() {
+  return request<{ admins: PlatformAdmin[] }>('/api/admin/platform-admins')
+}
+
+export function setPlatformAdmin(userId: number, enabled: boolean, expectedVersion: number) {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('users', requestId, () => request<{ enabled: boolean; replayed: boolean; version: number }>(
+    enabled ? '/api/admin/platform-admins' : `/api/admin/platform-admins/${userId}`,
+    {
+      method: enabled ? 'POST' : 'DELETE',
+      body: JSON.stringify({ userId, expectedVersion, requestId }),
+    },
+  ))
+}
+
+export function fetchPlatformOrganizations(search = '') {
+  const params = new URLSearchParams({ page: '1', pageSize: '100' })
+  if (search.trim()) params.set('search', search.trim())
+  return request<{ organizations: PlatformOrganization[]; page: number; pageSize: number; total: number }>(
+    `/api/admin/organizations?${params.toString()}`,
+  )
+}
+
+export function createPlatformOrganization(name: string, ownerUserId: number) {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('organizations', requestId, () => request<{ id: number; name: string }>('/api/admin/organizations', {
+    method: 'POST',
+    body: JSON.stringify({ name, ownerUserId, requestId }),
+  }))
+}
+
+export function deletePlatformOrganization(organizationId: number, confirmationName: string) {
+  const requestId = crypto.randomUUID()
+  return requestPlatformMutation('organizations', requestId, () => request<{ deleted: true; id: number }>(`/api/admin/organizations/${organizationId}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ confirmationName, requestId }),
+  }))
 }
 
 export function fetchOrganizations(options: Pick<RequestInit, 'signal'> = {}) {
@@ -589,13 +920,6 @@ export function updateOrganizationPackageMarketPolicy(
 ) {
   return request<OrganizationDetail>(`/api/organizations/${organizationId}/package-market/policy`, {
     method: 'PUT',
-    body: JSON.stringify(payload),
-  })
-}
-
-export function createOrganization(payload: { name: string; ownerUsername?: string }) {
-  return request<OrganizationDetail>('/api/admin/organizations', {
-    method: 'POST',
     body: JSON.stringify(payload),
   })
 }
@@ -662,17 +986,6 @@ export function updateOrganizationWeeklyReportRules(
   return request<OrganizationDetail>(`/api/organizations/${organizationId}/weekly-report-rules`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
-  })
-}
-
-export function deleteOrganization(organizationId: number, confirmationName: string) {
-  return request<{
-    deleted: true
-    detachedProjectCount: number
-    detachedTestSpaceCount: number
-  }>(`/api/organizations/${organizationId}`, {
-    method: 'DELETE',
-    body: JSON.stringify({ confirmationName }),
   })
 }
 

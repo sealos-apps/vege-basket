@@ -29,9 +29,10 @@ test('organization administrator is an additive capability, not a switchable rol
 })
 
 test('login and account identity selection share role-based workspace options', () => {
-  assert.match(roleSelectionSource, /getSelectableWorkspaceRoles\(user\.roles\)\.map/u)
-  assert.match(appSource, /getSelectableWorkspaceRoles\(user\.roles\)/u)
+  assert.match(roleSelectionSource, /getSelectableWorkspaceRoles\(user\.roles, user\.isSystemAdmin\)\.map/u)
+  assert.match(appSource, /getSelectableWorkspaceRoles\(user\.roles, user\.isSystemAdmin\)/u)
   assert.doesNotMatch(appSource, /onOpenOrganization/u)
+  assert.doesNotMatch(appSource, /onOpenPlatform/u)
 })
 
 test('management identity is available only with the assigned organization administrator role', () => {
@@ -48,18 +49,19 @@ test('management identity is available only with the assigned organization admin
   }
 })
 
-test('system administrator status does not expose an unassigned management identity', () => {
+test('system administrator status exposes only its dedicated management identity', () => {
   const user: Pick<AuthUser, 'activeRole' | 'roles' | 'isSystemAdmin'> = {
     activeRole: 'developer', roles: ['developer'], isSystemAdmin: true,
   }
   assert.equal(hasOrganizationAdminRole(user.roles), false)
-  assert.deepEqual(getSelectableWorkspaceRoles(user.roles), ['developer'])
+  assert.deepEqual(getSelectableWorkspaceRoles(user.roles, user.isSystemAdmin), ['developer', 'platform_admin'])
   assert.equal(getActiveWorkspaceRole(user, 'organization'), 'developer')
+  assert.equal(getActiveWorkspaceRole(user, 'platform'), 'platform_admin')
 })
 
 test('management identity follows the authorized view without changing the session persona', () => {
   for (const activeRole of ['developer', 'tester'] as const) {
-    const user = { activeRole, roles: ['organization_admin'] as UserRole[] }
+    const user = { activeRole, roles: ['organization_admin'] as UserRole[], isSystemAdmin: false }
     assert.equal(getActiveWorkspaceRole(user, 'organization'), 'organization_admin')
     assert.equal(getActiveWorkspaceRole(user, 'search'), activeRole)
     assert.equal(user.activeRole, activeRole)

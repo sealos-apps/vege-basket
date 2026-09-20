@@ -40,13 +40,54 @@ read-only check. Importing the running API validates encryption config and appli
 runs and may send personal Feishu messages. Run it only with an authorized database,
 configured Feishu application, and explicit permission to deliver messages.
 
-`FEISHU_AI_CHAT_ENABLED=true` makes the API callback path persist inbound Feishu messages,
-apply schema additions at startup, invoke the shared AI provider, and send personal Feishu
-replies. Enable it only in an authorized environment with a current database backup and a
-verified bot availability scope. Keep it `false` for read-only or production-adjacent checks.
+Enabling Feishu private-chat AI in Platform Management makes the callback path persist inbound
+messages, invoke the shared AI provider, and send personal replies. Keep this hidden compatibility
+setting disabled unless the environment, backup, and bot availability scope are authorized.
 
 Do not submit an image-sync task during read-only verification. A real submission invokes
 GitHub Actions, pulls an external image, and writes a tar plus checksum to OSS.
+
+## Platform Configuration Rollout
+
+The runtime environment contains only database, connection-pool, port, and application
+encryption settings. The built-in admin bootstrap password is mounted as a Secret file. Application
+startup does not import business values from an old environment file. For an existing deployment,
+preserve that file outside Git only if an operator explicitly chooses the compatibility workflow:
+
+```bash
+npm run platform:config -- inspect --env-file /secure/path/legacy.env
+npm run platform:config -- verify --env-file /secure/path/legacy.env
+npm run platform:config -- bootstrap-admin --env-file /secure/path/legacy.env
+npm run platform:config -- import --env-file /secure/path/legacy.env
+```
+
+`bootstrap-admin` prompts for a password and creates or upgrades the immutable built-in `admin`.
+`import` is an explicit one-time compatibility action; it encrypts business settings into PostgreSQL and imports
+`VEGES_ADMIN_USERNAMES` as managed grants. The Feishu event callback and OAuth redirect URL are
+derived from the imported `APP_PUBLIC_URL`; legacy `FEISHU_OAUTH_REDIRECT_URI` is ignored. It refuses to overwrite
+an existing platform configuration. Retain the complete application encryption key ring for every
+stored config version. Normal deployment omits this workflow: the application enters forced
+maintenance, creates or validates the built-in admin, and waits for that administrator to save the
+first configuration in Platform Management.
+
+Startup opens `/api/health` and `/api/platform-status` first. Both application replicas compete for
+the PostgreSQL migration advisory lock; one applies the current schema/data baseline and writes its
+checksum to `application_migrations`, while the other waits and then verifies the same receipt.
+`/api/ready` returns 503 until this completes. A migration or bootstrap failure leaves the process
+alive in system-forced maintenance so its status remains inspectable.
+
+在平台配置尚未初始化时，系统保持强制维护。迁移未完成或失败时不开放登录，先从 `/api/platform-status` 查看错误并修复数据库；迁移完成后只允许内置 `admin` 通过密码建立恢复会话，并开放当前用户/权限上下文和平台配置、数据安全、运行状态、迁移记录、维护状态接口。恢复登录不会处理项目或组织邀请。管理员逐项保存公网地址、对象存储、飞书登录和包市场规则；AI、邮箱和 GitHub Actions 可暂不配置。只有必填项有效且所有在线 API 实例都已加载当前配置版本时，才能手动结束维护。
+
+超级管理员手动进入维护后，登录页只允许具有有效平台超级管理员授权的账号登录，支持历史密码和已绑定飞书身份；普通用户登录统一返回 `503 PLATFORM_MAINTENANCE`。维护期间的飞书登录不会自动注册账号，也不会处理项目或组织邀请。已登录的超级管理员会话继续保留平台恢复权限，普通业务接口统一返回 `503 PLATFORM_MAINTENANCE`。
+
+每次手动进入维护都会保存维护人、维护说明、数据库开始时间和状态版本。维护期间修改说明只更新同一条进行中记录，不重置开始时间。结束维护时，同一事务自动写入结束人、数据库结束时间、结束版本和最终维护时长。平台管理页默认展示最近 20 条并可继续加载；系统强制维护不计入人工维护记录。升级时若数据库已经处于可识别的人工维护状态，会用现有维护人和开始时间补建进行中记录。
+
+平台配置保存后，管理页按目标版本轮询在线 API 实例：全部实例加载目标版本后显示“加载完成”，实例报错、没有在线实例或目标版本已被新版本替代时显示明确状态。配置历史按版本展示字段级差异，密钥只显示“已设置、已替换、已清除”等状态；恢复前会展示目标版本相对当前配置的差异。规范化后的配置没有变化时，服务端只记录幂等回执，不创建配置版本、审计事件或热更新通知。
+
+Fresh Sealos installations use two single-container application Pods and no application init
+containers. The initial admin password is mounted from a Kubernetes Secret file and used only when
+the account does not exist. No default business configuration is created. Both Feishu callback URLs
+derive from the public URL the administrator later saves.
 
 ## Local Runtime
 
@@ -65,8 +106,9 @@ second local workspace so Vite proxies to that API port instead. A minimal runti
 curl --fail --silent http://127.0.0.1:8787/api/health
 ```
 
-Expected response: `{"ok":true}`. This health endpoint proves the process is serving;
-it does not prove database, OSS, Feishu, or AI workflows.
+Expected response: `{"ok":true}`. This liveness endpoint proves the process is serving;
+it does not prove database, OSS, Feishu, or AI workflows. Use `/api/ready` for migration readiness
+and `/api/platform-status` for maintenance and migration detail.
 
 The application pool defaults to 10 clients and the digest worker deployment is capped at 2.
 Before changing `DB_POOL_MAX`, compare the sum across the maximum number of application replicas
@@ -129,9 +171,11 @@ history and the full encryption key ring.
 Versioned incremental DDL is maintained in `server/migrations/`. Every table, constraint, and
 index change still requires a new forward-only SQL file; do not edit an already-applied file.
 Keep `server/schema.ts` synchronized as the idempotent bootstrap and compatibility definition.
+Whenever `schemaSql` changes, increase the migration ID in `server/database-migrations.ts`; keeping
+the old ID with a different checksum intentionally prevents application readiness.
 
 For the organization package-market policy release, updating the application image is sufficient:
-the existing API startup path applies `schemaSql` before serving requests, which creates the
+the automatic migration coordinator applies `schemaSql` before readiness, which creates the
 policy tables and updates the selection constraint idempotently. Do not run `psql` or
 `npm run db:init` as an extra release step for this change. The database role used by the API
 must already have permission to create the new tables and alter the policy constraint.
@@ -139,8 +183,8 @@ must already have permission to create the new tables and alter the policy const
 No data is copied from or deleted from `organization_package_markets`. If that old table exists,
 it remains physically present but is no longer read or written. Organizations without rows in the
 new policy tables resolve to the new default: market enabled, Release and CI enabled, and all
-available packages visible. A normal Pod restart simply repeats the existing idempotent startup
-DDL; this release adds no separate migration runner or Pod coordination mechanism.
+available packages visible. A normal Pod restart verifies the migration receipt and checksum
+without repeating completed initialization side effects.
 
 The package-market SQL files remain the structural change record and can be run manually
 only when an explicitly approved environment needs that audit trail applied independently:
@@ -304,10 +348,9 @@ Before an encryption-key change:
 
 1. 查看 `main` 推送触发的构建与推送结果，确认合并镜像已生成。
 2. 查看自动发布 job，确认 Deployment rollout 完成且应用镜像校验通过。
-3. Pass database, encryption, shared AI, Feishu, and OSS configuration through the
-   deployment environment; confirm real credential values are absent from the image and Git.
-   The Sealos template derives `APP_PUBLIC_URL` from its TLS ingress host; custom deployments
-   must set it to the application's exact HTTPS root origin.
+3. Pass only database, application encryption, port, and pool settings through the deployment
+   environment. Confirm platform business settings exist in PostgreSQL and real credential values
+   are absent from the workload manifest, image, and Git.
 4. Deploy to a test environment first, then verify health, sign-in, one authorized
    project read, and any changed integration. For an AI change, verify ordinary text arrives
    incrementally, structured turns expose progress without partial JSON, and a deliberately
@@ -325,9 +368,9 @@ Before an encryption-key change:
    Confirm the recipient receives a passive Feishu JSON 2.0 card titled with the
    scheduled delivery date, previous-day activity is separate from the current backlog,
    long sections stop after five items, each new todo title opens the exact authorized
-   todo through the configured `APP_PUBLIC_URL`, and no card button or callback is present.
+   todo through the configured platform public URL, and no card button or callback is present.
    Repeat while signed out to verify the link survives login. An inaccessible ID must show
-   `待办不存在或你无权访问` without revealing todo data. Temporarily omit `APP_PUBLIC_URL`
+   `待办不存在或你无权访问` without revealing todo data. Temporarily clear the platform public URL
    and confirm delivery still builds a valid card with plain titles.
 
 AI conversation protocol releases replace the stateless `/api/ai/chat`, the old
@@ -371,22 +414,21 @@ encrypted record, and the workflow that triggered rollback.
   production URL for local verification.
 - Startup reports an encryption-key mismatch: ensure the active ID names a 32-byte
   base64 key in `APP_ENCRYPTION_KEYS` and retain keys for older envelopes.
-- Package market fails: verify the HTTPS OSS origin, bucket credentials, bundled or
-  configured rules file, and allowed object-key roots.
-- Image sync is unavailable: verify `GITHUB_ACTIONS_TOKEN` is present and scoped to
-  `sealos-apps/sealos-pro` with Actions write permission, then verify the API host is reachable from
+- Package market fails: verify the HTTPS OSS origin, bucket credentials, saved YAML rules,
+  and allowed object-key roots in Platform Management.
+- Image sync is unavailable: test the saved GitHub repository, workflow, branch, and token in
+  Platform Management, then verify the API host is reachable from
   the Veges runtime. A transient dispatch timeout should leave the task in `dispatching`; use
   refresh to reconcile the `request_id` run name before submitting anything else. A 409 means
   the current user already has an active run; a 429 means the ten-runs-per-hour user quota or
   submission cooldown was reached.
 - Todo image upload fails: verify OSS config, upload size/type, and the URL-signing secret
   or its documented fallback.
-- AI returns 503: verify `AI_API_BASE`, `AI_API_KEY`, and `AI_MODEL` are all present in the
-  application environment. The URL must be HTTPS and resolve only to public addresses.
+- AI returns 503: verify the platform AI address, API key, and model are complete. The URL must
+  be HTTPS and resolve only to public addresses.
 - Veges AI rejects a text attachment message as too long: split the input or reduce the
   attachments. The composer enforces both its attachment limits and the effective
-  `AI_MAX_MESSAGE_LENGTH` returned by `GET /api/ai/status`; raising the provider limit
-  requires a deliberate deployment configuration change.
+  message length returned by `GET /api/ai/status`; changing the limit requires a platform save.
 - AI history is empty after sign-in: verify the conversation belongs to the current user.
   Project conversations are intentionally hidden while project access is inactive; restoring
   active membership makes retained history visible again.
@@ -418,16 +460,19 @@ encrypted record, and the workflow that triggered rollback.
   `https://cloudflare-dns.com` or exclude the provider hostname from Fake-IP mode. A
   transient public-DNS failure is retryable after name resolution recovers. Literal and
   ordinary private addresses are intentionally rejected.
-- Password registration returns 403 while AI is enabled: use a current project invite or
-  sign in through Feishu OAuth; existing password accounts can still log in normally.
+- Password registration returns 403: new accounts must sign in through Feishu OAuth; existing
+  password accounts can still log in normally.
 - Daily digest is not sent: verify the user subscription is enabled, the user has a bound
-  Feishu `open_id`, `FEISHU_DELIVERY_ENABLED` is not `false`, the CronJob uses the current
+  Feishu `open_id`, platform notification delivery is enabled, the CronJob uses the current
   image, and the latest digest run is not `failed` or `skipped`.
-- Daily digest titles are not clickable: verify `APP_PUBLIC_URL` is an HTTPS root origin in
-  production and is injected into the digest CronJob. HTTP is accepted only for localhost
+- Daily digest titles are not clickable: verify the platform public URL is an HTTPS root origin.
+  HTTP is accepted only for localhost
   or loopback local development; invalid values intentionally fall back to plain titles.
-- Feishu callback returns 401: verify the callback token matches
-  `FEISHU_VERIFICATION_TOKEN`; challenge payloads are authenticated too.
+- Feishu callback returns 401: verify the saved verification token matches the Feishu application;
+  challenge payloads are authenticated too.
+- Feishu sign-in finishes on the callback host: verify the platform public URL is configured as
+  the intended browser origin. The fixed OAuth callback remains registered with Feishu, while the
+  completed sign-in redirects from that callback to the platform public URL.
 - Unexpected users can complete Feishu OAuth: narrow the company custom application's
   availability scope before re-enabling sign-in; Veges does not maintain a second tenant
   or email-domain allowlist.
@@ -489,6 +534,5 @@ nonempty deletion rejection, wrong-subject parents/cases, and whole-batch rollba
 Pure tests and browser tests with mocked callbacks do not establish PostgreSQL lock,
 constraint, migration or HTTP integration behavior.
 
-If pure `npm test` imports fail with `DATABASE_URL is required`, supply an inert
-loopback URL with an unused port for the test command only. The affected tests import
-pure helpers from database-aware modules but must not start the API or issue queries.
+`npm test` supplies an inert loopback database URL only when the caller has not configured one.
+Pure tests import database-aware modules but do not start the API or issue queries.

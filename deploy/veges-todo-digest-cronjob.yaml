@@ -8,9 +8,6 @@ stringData:
   # Copy these values exactly from the production Veges Deployment.
   APP_ENCRYPTION_ACTIVE_KEY_ID: REPLACE_WITH_PRODUCTION_ACTIVE_KEY_ID
   APP_ENCRYPTION_KEYS: REPLACE_WITH_COMPLETE_PRODUCTION_KEY_RING
-  FEISHU_APP_ID: REPLACE_WITH_PRODUCTION_FEISHU_APP_ID
-  FEISHU_APP_SECRET: REPLACE_WITH_PRODUCTION_FEISHU_APP_SECRET
-  FEISHU_DELIVERY_ENABLED: "true"
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -55,8 +52,6 @@ spec:
               env:
                 - name: NODE_ENV
                   value: production
-                - name: APP_PUBLIC_URL
-                  value: https://veges.private.sealos.pub
                 - name: PG_HOST
                   valueFrom:
                     secretKeyRef:

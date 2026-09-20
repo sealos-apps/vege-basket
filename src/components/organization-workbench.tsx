@@ -39,8 +39,6 @@ import {
   createProject,
   createOrganizationInviteLink,
   createOrganizationProjectMilestone,
-  createOrganization,
-  deleteOrganization,
   fetchOrganization,
   fetchOrganizationPackageMarketCatalog,
   fetchOrganizations,
@@ -385,7 +383,6 @@ function buildOrganizationInviteUrl(token: string) {
 }
 
 export function OrganizationWorkbench({
-  canCreate: initialCanCreate,
   currentUser,
   initialOrganizations,
   initialSelectedOrganizationId,
@@ -396,7 +393,6 @@ export function OrganizationWorkbench({
   onSubprojectsChanged,
   onPackageMarketVisibilityChange,
 }: {
-  canCreate: boolean
   currentUser: AuthUser
   initialOrganizations: OrganizationListItem[]
   initialSelectedOrganizationId: number | null
@@ -410,7 +406,6 @@ export function OrganizationWorkbench({
   const [organizations, setOrganizations] = useState<OrganizationListItem[]>(initialOrganizations)
   const [selectedOrganizationId, setSelectedOrganizationId] = useState(initialSelectedOrganizationId ?? initialOrganizations[0]?.id ?? 0)
   const [detail, setDetail] = useState<OrganizationDetail | null>(null)
-  const [canCreate, setCanCreate] = useState(initialCanCreate)
   const [tab, setTab] = useState<OrganizationTab>('overview')
   const [testResourceTab, setTestResourceTab] = useState<'spaces' | 'environments'>('spaces')
   const actionScope = `${currentUser.id}:${selectedOrganizationId}:${tab}`
@@ -426,11 +421,7 @@ export function OrganizationWorkbench({
   const [packageMarketPolicyDraft, setPackageMarketPolicyDraft] = useState<OrganizationPackageMarketPolicy | null>(null)
   const [packageMarketCatalogLoading, setPackageMarketCatalogLoading] = useState(false)
   const [packageMarketPolicySaving, setPackageMarketPolicySaving] = useState(false)
-  const [createOpen, setCreateOpen] = useState(false)
-  const [deleteOpen, setDeleteOpen] = useState(false)
-  const [organizationName, setOrganizationName] = useState('')
   const [organizationRenameDraft, setOrganizationRenameDraft] = useState('')
-  const [ownerUsername, setOwnerUsername] = useState(currentUser.username)
   const [memberInviteOpen, setMemberInviteOpen] = useState(false)
   const [inviteUsername, setInviteUsername] = useState('')
   const [inviteExpiresInMinutes, setInviteExpiresInMinutes] = useState(10)
@@ -460,18 +451,6 @@ export function OrganizationWorkbench({
   const detailSectionRefreshVersions = useRef<Record<string, number>>({})
   const canAccessOrganizationManagement = hasOrganizationAdminRole(currentUser.roles)
 
-  const loadOrganizations = useCallback(async (preferredId?: number, signal?: AbortSignal) => {
-    const result = await fetchOrganizations({ signal })
-    setOrganizations(result.organizations)
-    setCanCreate(result.canCreate)
-    const nextId = preferredId && result.organizations.some((item) => item.id === preferredId)
-      ? preferredId
-      : result.organizations[0]?.id ?? 0
-    setSelectedOrganizationId(nextId)
-    setDetailLoading(nextId !== 0)
-    return nextId
-  }, [])
-
   useEffect(() => startVisibleRefreshSchedule({
     clearInterval: (handle) => window.clearInterval(handle),
     intervalMs: workspaceRefreshIntervalMs,
@@ -491,14 +470,13 @@ export function OrganizationWorkbench({
 
   useEffect(() => {
     setOrganizations(initialOrganizations)
-    setCanCreate(initialCanCreate)
     setSelectedOrganizationId((current) => (
       initialOrganizations.some((organization) => organization.id === current)
         ? current
         : initialSelectedOrganizationId ?? initialOrganizations[0]?.id ?? 0
     ))
     setLoading(false)
-  }, [initialCanCreate, initialOrganizations, initialSelectedOrganizationId])
+  }, [initialOrganizations, initialSelectedOrganizationId])
 
   useEffect(() => {
     if (!selectedOrganizationId) {
@@ -680,28 +658,6 @@ export function OrganizationWorkbench({
     return true
   }
 
-  async function submitOrganization(event: FormEvent) {
-    event.preventDefault()
-    if (!organizationName.trim() || !ownerUsername.trim()) return
-    setBusy(true)
-    setError('')
-    try {
-      const created = await createOrganization({
-        name: organizationName.trim(),
-        ownerUsername: ownerUsername.trim(),
-      })
-      setOrganizationName('')
-      setCreateOpen(false)
-      await loadOrganizations(created.id)
-      setDetail(created)
-      onOrganizationsChanged?.()
-    } catch (createError) {
-      setError(errorMessage(createError))
-    } finally {
-      setBusy(false)
-    }
-  }
-
   async function submitOrganizationRename(event: FormEvent) {
     event.preventDefault()
     const name = organizationRenameDraft.trim()
@@ -768,24 +724,6 @@ export function OrganizationWorkbench({
     } finally {
       setPackageMarketPolicySaving(false)
     }
-  }
-
-  async function submitOrganizationDelete() {
-    if (!detail) return false
-    setError('')
-    setOrganizationSettingsError('')
-    await reconcileAction(
-      async () => { await deleteOrganization(detail.id, detail.name); return { organizations: organizations.filter((item) => item.id !== detail.id) } },
-      fetchOrganizations,
-      (data) => !data.organizations.some((item) => item.id === detail.id),
-    )
-    if (actionScopeRef.current !== actionScope) return false
-    setDeleteOpen(false)
-    setDetail(null)
-    setSelectedOrganizationId(0)
-    await loadOrganizations().catch(() => setError('组织已删除，列表刷新失败，请刷新页面。'))
-    onOrganizationsChanged?.()
-    return true
   }
 
   async function submitWeeklyReportRules(event: FormEvent) {
@@ -1015,28 +953,6 @@ export function OrganizationWorkbench({
             {organizationRoleLabel[selectedDetail.accessRole]}
           </span>
         ) : null}
-        {canCreate ? (
-          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-            <DialogTrigger asChild>
-              <Button className="solid-button" type="button">
-                <Plus size={17} /> 新建组织
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>新建组织</DialogTitle>
-              </DialogHeader>
-              <OrganizationCreateForm
-                busy={busy}
-                name={organizationName}
-                onNameChange={setOrganizationName}
-                onOwnerChange={setOwnerUsername}
-                onSubmit={submitOrganization}
-                ownerUsername={ownerUsername}
-              />
-            </DialogContent>
-          </Dialog>
-        ) : null}
       </div>,
       topbarActionHost,
     )
@@ -1131,17 +1047,6 @@ export function OrganizationWorkbench({
       {confirmationDialog}
       {organizationTopbarActions}
       {organizationSidebarNavigation}
-
-      <ConfirmActionDialog
-        key={detail.id}
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        title={`删除组织“${detail.name}”？`}
-        description={`组织成员关系、邀请、周报与汇总将永久删除，无法恢复。${detail.projects.length} 个项目和 ${detail.testSpaces.length} 个测试空间将解除组织归属，其中的业务数据保留。`}
-        confirmationName={detail.name}
-        confirmLabel="永久删除组织"
-        onConfirm={submitOrganizationDelete}
-      />
 
       {error ? <div className="organization-error" role="alert">{error}</div> : null}
 
@@ -1487,25 +1392,6 @@ export function OrganizationWorkbench({
                   }}
                 />
               ) : null}
-              <section className="organization-danger-zone" aria-labelledby="organization-danger-title">
-                <div>
-                  <strong id="organization-danger-title">删除组织</strong>
-                  <span>删除成员关系、邀请、组织周报与汇总，项目和测试空间将解除组织归属并保留。</span>
-                </div>
-                <Button
-                  className="organization-settings-action"
-                  disabled={busy}
-                  size="lg"
-                  type="button"
-                  variant="destructive"
-                  onClick={() => {
-                    setOrganizationSettingsError('')
-                    setDeleteOpen(true)
-                  }}
-                >
-                  <Trash data-icon="inline-start" /> 删除组织
-                </Button>
-              </section>
             </div>
           </section>
         ) : null}
@@ -2968,27 +2854,6 @@ export function OrganizationWeeklyReportView({ currentUser }: { currentUser: Aut
         </div>
       </section>
     </div>
-  )
-}
-
-function OrganizationCreateForm(props: {
-  busy: boolean
-  name: string
-  onNameChange: (value: string) => void
-  onOwnerChange: (value: string) => void
-  onSubmit: (event: FormEvent) => void
-  ownerUsername: string
-}) {
-  return (
-    <form className="organization-create-form" onSubmit={props.onSubmit}>
-      <Label>组织名称<Input autoFocus maxLength={80} value={props.name} onChange={(event) => props.onNameChange(event.target.value)} /></Label>
-      <Label>所有者账号<Input value={props.ownerUsername} onChange={(event) => props.onOwnerChange(event.target.value)} /></Label>
-      <DialogFooter>
-        <Button disabled={props.busy || !props.name.trim() || !props.ownerUsername.trim()} type="submit">
-          创建组织
-        </Button>
-      </DialogFooter>
-    </form>
   )
 }
 

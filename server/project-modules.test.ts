@@ -15,6 +15,11 @@ import {
 process.env.APP_ENCRYPTION_ACTIVE_KEY_ID = 'new'
 process.env.APP_ENCRYPTION_KEYS = `old:${Buffer.alloc(32, 13).toString('base64')},new:${Buffer.alloc(32, 17).toString('base64')}`
 
+const organizationModulePanelSource = readFileSync(
+  new URL('../src/components/organization-project-modules-panel.tsx', import.meta.url),
+  'utf8',
+)
+
 type Call = { sql: string; values: unknown[] }
 function fakeClient(answer: (call: Call) => object[] = () => []) {
   const calls: Call[] = []
@@ -152,13 +157,28 @@ test('disable reports all todo references with at most five project and title sa
 })
 
 test('organization module switch stays actionable so the server can report current todo blockers', () => {
-  const source = readFileSync(new URL('../src/components/organization-project-modules-panel.tsx', import.meta.url), 'utf8')
-  const switchStart = source.indexOf('<button type="button" role="switch"')
-  const switchEnd = source.indexOf('onClick=', switchStart)
+  const switchStart = organizationModulePanelSource.indexOf('<button type="button" role="switch"')
+  const switchEnd = organizationModulePanelSource.indexOf('onClick=', switchStart)
   assert.ok(switchStart >= 0 && switchEnd > switchStart)
-  const switchProps = source.slice(switchStart, switchEnd)
+  const switchProps = organizationModulePanelSource.slice(switchStart, switchEnd)
   assert.match(switchProps, /disabled=\{busy\}/u)
   assert.doesNotMatch(switchProps, /usageCount/u)
+})
+
+test('organization module catalog paginates five rows and keeps new modules visible', () => {
+  assert.match(organizationModulePanelSource, /const organizationProjectModulePageSize = 5/u)
+  assert.match(organizationModulePanelSource, /const visibleModules = modules\.slice/u)
+  assert.match(organizationModulePanelSource, /visibleModules\.map\(module =>/u)
+  assert.match(organizationModulePanelSource, /aria-label="项目模块分页"/u)
+  assert.match(organizationModulePanelSource, /detail\.projectModules\.length \/ organizationProjectModulePageSize/u)
+})
+
+test('organization module deletion uses the shared confirmation dialog and returns canonical success', () => {
+  assert.match(organizationModulePanelSource, /<ConfirmActionDialog/u)
+  assert.match(organizationModulePanelSource, /organization-project-module-delete:/u)
+  assert.match(organizationModulePanelSource, /onConfirm=\{\(\) => deleteModule\(module\)\}/u)
+  assert.match(organizationModulePanelSource, /function deleteModule\(module: OrganizationProjectModule\)/u)
+  assert.doesNotMatch(organizationModulePanelSource, /window\.confirm/u)
 })
 
 test('disabled modules can be deleted while preserving local history mappings', async () => {
@@ -233,13 +253,21 @@ test('catalog writes and deletion take project locks before manager row locks, w
   const catalogStart = moduleSource.indexOf('export async function lockOrganizationModuleCatalog(')
   const catalogEnd = moduleSource.indexOf('\nexport async function ', catalogStart + 1)
   assert.match(moduleSource.slice(catalogStart, catalogEnd), /from organizations where id = \$1 for key share/u)
-  const source = readFileSync(new URL('./organizations.ts', import.meta.url), 'utf8')
-  for (const anchor of ['async function mutateOrganizationProjectModule(', "router.delete('/organizations/:organizationId',"]) {
-    const start = source.indexOf(anchor)
-    assert.ok(start >= 0)
-    const catalogLock = source.indexOf('await lockOrganizationModuleCatalog(', start)
-    const projectLocks = source.indexOf('await lockOrganizationModuleProjects(', catalogLock)
-    const managerLock = source.indexOf('await lockManagedOrganization(', catalogLock)
-    assert.ok(catalogLock < projectLocks && projectLocks < managerLock)
-  }
+  const organizationSource = readFileSync(new URL('./organizations.ts', import.meta.url), 'utf8')
+  const mutationStart = organizationSource.indexOf('async function mutateOrganizationProjectModule(')
+  assert.ok(mutationStart >= 0)
+  const catalogLock = organizationSource.indexOf('await lockOrganizationModuleCatalog(', mutationStart)
+  const projectLocks = organizationSource.indexOf('await lockOrganizationModuleProjects(', catalogLock)
+  const managerLock = organizationSource.indexOf('await lockManagedOrganization(', catalogLock)
+  assert.ok(catalogLock < projectLocks && projectLocks < managerLock)
+
+  const platformSource = readFileSync(new URL('./platform-organizations.ts', import.meta.url), 'utf8')
+  const deletionStart = platformSource.indexOf('export async function deletePlatformOrganization(')
+  assert.ok(deletionStart >= 0)
+  const deletionCatalogLock = platformSource.indexOf('await lockOrganizationModuleCatalog(', deletionStart)
+  const deletionProjectLocks = platformSource.indexOf('await lockOrganizationModuleProjects(', deletionCatalogLock)
+  const organizationRowLock = platformSource.indexOf('for update', deletionProjectLocks)
+  assert.ok(
+    deletionCatalogLock < deletionProjectLocks && deletionProjectLocks < organizationRowLock,
+  )
 })

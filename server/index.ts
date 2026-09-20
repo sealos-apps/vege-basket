@@ -61,6 +61,7 @@ import {
 import { createPackageItemFailureDiagnostic } from './package-item-diagnostics.ts'
 import {
   createPackageItemDownloadLink,
+  configurePackageMarketRuntime,
   getOssObject,
   getPackageMarketDetail,
   getPackageMarketExpireMinutes,
@@ -111,9 +112,8 @@ import type {
   ProjectPackageDocumentInput,
   ProjectPackageItemInput,
 } from './project-package-timeline.ts'
-import { schemaSql } from './schema.ts'
 import {
-  createPersonalProjectModule, initializeProjectModules, lockOrganizationModuleCatalog,
+  createPersonalProjectModule, lockOrganizationModuleCatalog,
   lockProjectModules, parseProjectModuleId, ProjectModuleError, requirePersonalProjectModuleManagement,
   requireProjectModuleName, resolveProjectModuleId, syncOrganizationProjectModules,
 } from './project-modules.ts'
@@ -187,19 +187,64 @@ import {
   getAuthenticatedRoleSession,
   getUserRoleContext,
   getSwitchableUserRoles,
-  isSystemAdmin,
+  requirePlatformAdminSession,
   roleRouter,
   type UserRole,
 } from './roles.ts'
 import {
   addTodoShareComment,
+  configureTodoSharePublicUrl,
   createTodoShareLink,
   getTodoShareView,
   revokeTodoShareLink,
 } from './todo-share.ts'
-import { buildBugShareUrl } from './bug-share.ts'
+import { buildBugShareUrl, configureBugSharePublicUrl } from './bug-share.ts'
 import type { UserAccountStatus } from '../shared/user-lifecycle.ts'
 import { getDepartedUserIds } from './user-lifecycle.ts'
+import {
+  isPlatformAdmin,
+  PlatformAdminError,
+  syncManagedUserFeishuName,
+  updateBuiltinAdminDisplayName,
+} from './platform-admins.ts'
+import {
+  FeishuUserNameError,
+  fetchFeishuUserName,
+} from './feishu-user-name.ts'
+import {
+  buildFeishuOAuthBindRedirect,
+  buildFeishuOAuthSigninRedirect,
+} from './feishu-oauth-redirect.ts'
+import { derivePlatformCallbackUrls } from '../shared/platform-callback-urls.ts'
+import {
+  platformAiEnvironment,
+  platformFeishuConfig,
+  platformPublicUrl,
+} from './platform-config-values.ts'
+import { platformManagementRouter } from './platform-management-router.ts'
+import { getLegacyPlatformSecrets } from './platform-config-store.ts'
+import {
+  platformConfigRequestMiddleware,
+  getPlatformConfigSnapshot,
+  getOptionalPlatformConfigSnapshot,
+  startPlatformConfigRuntime,
+  stopPlatformConfigRuntime,
+} from './platform-config-runtime.ts'
+import { markPlatformStorageUsed } from './platform-config-store.ts'
+import {
+  isTodoImageSignatureValid,
+  legacyTodoImageUrlSecretFromEnvironment,
+  todoImageSignature,
+} from './todo-image-signature.ts'
+import { runAutomaticDatabaseMigrations, stopAutomaticDatabaseMigrations } from './database-migrations.ts'
+import {
+  platformMaintenanceMiddleware,
+  getPublicPlatformStatus,
+  platformLoginAccess,
+  startPlatformMaintenanceRuntime,
+  stopPlatformMaintenanceRuntime,
+} from './platform-maintenance.ts'
+import { getPackageMarketRulesForConfigRevision } from './platform-package-rules.ts'
 import {
   configureAccountOffboardingNotifications,
   type AccountOffboardingNotificationEvent,
@@ -236,7 +281,6 @@ import {
   buildFeishuAiReplyCard,
   buildFeishuAiReviewUrl,
   buildFeishuAiTodoProposalCard,
-  isFeishuAiChatEnabled,
   shouldRetainFeishuAiSource,
   type FeishuAiProposalCardItem,
 } from './feishu-ai.ts'
@@ -278,6 +322,7 @@ type UserRow = {
   feishu_email?: string | null
   feishu_receive_id_type?: string | null
   feishu_user_id?: string | null
+  is_builtin_admin?: boolean
 }
 type ChatMessage = { role: 'user' | 'assistant'; content: string }
 type AiAgentType =
@@ -287,6 +332,8 @@ type AiAgentType =
   | 'organization-weekly-summary'
   | 'personal-weekly-report'
 type FeishuTenantAccessToken = {
+  appId: string
+  configRevision: number
   expireAt: number
   token: string
 }
@@ -381,18 +428,11 @@ app.set('trust proxy', true)
 const port = Number(process.env.PORT ?? 8787)
 const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const clientDistPath = path.resolve(serverDir, '../dist')
-const configuredAiMaxMessageLength = Number(process.env.AI_MAX_MESSAGE_LENGTH ?? 2_000)
-const aiMaxMessageLength = Number.isSafeInteger(configuredAiMaxMessageLength) && configuredAiMaxMessageLength > 0
-  ? configuredAiMaxMessageLength
-  : 2_000
-const aiMaxContextChars = Number(process.env.AI_MAX_CONTEXT_CHARS ?? 12_000)
+const aiMaxMessageLength = () => getPlatformConfigSnapshot().config.ai.maxMessageLength
+const aiMaxContextChars = () => getPlatformConfigSnapshot().config.ai.maxContextChars
 const aiStructuredTurnTimeoutMs = 90_000
 const activeAiTurnControllers = new AiTurnControllerRegistry()
-const todoImageUploadMaxBytes = Number(process.env.TODO_IMAGE_UPLOAD_MAX_BYTES ?? 10 * 1024 * 1024)
-const todoImageObjectPrefix = String(process.env.TODO_IMAGE_OBJECT_PREFIX ?? 'todo-images')
-  .trim()
-  .replace(/^\/+|\/+$/g, '') || 'todo-images'
-const aiRateLimiter = createAiRateLimiter(readAiRateLimitConfig())
+const aiRateLimiter = createAiRateLimiter({ globalLimit: 30, perUserLimit: 5, windowMs: 60_000 })
 const aiIntentRequestRateLimiter = createAiRateLimiter({
   globalLimit: 60,
   perUserLimit: 10,
@@ -424,6 +464,16 @@ const todoShareCommentTokenConcurrencyLimiter = createAiConcurrencyLimiter<strin
   globalLimit: 20,
   perUserLimit: 1,
 })
+const feishuNameSyncRateLimiter = createAiRateLimiter({
+  globalLimit: 60,
+  perUserLimit: 10,
+  windowMs: 60_000,
+})
+const feishuNameSyncConcurrencyLimiter = createAiConcurrencyLimiter({
+  globalLimit: 5,
+  perUserLimit: 1,
+})
+const displayNameMutationRequestIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 let nextAiIntentReceiptCleanupAt = 0
 const aiIntentRoutingDependencies = {
   database: pool,
@@ -441,6 +491,22 @@ const aiIntentRoutingDependencies = {
 let feishuTenantAccessToken: FeishuTenantAccessToken | null = null
 const feishuUserNameCache = new Map<string, string>()
 const feishuUserLookupWarnings = new Set<string>()
+
+function feishuDeliveryAvailable() {
+  const config = platformFeishuConfig()
+  return config.deliveryEnabled && Boolean(config.appId && config.appSecret)
+}
+
+function feishuAiChatEnabled() {
+  return getOptionalPlatformConfigSnapshot()?.config.feishu.aiChatEnabled === true
+}
+
+configureTodoSharePublicUrl(platformPublicUrl)
+configureBugSharePublicUrl(platformPublicUrl)
+configurePackageMarketRuntime(() => {
+  const config = getPlatformConfigSnapshot().config
+  return { packages: config.packages, storage: config.storage }
+})
 
 const aiAgentPrompts: Record<AiAgentType, string> = {
   general:
@@ -498,12 +564,16 @@ const aiAgentPrompts: Record<AiAgentType, string> = {
 }
 
 app.use(cors())
-app.use('/api/integrations/feishu/conversation-analysis', express.text({ type: '*/*' }))
+app.use('/api', platformMaintenanceMiddleware)
 
-app.post('/api/todo-images', express.raw({
-  limit: todoImageUploadMaxBytes,
-  type: ['image/*', 'video/*'],
-}), asyncHandler(async (request, response) => {
+app.post('/api/todo-images', (request, response, next) => {
+  void platformConfigRequestMiddleware(request, response, next)
+}, (request, response, next) => {
+  express.raw({
+    limit: getPlatformConfigSnapshot().config.storage.uploadMaxBytes,
+    type: ['image/*', 'video/*'],
+  })(request, response, next)
+}, asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
   const contentType = normalizeTodoImageContentType(request.headers['content-type'])
@@ -516,6 +586,7 @@ app.post('/api/todo-images', express.raw({
     return
   }
   const objectKey = createTodoImageObjectKey(userId, contentType)
+  await markPlatformStorageUsed(getPlatformConfigSnapshot().revision)
   await putOssObject(objectKey, request.body, contentType)
   response.status(201).json({
     attachmentUrl: todoImageUrl(objectKey),
@@ -525,10 +596,12 @@ app.post('/api/todo-images', express.raw({
   })
 }))
 
-app.get('/api/todo-images', asyncHandler(async (request, response) => {
+app.get('/api/todo-images', (request, response, next) => {
+  void platformConfigRequestMiddleware(request, response, next)
+}, asyncHandler(async (request, response) => {
   const objectKey = String(request.query.key ?? '')
   const signature = String(request.query.sig ?? '')
-  if (!isTodoImageObjectKey(objectKey) || !isValidTodoImageSignature(objectKey, signature)) {
+  if (!isTodoImageObjectKey(objectKey) || !(await isValidTodoImageSignature(objectKey, signature))) {
     response.status(400).json({ error: 'Invalid todo image key' })
     return
   }
@@ -550,6 +623,16 @@ app.use(express.json({
     }
   },
 }))
+app.use('/api', platformManagementRouter)
+app.use('/api', (request, response, next) => {
+  if (request.path === '/health' || request.path === '/ready' || request.path === '/auth/login' ||
+      (request.path === '/auth/me' && request.method === 'GET') ||
+      (request.path === '/auth/context' && request.method === 'GET')) {
+    next()
+    return
+  }
+  void platformConfigRequestMiddleware(request, response, next)
+})
 app.use('/api', roleRouter)
 app.use('/api', changelogRouter)
 app.use('/api', imageSyncWorkflowRouter)
@@ -703,7 +786,7 @@ function todoImageExtension(contentType: string) {
 
 function createTodoImageObjectKey(userId: number, contentType: string) {
   return [
-    todoImageObjectPrefix,
+    getPlatformConfigSnapshot().config.storage.objectPrefix,
     formatDate(new Date()),
     `user-${userId}`,
     `${crypto.randomUUID()}.${todoImageExtension(contentType)}`,
@@ -711,41 +794,34 @@ function createTodoImageObjectKey(userId: number, contentType: string) {
 }
 
 function isTodoImageObjectKey(objectKey: string) {
+  const objectPrefix = getPlatformConfigSnapshot().config.storage.objectPrefix
   return (
-    objectKey.startsWith(`${todoImageObjectPrefix}/`) &&
+    objectKey.startsWith(`${objectPrefix}/`) &&
     !objectKey.includes('..') &&
     objectKey.length <= 512
   )
 }
 
 function todoImageUrlSecret() {
-  const secret = String(
-    process.env.TODO_IMAGE_URL_SECRET ??
-      process.env.FEISHU_OAUTH_STATE_SECRET ??
-      process.env.APP_ENCRYPTION_KEYS ??
-      '',
-  )
+  const secret = getPlatformConfigSnapshot().config.storage.urlSecret
   if (!secret) {
     throw new Error('TODO_IMAGE_URL_SECRET or APP_ENCRYPTION_KEYS must be set')
   }
   return secret
 }
 
-function todoImageSignature(objectKey: string) {
-  return crypto.createHmac('sha256', todoImageUrlSecret()).update(objectKey).digest('base64url')
-}
-
-function isValidTodoImageSignature(objectKey: string, signature: string) {
+async function isValidTodoImageSignature(objectKey: string, signature: string) {
   if (!signature) return false
-  const expected = todoImageSignature(objectKey)
-  const expectedBuffer = Buffer.from(expected)
-  const signatureBuffer = Buffer.from(signature)
-  return expectedBuffer.length === signatureBuffer.length &&
-    crypto.timingSafeEqual(expectedBuffer, signatureBuffer)
+  const secrets = [
+    todoImageUrlSecret(),
+    ...(await getLegacyPlatformSecrets('todo_image_url')),
+    legacyTodoImageUrlSecretFromEnvironment(),
+  ]
+  return isTodoImageSignatureValid(objectKey, signature, secrets)
 }
 
 function todoImageUrl(objectKey: string) {
-  return `/api/todo-images?key=${encodeURIComponent(objectKey)}&sig=${encodeURIComponent(todoImageSignature(objectKey))}`
+  return `/api/todo-images?key=${encodeURIComponent(objectKey)}&sig=${encodeURIComponent(todoImageSignature(objectKey, todoImageUrlSecret()))}`
 }
 
 function formatPriorityLabel(priority: Priority) {
@@ -812,38 +888,26 @@ function displayNameFromUser(row?: Pick<UserRow, 'email' | 'display_name'> | nul
 
 function serializeUser(row: UserRow) {
   const feishuOpenId = String(row.feishu_user_id ?? '').trim()
+  const isBuiltinAdmin = row.is_builtin_admin === true
   return {
     id: Number(row.id),
     accountStatus: row.account_status,
     displayName: row.display_name,
-    feishuEmail: row.feishu_email || (feishuOpenId.includes('@') ? feishuOpenId : ''),
-    feishuLinked: feishuOpenId.startsWith('ou_'),
+    feishuEmail: isBuiltinAdmin ? '' : row.feishu_email || (feishuOpenId.includes('@') ? feishuOpenId : ''),
+    feishuLinked: !isBuiltinAdmin && feishuOpenId.startsWith('ou_'),
     username: row.email,
+    isBuiltinAdmin,
   }
 }
 
 async function serializeUserWithRoleContext(row: UserRow, token: string) {
   return {
     ...serializeUser(row),
-    ...(await getUserRoleContext(Number(row.id), token, row.email)),
+    ...(await getUserRoleContext(Number(row.id), token)),
   }
 }
-function trimForAi(value: string, maxLength = aiMaxMessageLength) {
+function trimForAi(value: string, maxLength = aiMaxMessageLength()) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value
-}
-
-function stripMarkdownForSummary(value: string) {
-  return value
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
-    .replace(/^\s{0,3}[-*+]\s+/gm, '')
-    .replace(/^\s{0,3}\d+\.\s+/gm, '')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\|/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
 }
 
 function extractMentionNames(value: string) {
@@ -852,24 +916,8 @@ function extractMentionNames(value: string) {
     .filter(Boolean)
 }
 
-function extractCoreSummaryFromAnalysis(value: string) {
-  const coreSection = value.match(/(?:核心摘要|一句话总结)[^\n]*\n+([\s\S]*?)(?=\n#{1,6}\s|\n\d+\.\s|\n###\s|$)/)
-  if (coreSection?.[1]) return coreSection[1]
-
-  const firstMeaningfulLine = value
-    .split('\n')
-    .map((line) => stripMarkdownForSummary(line))
-    .find((line) => line && !/^[-:|\s]+$/.test(line) && !/^技术原话/.test(line))
-  return firstMeaningfulLine ?? value
-}
-
-function buildFeishuInformationSummary(analysis: string) {
-  const summary = stripMarkdownForSummary(extractCoreSummaryFromAnalysis(analysis))
-  if (!summary) return '飞书对话分析已完成，完整报告已保存到 Veges AI 的 AI 文档。'
-  return summary.length > 200 ? `${summary.slice(0, 197)}...` : summary
-}
-
 function checkAiRateLimit(userId: number) {
+  aiRateLimiter.updateConfig(readAiRateLimitConfig(platformAiEnvironment()))
   return aiRateLimiter.allow(userId)
 }
 
@@ -927,7 +975,7 @@ async function resolveAiIntentClassification(
       input.source.userContent,
       input.source.attachments,
     )
-    const intent = await classifyAiIntentWithModel(readAiProviderConfig(), {
+    const intent = await classifyAiIntentWithModel(readAiProviderConfig(platformAiEnvironment()), {
       content: sourceContent,
       hasPendingTodoProposals: context.hasPendingTodoProposals,
       shanghaiDate: formatDate(new Date()),
@@ -960,73 +1008,14 @@ async function resolveAiIntentClassification(
   }
 }
 
-function parseBasicAuth(request: express.Request) {
-  const header = request.headers.authorization ?? ''
-  if (!header.startsWith('Basic ')) return null
-
-  const decoded = Buffer.from(header.slice('Basic '.length), 'base64').toString('utf8')
-  const separatorIndex = decoded.indexOf(':')
-  if (separatorIndex < 0) return null
-  return {
-    username: decoded.slice(0, separatorIndex),
-    password: decoded.slice(separatorIndex + 1),
-  }
-}
-
 function timingSafeTextEqual(left: string, right: string) {
   const leftBuffer = Buffer.from(left)
   const rightBuffer = Buffer.from(right)
   return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer)
 }
 
-function ensureFeishuWebhookAuth(request: express.Request, response: express.Response) {
-  const basicUser = process.env.FEISHU_WEBHOOK_BASIC_USER ?? ''
-  const basicPassword = process.env.FEISHU_WEBHOOK_BASIC_PASSWORD ?? ''
-  if (!basicUser || !basicPassword) {
-    response.status(503).json({ error: 'Feishu webhook is not configured' })
-    return false
-  }
-
-  const credentials = parseBasicAuth(request)
-  if (
-    !credentials ||
-    !timingSafeTextEqual(credentials.username, basicUser) ||
-    !timingSafeTextEqual(credentials.password, basicPassword)
-  ) {
-    response.setHeader('WWW-Authenticate', 'Basic realm="Veges Feishu Webhook"')
-    response.status(401).json({ error: 'Unauthorized' })
-    return false
-  }
-  return true
-}
-
-function getRequestOrigin(request: express.Request) {
-  const browserOrigin = String(request.headers.origin ?? '').trim()
-  if (/^https?:\/\//.test(browserOrigin)) return browserOrigin
-
-  const referer = String(request.headers.referer ?? '').trim()
-  if (referer) {
-    try {
-      const refererUrl = new URL(referer)
-      if (refererUrl.protocol === 'http:' || refererUrl.protocol === 'https:') {
-        return refererUrl.origin
-      }
-    } catch {
-      // Fall back to proxy headers below.
-    }
-  }
-
-  const forwardedProto = String(request.headers['x-forwarded-proto'] ?? '').split(',')[0]?.trim()
-  const forwardedHost = String(request.headers['x-forwarded-host'] ?? '').split(',')[0]?.trim()
-  const proto = forwardedProto || request.protocol || 'http'
-  const host = forwardedHost || request.get('host') || `127.0.0.1:${port}`
-  return `${proto}://${host}`
-}
-
-function getFeishuOAuthRedirectUri(request: express.Request) {
-  const configured = String(process.env.FEISHU_OAUTH_REDIRECT_URI ?? '').trim()
-  if (configured) return configured
-  return `${getRequestOrigin(request)}/api/auth/feishu/oauth/callback`
+function getFeishuOAuthRedirectUri() {
+  return derivePlatformCallbackUrls(platformPublicUrl())?.oauthRedirectUrl ?? ''
 }
 
 function sanitizeReturnTo(value: unknown) {
@@ -1037,12 +1026,10 @@ function sanitizeReturnTo(value: unknown) {
 }
 
 function getFeishuOAuthStateSecret() {
-  return (
-    process.env.FEISHU_OAUTH_STATE_SECRET ||
-    process.env.FEISHU_APP_SECRET ||
-    process.env.APP_ENCRYPTION_KEYS ||
-    'veges-local-oauth-state'
-  )
+  const config = platformFeishuConfig()
+  return config.oauthStateSecret && config.oauthStateSecret !== '[object Object]'
+    ? config.oauthStateSecret
+    : config.appSecret
 }
 
 function signFeishuOAuthState(payload: FeishuOAuthState) {
@@ -1085,27 +1072,6 @@ function verifyFeishuOAuthState(value: unknown): FeishuOAuthState | null {
   }
 }
 
-function buildFeishuOAuthRedirect(returnTo: string, status: 'success' | 'error', message?: string) {
-  const target = new URL(returnTo, 'http://veges.local')
-  target.searchParams.set('feishuBind', status)
-  if (message) target.searchParams.set('feishuBindMessage', message.slice(0, 120))
-  return `${target.pathname}${target.search}${target.hash}`
-}
-
-function buildFeishuOAuthSigninRedirect(
-  returnTo: string,
-  status: 'success' | 'error',
-  options: { message?: string; token?: string } = {},
-) {
-  const target = new URL(returnTo, 'http://veges.local')
-  const fragment = new URLSearchParams()
-  fragment.set('feishuAuth', status)
-  if (options.token) fragment.set('token', options.token)
-  if (options.message) fragment.set('feishuAuthMessage', options.message.slice(0, 120))
-  target.hash = fragment.toString()
-  return `${target.pathname}${target.search}${target.hash}`
-}
-
 function extractTextFromUnknown(value: unknown): string {
   if (typeof value === 'string') {
     const trimmed = value.trim()
@@ -1141,22 +1107,8 @@ function extractTextFromUnknown(value: unknown): string {
   return Object.values(object).map(extractTextFromUnknown).filter(Boolean).join('\n')
 }
 
-function extractConversationText(body: Record<string, unknown>) {
-  const candidates = [
-    body.content,
-    body.message,
-    body.text,
-    body.chatRecord,
-    body.chat_record,
-    body.conversation,
-    body.event,
-    body.data,
-  ]
-  return candidates.map(extractTextFromUnknown).find(Boolean) ?? ''
-}
-
 function verifyFeishuToken(token: unknown) {
-  const expectedToken = String(process.env.FEISHU_VERIFICATION_TOKEN ?? '').trim()
+  const expectedToken = platformFeishuConfig().verificationToken.trim()
   const receivedToken = String(token ?? '').trim()
   return Boolean(expectedToken && receivedToken) && timingSafeTextEqual(receivedToken, expectedToken)
 }
@@ -1189,12 +1141,15 @@ function normalizeFeishuEventPayload(body: Record<string, unknown>) {
 
 async function getFeishuTenantAccessToken() {
   const now = Date.now()
-  if (feishuTenantAccessToken && feishuTenantAccessToken.expireAt > now + 60_000) {
+  const snapshot = getPlatformConfigSnapshot()
+  const { appId, appSecret } = snapshot.config.feishu
+  if (
+    feishuTenantAccessToken?.appId === appId &&
+    feishuTenantAccessToken.configRevision === snapshot.revision &&
+    feishuTenantAccessToken.expireAt > now + 60_000
+  ) {
     return feishuTenantAccessToken.token
   }
-
-  const appId = process.env.FEISHU_APP_ID ?? ''
-  const appSecret = process.env.FEISHU_APP_SECRET ?? ''
   if (!appId || !appSecret) {
     throw new Error('Feishu app credentials are not configured')
   }
@@ -1220,10 +1175,29 @@ async function getFeishuTenantAccessToken() {
   }
 
   feishuTenantAccessToken = {
+    appId,
+    configRevision: snapshot.revision,
     token: data.tenant_access_token,
     expireAt: now + Math.max(60, data.expire ?? 7_000) * 1_000,
   }
   return feishuTenantAccessToken.token
+}
+
+async function fetchConfiguredFeishuUserName(openId: string) {
+  if (!openId.startsWith('ou_')) {
+    throw new FeishuUserNameError('FEISHU_ACCOUNT_NOT_LINKED', '该账号尚未绑定飞书。', 409)
+  }
+  let token: string
+  try {
+    token = await getFeishuTenantAccessToken()
+  } catch {
+    throw new FeishuUserNameError(
+      'FEISHU_CONFIGURATION_UNAVAILABLE',
+      '飞书应用配置暂不可用。',
+      503,
+    )
+  }
+  return fetchFeishuUserName({ openId, token })
 }
 
 async function resolveFeishuOpenIdByEmail(email: string) {
@@ -1286,8 +1260,7 @@ async function resolveAndPersistFeishuOpenId(userId: number, email: string) {
 }
 
 async function exchangeFeishuOAuthCode(code: string, redirectUri: string) {
-  const appId = process.env.FEISHU_APP_ID ?? ''
-  const appSecret = process.env.FEISHU_APP_SECRET ?? ''
+  const { appId, appSecret } = platformFeishuConfig()
   if (!appId || !appSecret) {
     throw new Error('飞书应用凭据未配置。')
   }
@@ -1355,6 +1328,9 @@ async function fetchFeishuOAuthUserInfo(accessToken: string) {
       data.data?.en_name ??
       data.en_name,
   )
+  if (!displayName) {
+    throw new FeishuUserNameError('FEISHU_NAME_EMPTY', '飞书没有返回可用的姓名。', 422)
+  }
   return {
     email: normalizeUsername(data.data?.email ?? data.email),
     name: displayName,
@@ -1378,16 +1354,14 @@ async function findOrCreateFeishuOAuthUser(
   const byOpenId = await query<UserRow>(
     `
     update users
-    set display_name = case
-          when $2 <> '' then $2
-          else display_name
-        end,
+    set display_name = $2,
         feishu_email = case
           when $3 <> '' then $3
           else feishu_email
         end,
-        feishu_receive_id_type = 'open_id'
-    where feishu_user_id = $1
+        feishu_receive_id_type = 'open_id',
+        feishu_identity_verified_at = now()
+    where feishu_user_id = $1 and not is_builtin_admin
     returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
     `,
     [feishuUser.openId, displayName, feishuUser.email],
@@ -1408,11 +1382,11 @@ async function findOrCreateFeishuOAuthUser(
       set feishu_email = $1,
           feishu_user_id = $2,
           feishu_receive_id_type = 'open_id',
-          display_name = case
-            when $3 <> '' then $3
-            else display_name
-          end
+          feishu_identity_verified_at = now(),
+          display_name = $3
       where email = $1
+        and lower(btrim(email)) <> 'admin'
+        and (feishu_user_id = '' or feishu_user_id = $2)
       returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
       `,
       [feishuUser.email, feishuUser.openId, displayName],
@@ -1428,20 +1402,38 @@ async function findOrCreateFeishuOAuthUser(
   }
 
   const username = feishuUser.email || getFeishuGeneratedUsername(feishuUser.openId)
-  const newDisplayName = displayName || feishuUser.email || '飞书用户'
   const created = await query<UserRow>(
     `
-    insert into users (email, password_hash, display_name, feishu_email, feishu_user_id, feishu_receive_id_type)
-    values ($1, $2, $3, $4, $5, 'open_id')
+    insert into users
+      (email, password_hash, display_name, feishu_email, feishu_user_id,
+       feishu_receive_id_type, registration_source, feishu_identity_verified_at)
+    values ($1, $2, $3, $4, $5, 'open_id', 'feishu', now())
     returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
     `,
-    [username, '', newDisplayName, feishuUser.email, feishuUser.openId],
+    [username, '', displayName, feishuUser.email, feishuUser.openId],
   )
   const userId = Number(created.rows[0].id)
   await linkPendingMemberships(userId, username)
   await acceptProjectInviteToken(userId, inviteToken, invitePassword)
   await acceptOrganizationInviteToken(userId, organizationInviteToken)
   return created.rows[0]
+}
+
+async function findMaintenanceFeishuPlatformAdmin(openId: string) {
+  const existing = await query<UserRow>(
+    `select users.id, users.email, users.display_name, users.feishu_email,
+            users.feishu_user_id, users.feishu_receive_id_type, users.account_status
+       from users
+       join platform_admin_grants grant_row on grant_row.user_id = users.id
+      where users.feishu_user_id = $1::text and users.account_status = 'active'
+        and not users.is_builtin_admin
+      limit 1`,
+    [openId],
+  )
+  if (!existing.rows[0]) {
+    throw new Error('平台正在维护，当前飞书账号没有有效的超级管理员权限。')
+  }
+  return existing.rows[0]
 }
 
 async function fetchFeishuMessageContent(messageId: string) {
@@ -1478,49 +1470,23 @@ async function resolveFeishuUserName(openId: string) {
   if (feishuUserNameCache.has(openId)) return feishuUserNameCache.get(openId) ?? ''
 
   try {
-    const token = await getFeishuTenantAccessToken()
-    const result = await fetch(
-      `https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      },
-    )
-    const data = await result.json() as {
-      code?: number
-      data?: { user?: { avatar?: unknown; en_name?: unknown; name?: unknown; nickname?: unknown } }
-      msg?: string
-    }
-    const name = data.code === 0
-      ? sanitizeDisplayName(
-          data.data?.user?.name ??
-          data.data?.user?.nickname ??
-          data.data?.user?.en_name,
-        )
-      : ''
+    const name = await fetchConfiguredFeishuUserName(openId)
     feishuUserNameCache.set(openId, name)
-    if (!name && data.code !== 0) {
-      const warningKey = String(data.code ?? 'unknown')
-      if (!feishuUserLookupWarnings.has(warningKey)) {
-        feishuUserLookupWarnings.add(warningKey)
-        console.warn('Feishu user name lookup failed', {
-          code: data.code,
-          requiredScopes: [
-            'contact:contact.base:readonly',
-            'contact:contact:access_as_app',
-            'contact:contact:readonly',
-            'contact:contact:readonly_as_app',
-          ],
-        })
-      }
-    }
     return name
   } catch (error) {
     feishuUserNameCache.set(openId, '')
-    if (!feishuUserLookupWarnings.has('network')) {
-      feishuUserLookupWarnings.add('network')
-      console.warn('Feishu user name lookup failed', error)
+    const warningKey = error instanceof FeishuUserNameError ? error.code : 'network'
+    if (!feishuUserLookupWarnings.has(warningKey)) {
+      feishuUserLookupWarnings.add(warningKey)
+      console.warn('Feishu user name lookup failed', {
+        code: warningKey,
+        requiredScopes: [
+          'contact:contact.base:readonly',
+          'contact:contact:access_as_app',
+          'contact:contact:readonly',
+          'contact:contact:readonly_as_app',
+        ],
+      })
     }
     return ''
   }
@@ -1820,7 +1786,7 @@ async function buildSelectedProjectAiContext(userId: number, projectId: number) 
       `最新日记：${source.latestJournal ? trimForAi(source.latestJournal, 500) : '无'}`,
       `当前风险：${source.latestRisk ? trimForAi(source.latestRisk, 240) : '无'}`,
       `待处理待办：${source.nextTodo ? trimForAi(source.nextTodo, 180) : '无'}`,
-    ].join('\n\n'), aiMaxContextChars)
+    ].join('\n\n'), aiMaxContextChars())
   }
 
   const source = await getMemberProjectSummarySource(projectId, userId)
@@ -1855,7 +1821,7 @@ async function buildSelectedProjectAiContext(userId: number, projectId: number) 
     `指派给我的待办：\n${assignedTodoLines}`,
     `备注中 @ 我的内容：\n${noteMentionLines}`,
     `指派给我的安装升级事项：\n${assignedEventLines}`,
-  ].join('\n\n'), aiMaxContextChars)
+  ].join('\n\n'), aiMaxContextChars())
 }
 
 async function assertAiWorkspaceReviewAccess(userId: number, projectIds: readonly number[]) {
@@ -1877,11 +1843,11 @@ async function createAiWorkspaceReviewResponse(params: {
   const request = await loadAiWorkspaceReviewRequest(
     params.userId,
     params.period,
-    aiMaxContextChars,
+    aiMaxContextChars(),
   )
   await assertAiWorkspaceReviewAccess(params.userId, request.projectIds)
   try {
-    const message = await requestAiChatCompletion(readAiProviderConfig(), {
+    const message = await requestAiChatCompletion(readAiProviderConfig(platformAiEnvironment()), {
       messages: params.messages,
       signal: params.signal,
       systemPrompt: request.systemPrompt,
@@ -1943,7 +1909,7 @@ async function generateAiPeriodSummary(params: {
 
   try {
     const request = buildAiPeriodSummaryRequest(period, facts)
-    const content = await requestAiChatCompletion(readAiProviderConfig(), {
+    const content = await requestAiChatCompletion(readAiProviderConfig(platformAiEnvironment()), {
       ...request,
       signal: params.signal,
       timeoutMs: aiStructuredTurnTimeoutMs,
@@ -2002,7 +1968,7 @@ async function createAiAgentResponse(
     return { error: 'Project not found', status: 404 as const }
   }
   try {
-    const message = await requestAiChatCompletion(readAiProviderConfig(), {
+    const message = await requestAiChatCompletion(readAiProviderConfig(platformAiEnvironment()), {
       messages,
       onDelta,
       signal,
@@ -2024,7 +1990,10 @@ async function buildAiTodoProposalCatalog(
   projectId?: number,
   purpose: 'generation' | 'confirmation' = 'generation',
 ): Promise<AiTodoProposalCatalog> {
-  const workspace = await getWorkspace(userId)
+  const workspace = await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'overview']),
+  })
   return {
     projects: workspace.projects
       .filter((project) => projectId === undefined || project.id === projectId)
@@ -2122,7 +2091,7 @@ async function generateAiTodoProposalCandidates(
     )
   }
   const aiRequest = buildAiTodoProposalRequest(sourceMarkdown, catalog, formatDate(new Date()))
-  const aiConfig = readAiProviderConfig()
+  const aiConfig = readAiProviderConfig(platformAiEnvironment())
   if (aiRequest.untrustedContext.length > aiConfig.maxContextChars) {
     throw new AiConversationStoreError(
       'AI_TODO_CONTEXT_TOO_LARGE',
@@ -2648,29 +2617,6 @@ function sendAiConversationError(response: express.Response, error: unknown) {
   return false
 }
 
-async function createFeishuAnalysisDraft(userId: number, title: string, content: string) {
-  const draftContent = `## ${title}\n\n${content}`
-  const result = await query<{ id: string }>(
-    `
-    insert into draft_items (user_id, source, content)
-    values ($1, 'feishu', $2)
-    returning id
-    `,
-    [userId, encryptText(draftContent)],
-  )
-  return Number(result.rows[0].id)
-}
-
-async function saveFeishuAnalysisSummary(userId: number, title: string, content: string) {
-  await query(
-    `
-    insert into summaries (user_id, project_id, type, title, period, content)
-    values ($1, null, 'weekly', $2, $3, $4)
-    `,
-    [userId, encryptText(title), encryptText('飞书对话分析'), encryptText(content)],
-  )
-}
-
 type FeishuAiMessageClaim = {
   attempts: number
   chatId: string
@@ -2980,7 +2926,7 @@ async function saveFeishuAiChat(params: {
 }
 
 function buildFeishuAiAttachment(sourceContent: string, userContent: string) {
-  const availableCharacters = Math.max(0, aiMaxMessageLength - userContent.length - 2)
+  const availableCharacters = Math.max(0, aiMaxMessageLength() - userContent.length - 2)
   const content = trimForAi(sourceContent, Math.min(availableCharacters, 20_000))
   if (!content) return []
   return [{
@@ -3027,7 +2973,7 @@ async function buildFeishuAiTodoCard(batchId: number) {
   return buildFeishuAiTodoProposalCard({
     batchId,
     proposals,
-    reviewUrl: buildFeishuAiReviewUrl(batchId),
+    reviewUrl: buildFeishuAiReviewUrl(batchId, platformPublicUrl()),
   })
 }
 
@@ -3171,7 +3117,7 @@ async function processFeishuAiMessage(claim: FeishuAiMessageClaim) {
   )
   const userContent = isForward
     ? '请分析以下飞书转发对话，提炼关键信息、分歧、风险和下一步行动建议。'
-    : trimForAi(claim.eventContent, aiMaxMessageLength)
+    : trimForAi(claim.eventContent, aiMaxMessageLength())
   if (!userContent) throw new Error('Conversation content is required')
   const attachments = buildFeishuAiAttachment(sourceContent, userContent)
   const sourceContext = isForward
@@ -3251,7 +3197,7 @@ async function processFeishuAiMessage(claim: FeishuAiMessageClaim) {
 let feishuAiPumpRunning = false
 
 async function pumpFeishuAiMessages(preferredMessageId?: string) {
-  if (feishuAiPumpRunning || !isFeishuAiChatEnabled()) return
+  if (feishuAiPumpRunning || !feishuAiChatEnabled()) return
   feishuAiPumpRunning = true
   try {
     for (let index = 0; index < 5; index += 1) {
@@ -3671,71 +3617,6 @@ async function acceptOrganizationInviteToken(userId: number, rawToken: unknown) 
     const organizationId = await acceptOrganizationInviteTokenWithClient(client, userId, rawToken)
     await client.query('commit')
     return organizationId
-  } catch (error) {
-    await client.query('rollback')
-    throw error
-  } finally {
-    client.release()
-  }
-}
-
-type PasswordRegistrationResult =
-  | { registered: false; reason: 'existing_user' | 'invite_required' }
-  | { registered: true; user: UserRow; userId: number }
-
-async function registerPasswordUser(params: {
-  invitePassword: unknown
-  inviteToken: unknown
-  organizationInviteToken: unknown
-  passwordHash: string
-  requireInvite: boolean
-  username: string
-}): Promise<PasswordRegistrationResult> {
-  const client = await pool.connect()
-  try {
-    await client.query('begin')
-    const existing = await client.query<{ id: string }>(
-      'select id from users where email = $1',
-      [params.username],
-    )
-    if (existing.rows.length > 0) {
-      await client.query('rollback')
-      return { reason: 'existing_user', registered: false }
-    }
-
-    const user = await client.query<UserRow>(
-      `
-      insert into users (email, password_hash, display_name)
-      values ($1, $2, $3)
-      returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
-      `,
-      [params.username, params.passwordHash, params.username],
-    )
-    const userRow = user.rows[0]
-    const userId = Number(userRow.id)
-    await linkPendingMembershipsWithExecutor(
-      (text, queryParams) => client.query(text, queryParams),
-      userId,
-      params.username,
-    )
-    const projectInviteAccepted = await acceptProjectInviteTokenWithClient(
-      client,
-      userId,
-      params.inviteToken,
-      params.invitePassword,
-    )
-    const organizationInviteAccepted = await acceptOrganizationInviteTokenWithClient(
-      client,
-      userId,
-      params.organizationInviteToken,
-    )
-    if (params.requireInvite && !projectInviteAccepted && !organizationInviteAccepted) {
-      await client.query('rollback')
-      return { reason: 'invite_required', registered: false }
-    }
-
-    await client.query('commit')
-    return { registered: true, user: userRow, userId }
   } catch (error) {
     await client.query('rollback')
     throw error
@@ -4215,13 +4096,26 @@ async function writeTodoMentions(
   return newMentionIds
 }
 
-async function getWorkspace(userId: number) {
+type WorkspaceSection = 'catalog' | 'inbox' | 'journals' | 'overview' | 'summaries' | 'todos'
+
+type WorkspaceReadOptions = {
+  includeTodoDetail?: boolean
+  projectId?: number
+  sections?: ReadonlySet<WorkspaceSection>
+  todoId?: number
+}
+
+async function getWorkspace(userId: number, options: WorkspaceReadOptions = {}) {
+  const { projectId = null, sections, todoId = null } = options
+  const includes = (section: WorkspaceSection) => !sections || sections.has(section)
+  const includeProjects = includes('catalog') || includes('overview') || includes('journals')
+  const includeTodoDetail = options.includeTodoDetail ?? true
   const currentUser = await query<UserRow>(
     'select id, email, display_name from users where id = $1',
     [userId],
   )
   const currentUserName = displayNameFromUser(currentUser.rows[0])
-  const systemAdmin = isSystemAdmin(currentUser.rows[0]?.email ?? '')
+  const systemAdmin = await isPlatformAdmin(userId)
   const systemAdminOrganizationScopeSql = (alias: string) =>
     systemAdmin ? `${alias}.organization_id is not null` : 'false'
   const [
@@ -4236,7 +4130,7 @@ async function getWorkspace(userId: number) {
     summariesResult,
     membershipsResult,
   ] = await Promise.all([
-    query<{
+    includeProjects ? query<{
       id: string
       owner_user_id: string
       organization_id: string | null
@@ -4285,15 +4179,18 @@ async function getWorkspace(userId: number) {
         on pm.project_id = p.id
        and pm.status = 'active'
        and pm.invited_user_id = $1
-      where p.user_id = $1
-         or pm.id is not null
-         or ${managedOrganizationReadScopeSql('p.organization_id')}
-         or ${systemAdminOrganizationScopeSql('p')}
+      where (
+        p.user_id = $1
+        or pm.id is not null
+        or ${managedOrganizationReadScopeSql('p.organization_id')}
+        or ${systemAdminOrganizationScopeSql('p')}
+      )
+        and ($2::bigint is null or p.id = $2)
       order by updated_at desc, id desc
       `,
-      [userId],
-    ),
-    query<ProjectModuleRow>(
+      [userId, projectId],
+    ) : Promise.resolve({ rows: [] }),
+    includes('overview') ? query<ProjectModuleRow>(
       `
       select pm.id,
              pm.project_id,
@@ -4309,23 +4206,27 @@ async function getWorkspace(userId: number) {
         on membership.project_id = p.id
        and membership.status = 'active'
        and membership.invited_user_id = $1
-      where p.user_id = $1
-         or membership.id is not null
-         or ${managedOrganizationReadScopeSql('p.organization_id')}
-         or ${systemAdminOrganizationScopeSql('p')}
+      where (
+        p.user_id = $1
+        or membership.id is not null
+        or ${managedOrganizationReadScopeSql('p.organization_id')}
+        or ${systemAdminOrganizationScopeSql('p')}
+      )
+        and ($2::bigint is null or p.id = $2)
       order by pm.created_at asc, pm.id asc
       `,
-      [userId],
-    ),
-    query<{ id: string; project_id: string; name: string; created_at: Date; updated_at: Date; task_count: string }>(
+      [userId, projectId],
+    ) : Promise.resolve({ rows: [] }),
+    includes('overview') ? query<{ id: string; project_id: string; name: string; created_at: Date; updated_at: Date; task_count: string }>(
       `select s.id, s.project_id, s.name, s.created_at, s.updated_at, count(t.id)::text as task_count
          from project_subprojects s join projects p on p.id = s.project_id
          left join todos t on t.subproject_id = s.id
-        where p.user_id = $1 or ${managedOrganizationReadScopeSql('p.organization_id')} or exists (
-          select 1 from project_memberships m where m.project_id = p.id and m.status = 'active' and m.invited_user_id = $1)
-        group by s.id order by s.created_at, s.id`, [userId],
-    ),
-    query<{
+        where (p.user_id = $1 or ${managedOrganizationReadScopeSql('p.organization_id')} or exists (
+          select 1 from project_memberships m where m.project_id = p.id and m.status = 'active' and m.invited_user_id = $1))
+          and ($2::bigint is null or p.id = $2)
+        group by s.id order by s.created_at, s.id`, [userId, projectId],
+    ) : Promise.resolve({ rows: [] }),
+    includes('journals') ? query<{
       id: string
       project_id: string
       content: string
@@ -4357,6 +4258,7 @@ async function getWorkspace(userId: number) {
           or ${managedOrganizationReadScopeSql('p.organization_id')}
           or ${systemAdminOrganizationScopeSql('p')}
         )
+        and ($2::bigint is null or p.id = $2)
         and (
           je.author_user_id = $1
           or je.visibility = 'public'
@@ -4366,9 +4268,9 @@ async function getWorkspace(userId: number) {
         )
       order by je.created_at desc, je.id desc
       `,
-      [userId],
-    ),
-    query<{ project_id: string; content: string; journal_entry_id: string | null }>(
+      [userId, projectId],
+    ) : Promise.resolve({ rows: [] }),
+    includes('journals') ? query<{ project_id: string; content: string; journal_entry_id: string | null }>(
       `
       select r.project_id, r.content, r.journal_entry_id
       from risks r
@@ -4377,15 +4279,18 @@ async function getWorkspace(userId: number) {
         on pm.project_id = p.id
        and pm.status = 'active'
        and pm.invited_user_id = $1
-      where p.user_id = $1
-         or pm.id is not null
-         or ${managedOrganizationReadScopeSql('p.organization_id')}
-         or ${systemAdminOrganizationScopeSql('p')}
+      where (
+        p.user_id = $1
+        or pm.id is not null
+        or ${managedOrganizationReadScopeSql('p.organization_id')}
+        or ${systemAdminOrganizationScopeSql('p')}
+      )
+        and ($2::bigint is null or p.id = $2)
       order by r.created_at desc, r.id desc
       `,
-      [userId],
-    ),
-    query<{
+      [userId, projectId],
+    ) : Promise.resolve({ rows: [] }),
+    includes('todos') ? query<{
       id: string
       project_id: string
       title: string
@@ -4426,7 +4331,7 @@ async function getWorkspace(userId: number) {
       select t.id,
              t.project_id,
              t.title,
-             t.detail,
+             ${includeTodoDetail ? 't.detail' : "''::text"} as detail,
              t.created_at,
              t.due_date,
              t.priority,
@@ -4504,15 +4409,19 @@ async function getWorkspace(userId: number) {
       left join users assigner on assigner.id = t.assigned_by_user_id
       left join project_modules module on module.id = t.project_module_id
       left join project_subprojects subproject on subproject.id = t.subproject_id
-      where p.user_id = $1
-         or membership.id is not null
-         or ${managedOrganizationReadScopeSql('p.organization_id')}
-         or ${systemAdminOrganizationScopeSql('p')}
+      where (
+        p.user_id = $1
+        or membership.id is not null
+        or ${managedOrganizationReadScopeSql('p.organization_id')}
+        or ${systemAdminOrganizationScopeSql('p')}
+      )
+        and ($2::bigint is null or p.id = $2)
+        and ($3::bigint is null or t.id = $3)
       order by t.created_at desc, t.id desc
       `,
-      [userId],
-    ),
-      query<TodoNoteRow>(
+      [userId, projectId, todoId],
+    ) : Promise.resolve({ rows: [] }),
+      includes('todos') && includeTodoDetail ? query<TodoNoteRow>(
       `
       select n.id,
              n.todo_id,
@@ -4532,15 +4441,19 @@ async function getWorkspace(userId: number) {
        and pm.status = 'active'
        and pm.invited_user_id = $1
       left join users author on author.id = n.author_user_id
-      where p.user_id = $1
-         or pm.id is not null
-         or ${managedOrganizationReadScopeSql('p.organization_id')}
-         or ${systemAdminOrganizationScopeSql('p')}
+      where (
+        p.user_id = $1
+        or pm.id is not null
+        or ${managedOrganizationReadScopeSql('p.organization_id')}
+        or ${systemAdminOrganizationScopeSql('p')}
+      )
+        and ($2::bigint is null or p.id = $2)
+        and ($3::bigint is null or t.id = $3)
       order by n.created_at asc, n.id asc
       `,
-      [userId],
-    ),
-    query<{
+      [userId, projectId, todoId],
+    ) : Promise.resolve({ rows: [] }),
+    includes('inbox') ? query<{
       id: string
       source: 'manual' | 'feishu'
       item_type: 'journal' | 'todo'
@@ -4568,8 +4481,8 @@ async function getWorkspace(userId: number) {
       order by processed asc, created_at desc, id desc
       `,
       [userId],
-    ),
-    query<{
+    ) : Promise.resolve({ rows: [] }),
+    includes('summaries') ? query<{
       id: string
       project_id: string | null
       source_turn_id: string | null
@@ -4582,8 +4495,10 @@ async function getWorkspace(userId: number) {
       `
       select id, project_id, source_turn_id, type, title, period, content, created_at
       from summaries
-      where user_id = $1
-         or (
+      where (
+        user_id = $1
+        and ($2::bigint is null or project_id = $2)
+      ) or (
            type <> 'reply'
            and exists(
              select 1
@@ -4595,12 +4510,13 @@ async function getWorkspace(userId: number) {
                  or ${systemAdminOrganizationScopeSql('p')}
                )
            )
-         )
+           and ($2::bigint is null or project_id = $2)
+      )
       order by created_at desc, id desc
       `,
-      [userId],
-    ),
-    query<ProjectMembershipRow>(
+      [userId, projectId],
+    ) : Promise.resolve({ rows: [] }),
+    includes('overview') ? query<ProjectMembershipRow>(
       `
       with accessible_projects as (
         select p.id,
@@ -4616,10 +4532,13 @@ async function getWorkspace(userId: number) {
           on access_pm.project_id = p.id
          and access_pm.status = 'active'
          and access_pm.invited_user_id = $1
-        where p.user_id = $1
-           or access_pm.id is not null
-           or ${managedOrganizationReadScopeSql('p.organization_id')}
-           or ${systemAdminOrganizationScopeSql('p')}
+        where (
+          p.user_id = $1
+          or access_pm.id is not null
+          or ${managedOrganizationReadScopeSql('p.organization_id')}
+          or ${systemAdminOrganizationScopeSql('p')}
+        )
+          and ($2::bigint is null or p.id = $2)
       ),
       visible_memberships as (
         select pm.*
@@ -4632,6 +4551,7 @@ async function getWorkspace(userId: number) {
         select pm.*
         from project_memberships pm
         where pm.invited_user_id = $1
+          and ($2::bigint is null or pm.project_id = $2)
       )
       select pm.id,
              pm.project_id,
@@ -4646,10 +4566,10 @@ async function getWorkspace(userId: number) {
       left join users u on u.id = pm.invited_user_id
       order by pm.created_at desc, pm.id desc
       `,
-      [userId],
-    ),
+      [userId, projectId],
+    ) : Promise.resolve({ rows: [] }),
   ])
-  const departedUserIds = await getDepartedUserIds()
+  const departedUserIds = includes('overview') ? await getDepartedUserIds() : []
 
   const journalsByProject = new Map<
     number,
@@ -4766,6 +4686,11 @@ async function getWorkspace(userId: number) {
 
   return {
     departedUserIds,
+    loadedSections: sections ? [...sections] : undefined,
+    scope: sections ? {
+      projectId: projectId ?? undefined,
+      todoId: todoId ?? undefined,
+    } : undefined,
     projects: projectsResult.rows.map((project) => ({
       id: Number(project.id),
       accessRole: project.access_role,
@@ -4852,6 +4777,7 @@ async function getWorkspace(userId: number) {
         : undefined,
       title: decryptText(todo.title),
       detail: todo.detail ? decryptText(todo.detail) : '',
+      detailsLoaded: includeTodoDetail,
       dueDate: formatDate(todo.due_date),
       priority: todo.priority,
       done: todo.done,
@@ -4926,49 +4852,48 @@ app.get('/api/health', (_request, response) => {
   response.json({ ok: true })
 })
 
-app.post('/api/auth/register', asyncHandler(async (request, response) => {
-  const username = normalizeUsername(request.body.username ?? request.body.email)
-  const password = String(request.body.password ?? '')
-
-  if (!username || password.length < 6) {
-    response.status(400).json({ error: 'Username and a 6+ character password are required' })
+app.get('/api/ready', (_request, response) => {
+  const status = getPublicPlatformStatus()
+  if (status.migration.phase !== 'completed') {
+    response.status(503).json({ ok: false, migration: status.migration })
     return
   }
+  response.json({ ok: true })
+})
 
-  const passwordHash = await bcrypt.hash(password, 12)
-  const registration = await registerPasswordUser({
-    invitePassword: request.body.invitePassword,
-    inviteToken: request.body.inviteToken,
-    organizationInviteToken: request.body.organizationInviteToken,
-    passwordHash,
-    requireInvite: isAiProviderConfigured(),
-    username,
-  })
-  if (!registration.registered) {
-    if (registration.reason === 'existing_user') {
-      response.status(409).json({ error: 'Username already registered' })
-      return
-    }
-    response.status(403).json({
-      error: 'Password registration requires an active project or organization invite while shared AI is enabled',
-    })
-    return
-  }
-
-  const token = await createSession(registration.userId)
-  response.status(201).json({
-    isNewUser: true,
-    token,
-    user: await serializeUserWithRoleContext(registration.user, token),
-    workspace: await getWorkspace(registration.userId),
+app.post('/api/auth/register', asyncHandler(async (_request, response) => {
+  response.status(403).json({
+    error: '新用户只能通过飞书登录自动注册。',
+    code: 'REGISTRATION_VIA_FEISHU_ONLY',
   })
 }))
 
 app.post('/api/auth/login', asyncHandler(async (request, response) => {
+  const platformStatus = getPublicPlatformStatus()
+  const loginAccess = platformLoginAccess(platformStatus)
+  if (loginAccess === 'blocked') {
+    response.setHeader('Retry-After', '5')
+    response.status(503).json({
+      error: platformStatus.maintenance.message || '平台正在维护，暂时无法登录。',
+      code: 'PLATFORM_MAINTENANCE',
+      maintenance: platformStatus.maintenance,
+    })
+    return
+  }
   const username = normalizeUsername(request.body.username ?? request.body.email)
   const password = String(request.body.password ?? '')
-  const user = await query<UserRow & { password_hash: string }>(
-    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, password_hash, account_status from users where email = $1',
+  const user = await query<UserRow & {
+    is_builtin_admin: boolean
+    is_platform_admin: boolean
+    password_hash: string
+  }>(
+    `select users.id, users.email, users.display_name, users.feishu_email, users.feishu_user_id,
+            users.feishu_receive_id_type, users.password_hash, users.account_status,
+            users.is_builtin_admin,
+            exists(select 1 from platform_admin_grants grant_row where grant_row.user_id = users.id)
+              as is_platform_admin
+       from users
+      where users.email = $1`,
     [username],
   )
   const row = user.rows[0]
@@ -4979,14 +4904,32 @@ app.post('/api/auth/login', asyncHandler(async (request, response) => {
   }
 
   const userId = Number(row.id)
-  await linkPendingMemberships(userId, row.email)
-  await acceptProjectInviteToken(userId, request.body.inviteToken, request.body.invitePassword)
-  await acceptOrganizationInviteToken(userId, request.body.organizationInviteToken)
+  if (loginAccess === 'builtin-admin-only' && !row.is_builtin_admin) {
+    response.status(503).json({
+      error: '平台正在初始化，当前只允许内置 admin 登录。',
+      code: 'PLATFORM_MAINTENANCE',
+      maintenance: platformStatus.maintenance,
+    })
+    return
+  }
+  if (loginAccess === 'platform-admin-only' && !row.is_platform_admin) {
+    response.status(503).json({
+      error: '平台正在维护，当前只允许超级管理员登录。',
+      code: 'PLATFORM_MAINTENANCE',
+      maintenance: platformStatus.maintenance,
+    })
+    return
+  }
+  if (loginAccess === 'open') {
+    await linkPendingMemberships(userId, row.email)
+    await acceptProjectInviteToken(userId, request.body.inviteToken, request.body.invitePassword)
+    await acceptOrganizationInviteToken(userId, request.body.organizationInviteToken)
+  }
   const token = await createSession(userId)
   response.json({
     token,
     user: await serializeUserWithRoleContext(row, token),
-    workspace: await getWorkspace(userId),
+    workspace: await getWorkspace(userId, { sections: new Set(['catalog']) }),
   })
 }))
 
@@ -4995,12 +4938,25 @@ app.get('/api/auth/me', asyncHandler(async (request, response) => {
   if (!userId) return
 
   const user = await query<UserRow>(
-    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status from users where id = $1',
+    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status, is_builtin_admin from users where id = $1',
     [userId],
   )
   response.json({
     user: await serializeUserWithRoleContext(user.rows[0], getTokenFromRequest(request)),
-    workspace: await getWorkspace(userId),
+    workspace: await getWorkspace(userId, { sections: new Set(['catalog']) }),
+  })
+}))
+
+app.get('/api/auth/context', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+
+  const user = await query<UserRow>(
+    'select id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status, is_builtin_admin from users where id = $1',
+    [userId],
+  )
+  response.json({
+    user: await serializeUserWithRoleContext(user.rows[0], getTokenFromRequest(request)),
   })
 }))
 
@@ -5008,49 +4964,204 @@ app.patch('/api/auth/me', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
 
-  const displayName = sanitizeDisplayName(request.body.displayName)
-  if (!displayName) {
-    response.status(400).json({ error: 'Display name is required' })
+  const displayName = String(request.body?.displayName ?? '').trim()
+  const expectedDisplayName = String(request.body?.expectedDisplayName ?? '')
+  const requestId = String(request.body?.requestId ?? '')
+  if (!displayName || displayName.length > 32 || !displayNameMutationRequestIdPattern.test(requestId)) {
+    response.status(400).json({ error: '姓名、当前值或请求编号无效。' })
     return
   }
+  response.json(await updateBuiltinAdminDisplayName({
+    actorUserId: userId,
+    displayName,
+    expectedDisplayName,
+    requestId,
+  }))
+}))
 
-  const user = await query<UserRow>(
-    `
-    update users
-    set display_name = $1,
-        feishu_receive_id_type = case
-          when feishu_user_id like 'ou_%' then 'open_id'
-          else feishu_receive_id_type
-        end
-    where id = $2
-    returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
-    `,
-    [displayName, userId],
-  )
-  response.json({
-    user: await serializeUserWithRoleContext(user.rows[0], getTokenFromRequest(request)),
-  })
+app.post('/api/auth/feishu/name-sync', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  if (!feishuNameSyncRateLimiter.allow(userId)) {
+    response.status(429).json({ code: 'FEISHU_NAME_SYNC_RATE_LIMITED', error: '姓名同步过于频繁，请稍后再试。' })
+    return
+  }
+  const release = feishuNameSyncConcurrencyLimiter.acquire(userId)
+  if (!release) {
+    response.status(429).json({ code: 'FEISHU_NAME_SYNC_BUSY', error: '已有姓名同步正在进行。' })
+    return
+  }
+  try {
+    const target = await query<{
+      feishu_user_id: string
+      is_builtin_admin: boolean
+    }>(
+      'select feishu_user_id, is_builtin_admin from users where id = $1',
+      [userId],
+    )
+    const row = target.rows[0]
+    if (!row) {
+      response.status(404).json({ code: 'USER_NOT_FOUND', error: '用户不存在。' })
+      return
+    }
+    if (row.is_builtin_admin) {
+      response.status(409).json({ code: 'BUILTIN_ADMIN_FEISHU_FORBIDDEN', error: '内置 admin 不使用飞书姓名。' })
+      return
+    }
+    if (!row.feishu_user_id.startsWith('ou_')) {
+      response.status(409).json({ code: 'FEISHU_ACCOUNT_NOT_LINKED', error: '该账号尚未绑定飞书。' })
+      return
+    }
+    const displayName = await fetchConfiguredFeishuUserName(row.feishu_user_id)
+    const updated = await pool.connect()
+    try {
+      await updated.query('begin')
+      const locked = await updated.query<UserRow & { is_builtin_admin: boolean }>(
+        `select id, email, display_name, feishu_email, feishu_user_id,
+                feishu_receive_id_type, account_status, is_builtin_admin
+           from users where id = $1 for update`,
+        [userId],
+      )
+      const lockedRow = locked.rows[0]
+      if (!lockedRow || lockedRow.is_builtin_admin || lockedRow.feishu_user_id !== row.feishu_user_id) {
+        throw new FeishuUserNameError('FEISHU_BINDING_CHANGED', '飞书绑定已经变化，请重新同步。', 409)
+      }
+      if (lockedRow.display_name !== displayName) {
+        const result = await updated.query<UserRow & { is_builtin_admin: boolean }>(
+          `update users set display_name = $1 where id = $2
+           returning id, email, display_name, feishu_email, feishu_user_id,
+                     feishu_receive_id_type, account_status, is_builtin_admin`,
+          [displayName, userId],
+        )
+        locked.rows[0] = result.rows[0]
+      }
+      await updated.query('commit')
+      feishuUserNameCache.set(row.feishu_user_id, displayName)
+      response.json({
+        changed: lockedRow.display_name !== displayName,
+        user: await serializeUserWithRoleContext(locked.rows[0], getTokenFromRequest(request)),
+      })
+    } catch (error) {
+      await updated.query('rollback')
+      throw error
+    } finally {
+      updated.release()
+    }
+  } finally {
+    release()
+  }
+}))
+
+app.post('/api/admin/users/:userId/feishu-name-sync', asyncHandler(async (request, response) => {
+  const session = await requirePlatformAdminSession(request, response)
+  if (!session) return
+  const targetUserId = Number(request.params.userId)
+  const requestId = String(request.body?.requestId ?? '')
+  if (!Number.isSafeInteger(targetUserId) || targetUserId <= 0 ||
+      !displayNameMutationRequestIdPattern.test(requestId)) {
+    response.status(400).json({ error: '用户或请求编号无效。' })
+    return
+  }
+  if (!feishuNameSyncRateLimiter.allow(session.userId)) {
+    response.status(429).json({ code: 'FEISHU_NAME_SYNC_RATE_LIMITED', error: '姓名同步过于频繁，请稍后再试。' })
+    return
+  }
+  const release = feishuNameSyncConcurrencyLimiter.acquire(session.userId)
+  if (!release) {
+    response.status(429).json({ code: 'FEISHU_NAME_SYNC_BUSY', error: '已有姓名同步正在进行。' })
+    return
+  }
+  try {
+    const target = await query<{ feishu_user_id: string; is_builtin_admin: boolean }>(
+      'select feishu_user_id, is_builtin_admin from users where id = $1',
+      [targetUserId],
+    )
+    const row = target.rows[0]
+    if (!row) {
+      response.status(404).json({ code: 'USER_NOT_FOUND', error: '用户不存在。' })
+      return
+    }
+    if (row.is_builtin_admin) {
+      response.status(409).json({ code: 'BUILTIN_ADMIN_FEISHU_FORBIDDEN', error: '内置 admin 不使用飞书姓名。' })
+      return
+    }
+    if (!row.feishu_user_id.startsWith('ou_')) {
+      response.status(409).json({ code: 'FEISHU_ACCOUNT_NOT_LINKED', error: '该账号尚未绑定飞书。' })
+      return
+    }
+    const displayName = await fetchConfiguredFeishuUserName(row.feishu_user_id)
+    const result = await syncManagedUserFeishuName({
+      actorUserId: session.userId,
+      displayName,
+      expectedFeishuUserId: row.feishu_user_id,
+      requestId,
+      targetUserId,
+    })
+    feishuUserNameCache.set(row.feishu_user_id, displayName)
+    response.json(result)
+  } finally {
+    release()
+  }
 }))
 
 app.post('/api/auth/feishu/oauth/url', asyncHandler(async (request, response) => {
+  const loginAccess = platformLoginAccess(getPublicPlatformStatus())
+  if (loginAccess === 'blocked' || loginAccess === 'builtin-admin-only') {
+    response.status(503).json({
+      error: '平台正在初始化，当前只允许内置 admin 使用密码登录。',
+      code: 'PLATFORM_MAINTENANCE',
+    })
+    return
+  }
   const userId = await requireUserId(request)
+  if (userId) {
+    const account = await query<{ is_builtin_admin: boolean }>(
+      'select is_builtin_admin from users where id = $1',
+      [userId],
+    )
+    if (account.rows[0]?.is_builtin_admin) {
+      response.status(409).json({
+        code: 'BUILTIN_ADMIN_FEISHU_FORBIDDEN',
+        error: '内置 admin 不支持绑定飞书。',
+      })
+      return
+    }
+  }
+  if (loginAccess === 'platform-admin-only' && userId && !(await isPlatformAdmin(userId))) {
+    response.status(503).json({
+      error: '平台正在维护，当前只允许超级管理员登录。',
+      code: 'PLATFORM_MAINTENANCE',
+    })
+    return
+  }
   const intent: FeishuOAuthState['intent'] = userId ? 'bind' : 'signin'
 
-  const appId = process.env.FEISHU_APP_ID ?? ''
-  const appSecret = process.env.FEISHU_APP_SECRET ?? ''
+  const { appId, appSecret } = platformFeishuConfig()
   if (!appId || !appSecret) {
     response.status(503).json({ error: '飞书应用凭据未配置。' })
     return
   }
 
-  const redirectUri = getFeishuOAuthRedirectUri(request)
+  const redirectUri = getFeishuOAuthRedirectUri()
+  if (!redirectUri) {
+    response.status(503).json({
+      error: '请先在平台管理中配置公网地址。',
+      code: 'PLATFORM_PUBLIC_URL_REQUIRED',
+    })
+    return
+  }
   const state = signFeishuOAuthState({
     exp: Date.now() + 10 * 60 * 1_000,
     intent,
-    invitePassword: normalizeProjectInvitePassword(request.body?.invitePassword) || undefined,
-    inviteToken: String(request.body?.inviteToken ?? '').trim().slice(0, 128) || undefined,
-    organizationInviteToken:
-      String(request.body?.organizationInviteToken ?? '').trim().slice(0, 128) || undefined,
+    invitePassword: loginAccess === 'open'
+      ? normalizeProjectInvitePassword(request.body?.invitePassword) || undefined
+      : undefined,
+    inviteToken: loginAccess === 'open'
+      ? String(request.body?.inviteToken ?? '').trim().slice(0, 128) || undefined
+      : undefined,
+    organizationInviteToken: loginAccess === 'open'
+      ? String(request.body?.organizationInviteToken ?? '').trim().slice(0, 128) || undefined
+      : undefined,
     redirectUri,
     returnTo: sanitizeReturnTo(request.body?.returnTo),
     ...(userId ? { userId } : {}),
@@ -5065,7 +5176,7 @@ app.post('/api/auth/feishu/oauth/url', asyncHandler(async (request, response) =>
 app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response) => {
   const state = verifyFeishuOAuthState(request.query.state)
   if (!state) {
-    response.redirect(buildFeishuOAuthSigninRedirect('/', 'error', {
+    response.redirect(buildFeishuOAuthSigninRedirect(platformPublicUrl(), '/', 'error', {
       message: '飞书授权已失效，请重新操作。',
     }))
     return
@@ -5076,8 +5187,24 @@ app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response
     const message = '飞书没有返回授权码。'
     response.redirect(
       state.intent === 'bind'
-        ? buildFeishuOAuthRedirect(state.returnTo, 'error', message)
-        : buildFeishuOAuthSigninRedirect(state.returnTo, 'error', { message }),
+        ? buildFeishuOAuthBindRedirect(platformPublicUrl(), state.returnTo, 'error', message)
+        : buildFeishuOAuthSigninRedirect(platformPublicUrl(), state.returnTo, 'error', { message }),
+    )
+    return
+  }
+
+  const loginAccess = platformLoginAccess(getPublicPlatformStatus())
+  if (loginAccess === 'blocked' || loginAccess === 'builtin-admin-only' || (
+    loginAccess === 'platform-admin-only' && state.intent === 'bind' &&
+    (!state.userId || !(await isPlatformAdmin(state.userId)))
+  )) {
+    const message = loginAccess === 'platform-admin-only'
+      ? '平台正在维护，当前只允许超级管理员操作。'
+      : '平台正在初始化，当前只允许内置 admin 使用密码登录。'
+    response.redirect(
+      state.intent === 'bind'
+        ? buildFeishuOAuthBindRedirect(platformPublicUrl(), state.returnTo, 'error', message)
+        : buildFeishuOAuthSigninRedirect(platformPublicUrl(), state.returnTo, 'error', { message }),
     )
     return
   }
@@ -5086,7 +5213,7 @@ app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response
     const accessToken = await exchangeFeishuOAuthCode(code, state.redirectUri)
     const feishuUser = await fetchFeishuOAuthUserInfo(accessToken)
     if (state.intent === 'bind') {
-      await query(
+      const bound = await query(
         `
         update users
         set feishu_email = case
@@ -5095,34 +5222,35 @@ app.get('/api/auth/feishu/oauth/callback', asyncHandler(async (request, response
             end,
             feishu_user_id = $2,
             feishu_receive_id_type = 'open_id',
-            display_name = case
-              when $4 <> '' then $4
-              else display_name
-            end
-        where id = $3
+            feishu_identity_verified_at = now(),
+            display_name = $4
+        where id = $3 and not is_builtin_admin
         `,
         [feishuUser.email, feishuUser.openId, state.userId, feishuUser.name],
       )
-      response.redirect(buildFeishuOAuthRedirect(state.returnTo, 'success'))
+      if (bound.rowCount !== 1) throw new Error('内置 admin 不支持绑定飞书。')
+      response.redirect(buildFeishuOAuthBindRedirect(platformPublicUrl(), state.returnTo, 'success'))
       return
     }
 
-    const user = await findOrCreateFeishuOAuthUser(
-      feishuUser,
-      state.inviteToken,
-      state.invitePassword,
-      state.organizationInviteToken,
-    )
+    const user = loginAccess === 'platform-admin-only'
+      ? await findMaintenanceFeishuPlatformAdmin(feishuUser.openId)
+      : await findOrCreateFeishuOAuthUser(
+          feishuUser,
+          state.inviteToken,
+          state.invitePassword,
+          state.organizationInviteToken,
+        )
     const token = await createSession(Number(user.id))
-    response.redirect(buildFeishuOAuthSigninRedirect(state.returnTo, 'success', { token }))
+    response.redirect(buildFeishuOAuthSigninRedirect(platformPublicUrl(), state.returnTo, 'success', { token }))
   } catch (error) {
     const message = error instanceof Error && error.message
       ? `飞书绑定失败：${error.message}`
       : '飞书绑定失败，请稍后重试。'
     response.redirect(
       state.intent === 'bind'
-        ? buildFeishuOAuthRedirect(state.returnTo, 'error', message)
-        : buildFeishuOAuthSigninRedirect(state.returnTo, 'error', {
+        ? buildFeishuOAuthBindRedirect(platformPublicUrl(), state.returnTo, 'error', message)
+        : buildFeishuOAuthSigninRedirect(platformPublicUrl(), state.returnTo, 'error', {
             message: message.replace('飞书绑定失败', '飞书登录失败'),
           }),
     )
@@ -5136,6 +5264,18 @@ app.delete('/api/auth/feishu/oauth', asyncHandler(async (request, response) => {
   const client = await pool.connect()
   try {
     await client.query('begin')
+    const account = await client.query<{ is_builtin_admin: boolean }>(
+      'select is_builtin_admin from users where id = $1 for update',
+      [userId],
+    )
+    if (account.rows[0]?.is_builtin_admin) {
+      await client.query('rollback')
+      response.status(409).json({
+        code: 'BUILTIN_ADMIN_FEISHU_FORBIDDEN',
+        error: '内置 admin 不使用飞书绑定。',
+      })
+      return
+    }
     const user = await client.query<UserRow>(
       `
       update users
@@ -5143,7 +5283,8 @@ app.delete('/api/auth/feishu/oauth', asyncHandler(async (request, response) => {
           feishu_user_id = '',
           feishu_receive_id_type = 'open_id'
       where id = $1
-      returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type, account_status
+      returning id, email, display_name, feishu_email, feishu_user_id, feishu_receive_id_type,
+                account_status, is_builtin_admin
       `,
       [userId],
     )
@@ -5202,10 +5343,10 @@ app.patch('/api/auth/password', asyncHandler(async (request, response) => {
 app.get('/api/ai/status', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
-  const model = String(process.env.AI_MODEL ?? '').trim()
+  const model = getPlatformConfigSnapshot().config.ai.model
   response.json({
-    configured: isAiProviderConfigured(),
-    maxMessageLength: aiMaxMessageLength,
+    configured: isAiProviderConfigured(platformAiEnvironment()),
+    maxMessageLength: aiMaxMessageLength(),
     model,
   })
 }))
@@ -5214,6 +5355,97 @@ app.get('/api/workspace', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
   response.json(await getWorkspace(userId))
+}))
+
+app.get('/api/workspace/catalog', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  response.json(await getWorkspace(userId, { sections: new Set(['catalog']) }))
+}))
+
+app.get('/api/workspace/overview', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  response.json(await getWorkspace(userId, { sections: new Set(['overview']) }))
+}))
+
+app.get('/api/workspace/inbox', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  response.json(await getWorkspace(userId, { sections: new Set(['inbox']) }))
+}))
+
+app.get('/api/workspace/documents', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  response.json(await getWorkspace(userId, { sections: new Set(['summaries']) }))
+}))
+
+app.get('/api/workspace/search', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  response.json(await getWorkspace(userId, {
+    includeTodoDetail: false,
+    sections: new Set(['journals', 'summaries', 'todos']),
+  }))
+}))
+
+app.get('/api/projects/:projectId/overview', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  const projectId = Number(request.params.projectId)
+  if (!Number.isSafeInteger(projectId) || projectId <= 0) {
+    response.status(400).json({ error: 'Valid project is required' })
+    return
+  }
+  const workspace = await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'overview']),
+  })
+  if (!workspace.projects[0]) {
+    response.status(404).json({ error: 'Project not found' })
+    return
+  }
+  response.json(workspace)
+}))
+
+app.get('/api/projects/:projectId/journals', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  const projectId = Number(request.params.projectId)
+  if (!Number.isSafeInteger(projectId) || projectId <= 0) {
+    response.status(400).json({ error: 'Valid project is required' })
+    return
+  }
+  const workspace = await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['journals']),
+  })
+  if (!workspace.projects[0]) {
+    response.status(404).json({ error: 'Project not found' })
+    return
+  }
+  response.json(workspace)
+}))
+
+app.get('/api/todos/:todoId/detail', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  const todoId = Number(request.params.todoId)
+  if (!Number.isSafeInteger(todoId) || todoId <= 0) {
+    response.status(400).json({ error: 'Valid todo is required' })
+    return
+  }
+  const workspace = await getWorkspace(userId, {
+    sections: new Set(['todos']),
+    todoId,
+  })
+  const todo = workspace.todos[0]
+  if (!todo) {
+    response.status(404).json({ error: 'Todo not found' })
+    return
+  }
+  response.json({ todo })
 }))
 
 app.get('/api/projects/:projectId/todo-activity', asyncHandler(async (request, response) => {
@@ -7598,8 +7830,7 @@ async function deliverAccountOffboardingNotification(notificationId: number) {
     userId: Number(notification.recipient_user_id),
   }
   await recordTestWorkbenchInAppNotification(candidate)
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
 }
 
@@ -7891,8 +8122,7 @@ async function buildTodoMentionFeishuCandidateByMentionId(mentionId: number) {
 }
 
 async function deliverTodoMentionNotification(mentionId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildTodoMentionFeishuCandidateByMentionId(mentionId)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
@@ -8720,16 +8950,14 @@ async function buildTestExecutionResultFeishuCandidate(event: TestExecutionResul
 }
 
 async function deliverLatestAssignedTodoNotification(todoId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildAssignedTodoFeishuCandidateByTodoId(todoId)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
 }
 
 async function deliverLatestWatchedTodoNotification(todoId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidates = await buildWatchedTodoFeishuCandidateByTodoId(todoId)
   if (candidates.length === 0) return { failed: 0, sent: 0, skipped: 1 }
   const results = await Promise.all(candidates.map((candidate) => deliverFeishuNotification(candidate)))
@@ -8747,8 +8975,7 @@ async function deliverCompletedTodoCreatorNotification(params: {
   operatorUserId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildCompletedTodoCreatorFeishuCandidateByTodoId(params)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
@@ -8760,8 +8987,7 @@ async function deliverRejectedTodoCreatorNotification(params: {
   sourceId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildRejectedTodoCreatorFeishuCandidateByTodoId(params)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
@@ -8772,16 +8998,14 @@ async function deliverAcceptanceFailedTodoAssigneeNotification(params: {
   operatorUserId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildAcceptanceFailedTodoAssigneeFeishuCandidateByNoteId(params)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
 }
 
 async function deliverTodoNoteNotifications(noteId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidates = await buildTodoNoteFeishuCandidates(noteId)
   const totals = { failed: 0, sent: 0, skipped: 0 }
   for (const candidate of candidates) {
@@ -8794,8 +9018,7 @@ async function deliverTodoNoteNotifications(noteId: number) {
 }
 
 async function deliverTestBugAssignedNotification(event: TestBugAssignedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildTestBugAssignedFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   await query(
@@ -8809,8 +9032,7 @@ async function deliverTestPlanAssignedNotification(event: TestPlanAssignedEvent)
   const candidate = await buildTestPlanAssignedFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   await recordTestWorkbenchInAppNotification(candidate)
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   await query(
     `delete from notification_deliveries where kind = 'test_plan_assigned' and source_id = $1 and channel = 'feishu'`,
     [event.planId],
@@ -8822,8 +9044,7 @@ async function deliverTestBugStatusChangedNotification(event: TestBugStatusChang
   const candidate = await buildTestBugStatusChangedFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   await recordTestWorkbenchInAppNotification(candidate)
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   await query(
     `delete from notification_deliveries where kind = 'test_bug_status_changed' and source_id = $1 and channel = 'feishu'`,
     [event.bugId],
@@ -8835,8 +9056,7 @@ async function deliverTestBugRejectedNotification(event: TestBugRejectedEvent) {
   const candidate = await buildTestBugRejectedFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   await recordTestWorkbenchInAppNotification(candidate)
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   await query(
     `delete from notification_deliveries where kind = 'test_bug_rejected' and source_id = $1 and channel = 'feishu'`,
     [event.bugId],
@@ -8848,8 +9068,7 @@ async function deliverTestBugCommentAddedNotification(event: TestBugCommentAdded
   const candidates = await buildTestBugCommentFeishuCandidates(event)
   if (candidates.length === 0) return { failed: 0, sent: 0, skipped: 1 }
   await Promise.all(candidates.map((candidate) => recordTestWorkbenchInAppNotification(candidate)))
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const results = await Promise.all(candidates.map((candidate) => deliverFeishuNotification(candidate)))
   return results.reduce(
     (total, result) => ({
@@ -8862,8 +9081,7 @@ async function deliverTestBugCommentAddedNotification(event: TestBugCommentAdded
 }
 
 async function deliverTestCaseChangedNotification(event: TestCaseChangedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildTestCaseChangedFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   await query(`delete from notification_deliveries where kind = 'test_case_activity' and source_id = $1`, [event.caseId])
@@ -8871,8 +9089,7 @@ async function deliverTestCaseChangedNotification(event: TestCaseChangedEvent) {
 }
 
 async function deliverTestExecutionResultChangedNotification(event: TestExecutionResultChangedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildTestExecutionResultFeishuCandidate(event)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   const sourceId = -event.planCaseId
@@ -8882,8 +9099,7 @@ async function deliverTestExecutionResultChangedNotification(event: TestExecutio
 }
 
 function enqueueLatestAssignedTodoDelivery(todoId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverLatestAssignedTodoNotification(todoId).catch((error) => {
       console.error('Feishu assigned todo delivery failed', error)
@@ -8892,8 +9108,7 @@ function enqueueLatestAssignedTodoDelivery(todoId: number) {
 }
 
 function enqueueLatestWatchedTodoDelivery(todoId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverLatestWatchedTodoNotification(todoId).catch((error) => {
       console.error('Feishu watched todo delivery failed', error)
@@ -8902,8 +9117,7 @@ function enqueueLatestWatchedTodoDelivery(todoId: number) {
 }
 
 function enqueueTodoNoteDeliveries(noteId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverTodoNoteNotifications(noteId).catch((error) => {
       console.error('Feishu todo note delivery failed', error)
@@ -8912,8 +9126,7 @@ function enqueueTodoNoteDeliveries(noteId: number) {
 }
 
 function enqueueTodoMentionDeliveries(mentionIds: number[]) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   for (const mentionId of mentionIds) {
     setTimeout(() => {
       void deliverTodoMentionNotification(mentionId).catch((error) => {
@@ -8924,8 +9137,7 @@ function enqueueTodoMentionDeliveries(mentionIds: number[]) {
 }
 
 function enqueueTestBugAssignedDelivery(event: TestBugAssignedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverTestBugAssignedNotification(event).catch((error) => {
       console.error('Feishu test bug assignment delivery failed', error)
@@ -8966,8 +9178,7 @@ function enqueueTestBugCommentAddedDelivery(event: TestBugCommentAddedEvent) {
 }
 
 function enqueueTestCaseChangedDelivery(event: TestCaseChangedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverTestCaseChangedNotification(event).catch((error) => {
       console.error('Feishu test case delivery failed', error)
@@ -8976,8 +9187,7 @@ function enqueueTestCaseChangedDelivery(event: TestCaseChangedEvent) {
 }
 
 function enqueueTestExecutionResultChangedDelivery(event: TestExecutionResultChangedEvent) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverTestExecutionResultChangedNotification(event).catch((error) => {
       console.error('Feishu test execution result delivery failed', error)
@@ -8989,8 +9199,7 @@ function enqueueCompletedTodoCreatorDelivery(params: {
   operatorUserId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverCompletedTodoCreatorNotification(params).catch((error) => {
       console.error('Feishu completed todo creator delivery failed', error)
@@ -9004,8 +9213,7 @@ function enqueueRejectedTodoCreatorDelivery(params: {
   sourceId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverRejectedTodoCreatorNotification(params).catch((error) => {
       console.error('Feishu rejected todo creator delivery failed', error)
@@ -9018,8 +9226,7 @@ function enqueueAcceptanceFailedTodoAssigneeDelivery(params: {
   operatorUserId: number
   todoId: number
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverAcceptanceFailedTodoAssigneeNotification(params).catch((error) => {
       console.error('Feishu failed-acceptance todo assignee delivery failed', error)
@@ -9104,16 +9311,14 @@ async function buildAssignedPackageEventFeishuCandidateByEventId(eventId: number
 }
 
 async function deliverLatestAssignedPackageEventNotification(eventId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidate = await buildAssignedPackageEventFeishuCandidateByEventId(eventId)
   if (!candidate) return { failed: 0, sent: 0, skipped: 1 }
   return deliverFeishuNotification(candidate)
 }
 
 function enqueueLatestAssignedPackageEventDelivery(eventId: number) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverLatestAssignedPackageEventNotification(eventId).catch((error) => {
       console.error('Feishu assigned package event delivery failed', error)
@@ -9208,8 +9413,7 @@ async function deliverPackageEventCommentAddedNotification(params: {
   commentId: number
   mentionedUserIds: number[]
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return { failed: 0, sent: 0, skipped: 1 }
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return { failed: 0, sent: 0, skipped: 1 }
+  if (!feishuDeliveryAvailable()) return { failed: 0, sent: 0, skipped: 1 }
   const candidates = await buildPackageEventCommentAddedFeishuCandidates(params)
   if (candidates.length === 0) return { failed: 0, sent: 0, skipped: 1 }
   const results = await Promise.all(candidates.map((candidate) => deliverFeishuNotification(candidate)))
@@ -9228,8 +9432,7 @@ function enqueuePackageEventCommentAddedDelivery(params: {
   commentId: number
   mentionedUserIds: number[]
 }) {
-  if (process.env.FEISHU_DELIVERY_ENABLED === 'false') return
-  if (!(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET)) return
+  if (!feishuDeliveryAvailable()) return
   setTimeout(() => {
     void deliverPackageEventCommentAddedNotification(params).catch((error) => {
       console.error('Feishu package event comment delivery failed', error)
@@ -9314,6 +9517,74 @@ app.get('/api/my-work', asyncHandler(async (request, response) => {
     organizationId,
     parseMyWorkFilters(request.query as Record<string, unknown>),
   ))
+}))
+
+app.get('/api/navigation-counts', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  response.setHeader('Cache-Control', 'private, no-store')
+  const organizationId = parseOrganizationContext(request.query.organizationId)
+  if (organizationId === undefined) {
+    response.status(400).json({ error: '有效的组织上下文是必填项' })
+    return
+  }
+  if (organizationId !== null) {
+    const membership = await query(
+      `select 1 from organization_memberships
+       where organization_id = $1 and user_id = $2 and status = 'active'`,
+      [organizationId, userId],
+    )
+    if (!membership.rows[0]) {
+      response.status(404).json({ error: '组织不存在或无权访问' })
+      return
+    }
+  }
+  const result = await query<{
+    assigned_bug_count: string
+    open_todo_count: string
+  }>(
+    `
+    select
+      (
+        select count(*)
+        from todos t
+        join projects p on p.id = t.project_id
+        left join project_memberships mine
+          on mine.project_id = p.id and mine.invited_user_id = $1::bigint and mine.status = 'active'
+        where p.organization_id is not distinct from $2::bigint
+          and (
+            (
+              t.assignee_user_id = $1::bigint
+              and t.confirmation_status <> 'pending_review'
+            )
+            or t.reviewer_user_id = $1::bigint
+          )
+          and (${managedOrganizationReadScopeSql('p.organization_id')} or p.user_id = $1::bigint or mine.id is not null)
+          and not t.done
+          and t.confirmation_status <> 'rejected'
+      ) as open_todo_count,
+      (
+        select count(*)
+        from test_bugs b
+        join test_spaces space on space.id = b.test_space_id
+        where space.organization_id is not distinct from $2::bigint
+          and (
+            (
+              b.assignee_user_id = $1::bigint
+              and b.status not in ('closed', 'rejected')
+            )
+            or ${managedOrganizationReadScopeSql('space.organization_id')}
+          )
+      ) as assigned_bug_count
+    `,
+    [userId, organizationId],
+  )
+  const row = result.rows[0]
+  response.json({
+    assignedBugCount: Number(row?.assigned_bug_count ?? 0),
+    openTodoCount: Number(row?.open_todo_count ?? 0),
+    organizationId,
+  })
 }))
 
 app.patch('/api/notifications/:kind/:sourceId/read', asyncHandler(async (request, response) => {
@@ -9407,14 +9678,16 @@ app.post('/api/invitations/:membershipId/accept', asyncHandler(async (request, r
   }
   response.json({
     notifications: await getNotifications(userId),
-    workspace: await getWorkspace(userId),
+    workspace: await getWorkspace(userId, {
+      sections: new Set(['catalog', 'overview']),
+    }),
   })
 }))
 
 app.post('/api/invitations/:membershipId/decline', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
-  const result = await query<{ id: string }>(
+  const result = await query<{ id: string; project_id: string }>(
     `
     update project_memberships
     set status = 'declined',
@@ -9422,7 +9695,7 @@ app.post('/api/invitations/:membershipId/decline', asyncHandler(async (request, 
     where id = $1
       and invited_user_id = $2
       and status = 'pending'
-    returning id
+    returning id, project_id
     `,
     [Number(request.params.membershipId), userId],
   )
@@ -9443,7 +9716,10 @@ app.post('/api/invitations/:membershipId/decline', asyncHandler(async (request, 
   )
   response.json({
     notifications: await getNotifications(userId),
-    workspace: await getWorkspace(userId),
+    workspace: await getWorkspace(userId, {
+      projectId: Number(result.rows[0].project_id),
+      sections: new Set(['catalog', 'overview']),
+    }),
   })
 }))
 
@@ -9521,7 +9797,9 @@ app.post('/api/project-invite-links/:token/accept', asyncHandler(async (request,
     return
   }
 
-  response.json({ workspace: await getWorkspace(userId) })
+  response.json({
+    workspace: await getWorkspace(userId, { sections: new Set(['catalog', 'overview']) }),
+  })
 }))
 
 app.post('/api/projects', asyncHandler(async (request, response) => {
@@ -9539,6 +9817,7 @@ app.post('/api/projects', asyncHandler(async (request, response) => {
     ? requestedOrganizationId
     : null
   const client = await pool.connect()
+  let createdProjectId: number
   try {
     await client.query('begin')
     if (organizationId) {
@@ -9560,6 +9839,7 @@ app.post('/api/projects', asyncHandler(async (request, response) => {
       [userId, organizationId, encryptText(name), encryptTags(tags.length ? tags : ['新项目'])],
     )
     const projectId = Number(result.rows[0].id)
+    createdProjectId = projectId
     if (organizationId) {
       await lockProjectModules(client, projectId)
       await syncOrganizationProjectModules(client, organizationId, projectId)
@@ -9576,7 +9856,10 @@ app.post('/api/projects', asyncHandler(async (request, response) => {
   } finally {
     client.release()
   }
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspace(userId, {
+    projectId: createdProjectId,
+    sections: new Set(['catalog', 'journals', 'overview']),
+  }))
 }))
 
 app.patch('/api/projects/:projectId', asyncHandler(async (request, response) => {
@@ -9625,7 +9908,10 @@ app.patch('/api/projects/:projectId', asyncHandler(async (request, response) => 
       values,
     )
   })) return
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog']),
+  }))
 }))
 
 app.patch('/api/projects/:projectId/feishu', asyncHandler(async (request, response) => {
@@ -9655,7 +9941,10 @@ app.patch('/api/projects/:projectId/feishu', asyncHandler(async (request, respon
 	    `,
 	    [projectId, chatId, enabled],
 	  )
-		  response.json(await getWorkspace(userId))
+		  response.json(await getWorkspace(userId, {
+        projectId,
+        sections: new Set(['catalog']),
+      }))
 		}))
 
 app.post('/api/projects/:projectId/transfer', asyncHandler(async (request, response) => {
@@ -10030,7 +10319,9 @@ app.post('/api/project-transfers/:transferId/respond', asyncHandler(async (reque
 
   response.json({
     notifications: await getNotifications(userId),
-    workspace: await getWorkspace(userId),
+    workspace: await getWorkspace(userId, {
+      sections: new Set(['catalog', 'overview']),
+    }),
   })
 }))
 
@@ -10048,7 +10339,10 @@ app.delete('/api/projects/:projectId', asyncHandler(async (request, response) =>
   } finally {
     client.release()
   }
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog']),
+  }))
 }))
 
 app.post('/api/projects/:projectId/journals', asyncHandler(async (request, response) => {
@@ -10086,7 +10380,10 @@ app.post('/api/projects/:projectId/journals', asyncHandler(async (request, respo
     [projectId, encryptText(content), userId, createdAt],
   )
   await query('update projects set updated_at = now() where id = $1', [projectId])
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'journals']),
+  }))
 }))
 
 app.patch('/api/projects/:projectId/journals/:entryId', asyncHandler(async (request, response) => {
@@ -10150,7 +10447,10 @@ app.patch('/api/projects/:projectId/journals/:entryId', asyncHandler(async (requ
     values,
   )
   await query('update projects set updated_at = now() where id = $1', [projectId])
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'journals']),
+  }))
 }))
 
 app.delete('/api/projects/:projectId/journals/:entryId', asyncHandler(async (request, response) => {
@@ -10185,7 +10485,10 @@ app.delete('/api/projects/:projectId/journals/:entryId', asyncHandler(async (req
     [entryId, projectId],
   )
   await query('update projects set updated_at = now() where id = $1', [projectId])
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'journals']),
+  }))
 }))
 
 app.post('/api/projects/:projectId/risks', asyncHandler(async (request, response) => {
@@ -10242,7 +10545,10 @@ app.post('/api/projects/:projectId/risks', asyncHandler(async (request, response
     )
   }
   await query('update projects set updated_at = now() where id = $1', [projectId])
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'journals']),
+  }))
 }))
 
 app.post('/api/projects/:projectId/invitations', asyncHandler(async (request, response) => {
@@ -10327,7 +10633,10 @@ app.post('/api/projects/:projectId/invitations', asyncHandler(async (request, re
       )
     }
   })) return
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'overview']),
+  }))
 }))
 
 app.post('/api/projects/:projectId/invite-link', asyncHandler(async (request, response) => {
@@ -10520,7 +10829,10 @@ app.delete('/api/projects/:projectId/invitations/:membershipId', asyncHandler(as
       [membershipId, projectId, access.ownerUserId],
     )
   })) return
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'overview']),
+  }))
 }))
 
 app.post('/api/projects/:projectId/modules', asyncHandler(async (request, response) => {
@@ -10546,7 +10858,10 @@ app.post('/api/projects/:projectId/modules', asyncHandler(async (request, respon
   } finally {
     client.release()
   }
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'overview']),
+  }))
 }))
 
 app.delete('/api/projects/:projectId/modules/:moduleId', asyncHandler(async (request, response) => {
@@ -10572,7 +10887,10 @@ app.delete('/api/projects/:projectId/modules/:moduleId', asyncHandler(async (req
   } finally {
     client.release()
   }
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'overview']),
+  }))
 }))
 
 app.get('/api/projects/:projectId/subprojects', asyncHandler(async (request, response) => {
@@ -10593,21 +10911,30 @@ app.get('/api/projects/:projectId/todos', asyncHandler(async (request, response)
     return
   }
   const filter = request.query.subprojectId
-  if (filter === 'all') {
-    response.json((await getWorkspace(userId)).todos.filter(todo => todo.projectId === projectId))
+  const unassigned = filter === 'none'
+  const subprojectId = filter === 'all' || filter === undefined
+    ? null
+    : unassigned ? null : parseProjectSubprojectId(filter)
+  if (filter !== undefined && filter !== 'all' && !unassigned && subprojectId === null) {
+    response.status(400).json({ error: 'Valid subproject is required' })
     return
   }
-  const unassigned = filter === 'none'
-  const subprojectId = unassigned ? null : parseProjectSubprojectId(filter)
   if (subprojectId !== null) {
     const client = await pool.connect()
     try { await resolveProjectSubprojectId(client, projectId, subprojectId) }
     finally { client.release() }
   }
-  const workspace = await getWorkspace(userId)
-  response.json(workspace.todos.filter(todo => todo.projectId === projectId && (
-    unassigned ? todo.subprojectId == null : subprojectId === null || todo.subprojectId === subprojectId
-  )))
+  const workspace = await getWorkspace(userId, {
+    includeTodoDetail: false,
+    projectId,
+    sections: new Set(['todos']),
+  })
+  response.json({
+    ...workspace,
+    todos: workspace.todos.filter((todo) => (
+      unassigned ? todo.subprojectId == null : subprojectId === null || todo.subprojectId === subprojectId
+    )),
+  })
 }))
 
 app.post('/api/projects/:projectId/subprojects', asyncHandler(async (request, response) => {
@@ -10622,7 +10949,10 @@ app.post('/api/projects/:projectId/subprojects', asyncHandler(async (request, re
     await requireProjectSubprojectManager(client, projectId, userId)
     await createProjectSubproject(client, projectId, name); await client.query('commit')
   } catch (error) { await client.query('rollback'); throw error } finally { client.release() }
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'overview']),
+  }))
 }))
 
 app.patch('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(async (request, response) => {
@@ -10637,7 +10967,10 @@ app.patch('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(asy
     if (!exists.rows[0]) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_NOT_FOUND', '项目子项目不存在。', 404)
     await client.query('update project_subprojects set name = $1, name_lookup = $2, updated_at = now() where id = $3 and project_id = $4', [encryptText(name), await projectSubprojectNameLookup(client, name), subprojectId, projectId]); await client.query('commit')
   } catch (error) { await client.query('rollback'); throw error } finally { client.release() }
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'overview']),
+  }))
 }))
 
 app.delete('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(async (request, response) => {
@@ -10652,7 +10985,10 @@ app.delete('/api/projects/:projectId/subprojects/:subprojectId', asyncHandler(as
     if (!result.rowCount) throw new ProjectSubprojectError('PROJECT_SUBPROJECT_NOT_FOUND', '项目子项目不存在。', 404)
     await client.query('commit')
   } catch (error) { await client.query('rollback'); throw error } finally { client.release() }
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'overview']),
+  }))
 }))
 
 app.delete('/api/projects/:projectId/risks', asyncHandler(async (request, response) => {
@@ -10723,7 +11059,10 @@ app.delete('/api/projects/:projectId/risks', asyncHandler(async (request, respon
     }
   }
   await query('update projects set updated_at = now() where id = $1', [projectId])
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'journals']),
+  }))
 }))
 
 app.post('/api/todos', asyncHandler(async (request, response) => {
@@ -10880,14 +11219,18 @@ app.post('/api/todos', asyncHandler(async (request, response) => {
   if (createdTodoMentionIds.length > 0) {
     enqueueTodoMentionDeliveries(createdTodoMentionIds)
   }
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspace(userId, {
+    projectId,
+    todoId: createdTodoId,
+    sections: new Set(['todos']),
+  }))
 }))
 
 app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
   const userId = await ensureUserId(request, response)
   if (!userId) return
   const session = await getAuthenticatedRoleSession(request)
-  const systemAdmin = Boolean(session && session.userId === userId && isSystemAdmin(session.username))
+  const systemAdmin = Boolean(session && session.userId === userId && await isPlatformAdmin(userId))
   const todoId = Number(request.params.todoId)
   const existingTodo = await query<{
     assignee_user_id: string | null
@@ -11425,7 +11768,11 @@ app.patch('/api/todos/:todoId', asyncHandler(async (request, response) => {
       todoId,
     })
   }
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    todoId,
+    sections: new Set(['todos']),
+  }))
 }))
 
 app.delete('/api/todos/:todoId', asyncHandler(async (request, response) => {
@@ -11451,7 +11798,8 @@ app.delete('/api/todos/:todoId', asyncHandler(async (request, response) => {
     response.status(404).json({ error: 'Todo not found' })
     return
   }
-  const access = await getProjectAccess(Number(todo.project_id), userId)
+  const projectId = Number(todo.project_id)
+  const access = await getProjectAccess(projectId, userId)
   const organizationAdminTodoAccess = Boolean(todo.organization_admin_todo_access)
   if (!access && !organizationAdminTodoAccess) {
     response.status(404).json({ error: 'Todo not found' })
@@ -11471,7 +11819,11 @@ app.delete('/api/todos/:todoId', asyncHandler(async (request, response) => {
     `,
     [Number(request.params.todoId)],
   )
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    todoId: Number(request.params.todoId),
+    sections: new Set(['todos']),
+  }))
 }))
 
 app.post('/api/todos/:todoId/notes', asyncHandler(async (request, response) => {
@@ -11522,7 +11874,11 @@ app.post('/api/todos/:todoId/notes', asyncHandler(async (request, response) => {
     client.release()
   }
   if (noteId != null) enqueueTodoNoteDeliveries(noteId)
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspace(userId, {
+    projectId,
+    todoId,
+    sections: new Set(['todos']),
+  }))
 }))
 
 app.patch('/api/todos/:todoId/notes/:noteId', asyncHandler(async (request, response) => {
@@ -11615,7 +11971,11 @@ app.patch('/api/todos/:todoId/notes/:noteId', asyncHandler(async (request, respo
     client.release()
   }
   enqueueTodoNoteDeliveries(noteId)
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, {
+    projectId,
+    todoId,
+    sections: new Set(['todos']),
+  }))
 }))
 
 app.get('/api/package-market/rules', asyncHandler(async (request, response) => {
@@ -12358,10 +12718,12 @@ app.get('/api/projects/:projectId/package-items/:itemId/download-url', asyncHand
       : null
   let objectBindingValid = false
   try {
+    const rules = await getPackageMarketRulesForConfigRevision(source.sourceConfigRevision)
     objectBindingValid = Boolean(channel && isPackageMarketObjectKeyAllowedForRule({
       channel,
       objectKey: source.objectKey,
       packageId: source.sourcePackageId,
+      rules,
     }))
   } catch {
     // Fail closed when the local rule catalog cannot be loaded.
@@ -12391,7 +12753,9 @@ app.post('/api/drafts', asyncHandler(async (request, response) => {
     `,
     [userId, encryptText(content), request.body.suggestedProjectId ? Number(request.body.suggestedProjectId) : null],
   )
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspace(userId, {
+    sections: new Set(['inbox']),
+  }))
 }))
 
 app.post('/api/drafts/:draftId/archive', asyncHandler(async (request, response) => {
@@ -12508,73 +12872,10 @@ app.post('/api/drafts/:draftId/archive', asyncHandler(async (request, response) 
   } finally {
     client.release()
   }
-  response.json(await getWorkspace(userId))
-}))
-
-app.post('/api/integrations/feishu/conversation-analysis', asyncHandler(async (request, response) => {
-  if (!ensureFeishuWebhookAuth(request, response)) return
-
-  const userResult = await query<{ id: string }>(
-    'select id from users where email = $1',
-    [normalizeUsername(process.env.FEISHU_WEBHOOK_USER_EMAIL ?? 'felix@vege.local')],
-  )
-  const userId = userResult.rows[0] ? Number(userResult.rows[0].id) : null
-  if (!userId) {
-    response.status(404).json({ error: 'Configured Veges user not found' })
-    return
-  }
-  if (!checkAiRateLimit(userId)) {
-    response.status(429).json({ error: 'AI rate limit exceeded' })
-    return
-  }
-
-  const body = typeof request.body === 'string'
-    ? { content: request.body }
-    : request.body && typeof request.body === 'object'
-      ? request.body as Record<string, unknown>
-      : {}
-  console.log('Feishu conversation analysis webhook received', {
-    keys: Object.keys(body),
-    title: extractTextFromUnknown(body.title).slice(0, 80),
-    contentLength: extractConversationText(body).length,
-  })
-  const conversationText = trimForAi(extractConversationText(body), 8_000)
-  if (!conversationText) {
-    response.status(400).json({ error: 'Conversation content is required' })
-    return
-  }
-
-  const result = await createAiAgentResponse(userId, 'conversation-analysis', [
-    {
-      role: 'user',
-      content: conversationText,
-    },
-  ])
-  if ('error' in result) {
-    response.status(result.status).json({ error: result.error })
-    return
-  }
-
-  const sourceTitle = trimForAi(extractTextFromUnknown(body.title), 80)
-  const title = sourceTitle
-    ? `${formatDate(new Date())} 飞书对话分析 - ${sourceTitle}`
-    : `${formatDate(new Date())} 飞书对话分析`
-  const summary = buildFeishuInformationSummary(result.message)
-  await saveFeishuAnalysisSummary(userId, title, result.message)
-  await createFeishuAnalysisDraft(userId, title, summary)
-  response.status(201).json({
-    ok: true,
-    title,
-    savedTo: '草稿箱待归档内容 + Veges AI 的 AI 文档',
-  })
-}))
-
-app.post('/api/integrations/feishu/deliver-notifications', asyncHandler(async (request, response) => {
-  if (!ensureFeishuWebhookAuth(request, response)) return
-  response.json({
-    disabled: true,
-    message: 'Feishu notifications are delivered only for newly assigned todos.',
-  })
+  response.json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['catalog', 'inbox', 'journals', 'todos']),
+  }))
 }))
 
 app.post('/api/integrations/feishu/events', asyncHandler(async (request, response) => {
@@ -12605,7 +12906,7 @@ app.post('/api/integrations/feishu/events', asyncHandler(async (request, respons
   const chatId = message?.chat_id ?? ''
   const senderOpenId = getFeishuEventSenderOpenId(payload.event)
   console.log('Feishu event received', { chatType, messageId, messageType })
-  if (!isFeishuAiChatEnabled()) {
+  if (!feishuAiChatEnabled()) {
     response.json({ ok: true, ignored: true, reason: 'feishu-ai-disabled' })
     return
   }
@@ -12691,10 +12992,10 @@ app.post('/api/ai/intent-classifications', asyncHandler(async (request, response
       return
     }
     const modelContent = buildAiTurnModelContent(content, attachments)
-    if (modelContent.length > aiMaxMessageLength) {
+    if (modelContent.length > aiMaxMessageLength()) {
       response.status(413).json({
         code: 'AI_MESSAGE_TOO_LARGE',
-        error: `AI message must not exceed ${aiMaxMessageLength} characters`,
+        error: `AI message must not exceed ${aiMaxMessageLength()} characters`,
       })
       return
     }
@@ -12751,7 +13052,7 @@ app.post('/api/ai/conversations/:conversationId/turns/:turnId/document', asyncHa
     )
     response.status(result.created ? 201 : 200).json({
       ...result,
-      workspace: await getWorkspace(userId),
+      workspace: await getWorkspace(userId, { sections: new Set(['summaries']) }),
     })
   } catch (error) {
     if (!sendAiConversationError(response, error)) throw error
@@ -12788,10 +13089,10 @@ app.post('/api/ai/conversations/:conversationId/turns', asyncHandler(async (requ
       return
     }
     const modelContent = buildAiTurnModelContent(content, attachments)
-    if (modelContent.length > aiMaxMessageLength) {
+    if (modelContent.length > aiMaxMessageLength()) {
       response.status(413).json({
         code: 'AI_MESSAGE_TOO_LARGE',
-        error: `AI message must not exceed ${aiMaxMessageLength} characters`,
+        error: `AI message must not exceed ${aiMaxMessageLength()} characters`,
       })
       return
     }
@@ -13354,7 +13655,9 @@ app.post('/api/ai/todo-proposals/:batchId/confirm', asyncHandler(async (request,
       Number(request.params.batchId),
       Array.isArray(request.body.proposals) ? request.body.proposals : [],
     )
-    response.status(201).json(await getWorkspace(userId))
+    response.status(201).json(await getWorkspace(userId, {
+      sections: new Set(['inbox', 'todos']),
+    }))
   } catch (error) {
     if (!sendAiConversationError(response, error)) throw error
   }
@@ -13367,7 +13670,7 @@ app.delete('/api/drafts/:draftId', asyncHandler(async (request, response) => {
     Number(request.params.draftId),
     userId,
   ])
-  response.json(await getWorkspace(userId))
+  response.json(await getWorkspace(userId, { sections: new Set(['inbox']) }))
 }))
 
 app.post('/api/projects/:projectId/summaries', asyncHandler(async (request, response) => {
@@ -13387,7 +13690,10 @@ app.post('/api/projects/:projectId/summaries', asyncHandler(async (request, resp
     response.status(result.status ?? 500).json({ error: result.error ?? 'Summary failed' })
     return
   }
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspace(userId, {
+    projectId: Number(request.params.projectId),
+    sections: new Set(['summaries']),
+  }))
 }))
 
 app.post('/api/summaries', asyncHandler(async (request, response) => {
@@ -13415,7 +13721,10 @@ app.post('/api/summaries', asyncHandler(async (request, response) => {
       response.status(result.status ?? 500).json({ error: result.error ?? 'Summary failed' })
       return
     }
-    response.status(201).json(await getWorkspace(userId))
+    response.status(201).json(await getWorkspace(userId, {
+      projectId,
+      sections: new Set(['summaries']),
+    }))
     return
   }
 
@@ -13448,7 +13757,10 @@ app.post('/api/summaries', asyncHandler(async (request, response) => {
       encryptText(content),
     ],
   )
-  response.status(201).json(await getWorkspace(userId))
+  response.status(201).json(await getWorkspace(userId, {
+    projectId,
+    sections: new Set(['summaries']),
+  }))
 }))
 
 async function handleFeishuAiCardAction(
@@ -13472,7 +13784,7 @@ async function handleFeishuAiCardAction(
     : {}
   if (String(value.action ?? '') !== 'feishu_ai_todo_confirm_all') return false
 
-  const expectedToken = String(process.env.FEISHU_VERIFICATION_TOKEN ?? '')
+  const expectedToken = platformFeishuConfig().verificationToken
   const eventToken = String(header.token ?? body.token ?? '')
   if (!expectedToken || !timingSafeTextEqual(eventToken, expectedToken)) {
     response.status(401).json({ error: 'Invalid Feishu verification token' })
@@ -13496,7 +13808,7 @@ async function handleFeishuAiCardAction(
     response.json({ ok: true, ignored: true })
     return true
   }
-  if (!isFeishuAiChatEnabled()) {
+  if (!feishuAiChatEnabled()) {
     response.json({ toast: { content: 'Veges AI 飞书功能当前已停用', type: 'info' } })
     return true
   }
@@ -13598,11 +13910,12 @@ app.post('/api/integrations/feishu/card-actions', (request, response, next) => {
 })
 
 app.use('/api', createOrganizationRouter({
+  fetchFeishuUserName: fetchConfiguredFeishuUserName,
   generateWeeklySummary: async (userId, source) => {
     const result = await createAiAgentResponse(
       userId,
       'organization-weekly-summary',
-      [{ role: 'user', content: trimForAi(source, aiMaxContextChars) }],
+      [{ role: 'user', content: trimForAi(source, aiMaxContextChars()) }],
       60_000,
     )
     return 'error' in result
@@ -13618,7 +13931,7 @@ app.use('/api', createWeeklyReportRouter({
     const result = await createAiAgentResponse(
       userId,
       'personal-weekly-report',
-      [{ role: 'user', content: trimForAi(source, aiMaxContextChars) }],
+      [{ role: 'user', content: trimForAi(source, aiMaxContextChars()) }],
       60_000,
     )
     return 'error' in result
@@ -13668,6 +13981,10 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
     response.status(error.status).json({ error: error.message, code: error.code })
     return
   }
+  if (error instanceof PlatformAdminError || error instanceof FeishuUserNameError) {
+    response.status(error.status).json({ error: error.message, code: error.code })
+    return
+  }
   if (error && typeof error === 'object' && 'constraint' in error &&
       String(error.constraint).includes('subproject')) {
     const code = databaseErrorCode(error)
@@ -13692,20 +14009,42 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
 })
 
 assertEncryptionConfigured()
-await query(schemaSql)
-await initializeProjectModules(pool)
-
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`API server listening on http://127.0.0.1:${port}`)
 })
 
-const feishuAiRetryTimer = isFeishuAiChatEnabled()
-  ? setInterval(() => scheduleFeishuAiMessages(), 30_000)
-  : null
-feishuAiRetryTimer?.unref()
+let feishuAiRetryTimer: NodeJS.Timeout | null = null
+const startup = runAutomaticDatabaseMigrations()
+  .then(async () => {
+    await startPlatformMaintenanceRuntime()
+    await startPlatformConfigRuntime()
+    feishuAiRetryTimer = setInterval(() => {
+      if (feishuAiChatEnabled()) scheduleFeishuAiMessages()
+    }, 30_000)
+    feishuAiRetryTimer.unref()
+  })
+  .catch((error) => {
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : 'APPLICATION_STARTUP_FAILED'
+    console.error(`Application startup failed: ${code}`)
+  })
 
-process.on('SIGINT', async () => {
+let shuttingDown = false
+async function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
   if (feishuAiRetryTimer) clearInterval(feishuAiRetryTimer)
+  const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()))
+  stopAutomaticDatabaseMigrations()
+  await startup
+  await stopPlatformConfigRuntime()
+  await stopPlatformMaintenanceRuntime()
+  server.closeAllConnections()
+  await serverClosed
   await pool.end()
   process.exit(0)
-})
+}
+
+process.once('SIGINT', () => void shutdown())
+process.once('SIGTERM', () => void shutdown())

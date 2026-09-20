@@ -10,6 +10,7 @@ import { once } from 'node:events'
 import pg from 'pg'
 import { shareOrganizationTestEnvironments } from './test-environment-sharing.ts'
 import { schemaSql } from './schema.ts'
+import { createDefaultPlatformConfig, platformConfigSchemaVersion } from './platform-config-schema.ts'
 
 const sourceUrl = process.env.VEGES_INTEGRATION_DATABASE_URL
 if (!sourceUrl) throw new Error('VEGES_INTEGRATION_DATABASE_URL must explicitly authorize the integration database')
@@ -56,6 +57,43 @@ try {
   await control.query(`create schema ${schema}`)
   await db.query(schemaSql)
   await db.query(schemaSql)
+  const bootstrap = await db.connect()
+  try {
+    await bootstrap.query('begin')
+    const admin = await bootstrap.query<{ id: string }>(
+      `insert into users
+        (id, email, display_name, password_hash, account_status, is_builtin_admin, registration_source)
+       values (999999, 'admin', 'admin', 'integration-disabled', 'active', true, 'builtin')
+       returning id`,
+    )
+    const adminUserId = Number(admin.rows[0].id)
+    await bootstrap.query(
+      `insert into platform_admin_grants (user_id, grant_kind, source)
+       values ($1, 'builtin', 'bootstrap')`,
+      [adminUserId],
+    )
+    const config = createDefaultPlatformConfig()
+    config.general.publicUrl = new URL(base).origin
+    config.feishu.oauthStateSecret = crypto.randomBytes(32).toString('base64url')
+    config.storage.urlSecret = crypto.randomBytes(32).toString('base64url')
+    const version = await bootstrap.query<{ revision: string }>(
+      `insert into platform_config_versions
+        (schema_version, payload_encrypted, created_by_user_id, source)
+       values ($1, $2, $3, 'bootstrap') returning revision`,
+      [platformConfigSchemaVersion, encryptText(JSON.stringify(config)), adminUserId],
+    )
+    await bootstrap.query(
+      `update platform_config_state set active_revision = $1, updated_at = now()
+        where singleton = true`,
+      [Number(version.rows[0].revision)],
+    )
+    await bootstrap.query('commit')
+  } catch (error) {
+    await bootstrap.query('rollback')
+    throw error
+  } finally {
+    bootstrap.release()
+  }
   for (let id = 1; id <= 7; id++) {
     await db.query('insert into users(id,email,display_name) values($1,$2,$3)', [id, `resource-user-${id}`, ['','原所有者','组织管理员','接收成员','仅职业管理员','仅组织管理员','外部成员','只读成员'][id]])
     const roles = [2,4].includes(id) ? ['organization_admin'] : ['tester']
@@ -71,7 +109,7 @@ try {
   fs.mkdirSync('.context', { recursive: true })
   const log = fs.openSync('.context/resource-integration-api.log', 'w', 0o600)
   api = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
-    env: { ...process.env, DATABASE_URL: databaseUrl.toString(), PORT: String(port), APP_PUBLIC_URL: `http://127.0.0.1:${port}`, FEISHU_DELIVERY_ENABLED:'false', FEISHU_AI_CHAT_ENABLED:'false', FEISHU_APP_ID:'', FEISHU_APP_SECRET:'', AI_API_KEY:'', AI_API_BASE:'', AI_MODEL:'', GITHUB_ACTIONS_TOKEN:'', VEGES_ADMIN_USERNAMES:'' },
+    env: { ...process.env, DATABASE_URL: databaseUrl.toString(), PORT: String(port) },
     stdio: ['ignore',log,log], detached: true,
   })
   fs.closeSync(log)

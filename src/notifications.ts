@@ -1,5 +1,4 @@
 import type { NotificationCenterData } from './types'
-
 export function removePackageEventNotification(
   notifications: NotificationCenterData,
   eventId: number,

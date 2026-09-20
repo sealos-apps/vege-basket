@@ -31,8 +31,8 @@ export function createPrototypeData() {
   }))
   const data: TestWorkbenchData = {
     spaces: [
-      { id: 1, name: 'Veges 产品测试', versionLabel: 'v2.8', organizationId: 1, ownerUserId: prototypeUserId, accessLevel: 'owner', createdAt, canManageSettings: true, canManageMembers: true, canDelete: true, canChangeOrganization: true, canTransferOwnership: true },
-      { id: 2, name: 'Veges 兼容性测试', versionLabel: 'v2.7', organizationId: 1, ownerUserId: prototypeUserId, accessLevel: 'owner', createdAt, canManageSettings: true, canManageMembers: true, canDelete: true },
+      { id: 1, name: 'Veges 产品测试', versionLabel: 'v2.8', organizationId: 1, ownerUserId: prototypeUserId, accessLevel: 'owner', createdAt, bugCount: 0, caseCount: cases.length, planCount: initialPlans.length, canManageSettings: true, canManageMembers: true, canDelete: true, canChangeOrganization: true, canTransferOwnership: true },
+      { id: 2, name: 'Veges 兼容性测试', versionLabel: 'v2.7', organizationId: 1, ownerUserId: prototypeUserId, accessLevel: 'owner', createdAt, bugCount: 0, caseCount: 0, planCount: 0, canManageSettings: true, canManageMembers: true, canDelete: true },
     ],
     subjects, cases, planCases,
     folders: cases.map((item, index) => ({ id: index + 1, name: initialPlans[0].cases[index].folder.split(' / ')[1], testSpaceId: 1, testSubjectId: item.testSubjectId, parentId: null, createdAt })),

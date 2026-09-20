@@ -3,6 +3,7 @@ import { Router } from 'express'
 import type { PoolClient } from 'pg'
 import { decryptText, encryptText } from './crypto.ts'
 import { pool } from './db.ts'
+import { platformFeishuConfig, platformPublicUrl } from './platform-config-values.ts'
 import {
   canManageOrganizationWeeklyReports,
   normalizeWeeklyReportRules,
@@ -1283,6 +1284,9 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
     }
     const organizationId = positiveId(request.params.organizationId)
     if (!organizationId) throw new WeeklyReportError(400, '组织参数无效')
+    if (!platformFeishuConfig().deliveryEnabled) {
+      throw new WeeklyReportError(503, '飞书业务通知已停用')
+    }
     const targetUserIds = Array.isArray(request.body?.userIds)
       ? [...new Set(request.body.userIds
         .map((value: unknown) => positiveId(value))
@@ -1351,7 +1355,7 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.json({ failed: 0, sent: 0, skipped: targetUserIds.length })
       return
     }
-    const publicAppUrl = normalizePublicAppUrl(process.env.APP_PUBLIC_URL)
+    const publicAppUrl = normalizePublicAppUrl(platformPublicUrl())
     if (!publicAppUrl) throw new WeeklyReportError(503, 'APP_PUBLIC_URL 未配置，无法生成填写链接')
     const url = appendWeeklyReportDeepLink(publicAppUrl, organizationId, weekStart)
     const totals = { failed: 0, sent: 0, skipped: 0 }

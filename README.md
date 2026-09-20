@@ -54,7 +54,7 @@ npm run dev
 
 默认 Web 地址为 `http://localhost:5173`，Vite 会把 `/api` 代理到 `http://127.0.0.1:8787`。API 启动时会校验加密配置并应用当前数据库结构；`npm run db:init` 会额外写入演示数据，不属于常规启动步骤。
 
-## 环境配置
+## 启动配置与平台管理
 
 以 [.env.example](./.env.example) 为配置入口：
 
@@ -62,13 +62,14 @@ npm run dev
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL 连接地址，必填。 |
 | `APP_ENCRYPTION_ACTIVE_KEY_ID`、`APP_ENCRYPTION_KEYS` | 敏感字段加密与密钥轮换，必填。 |
-| `APP_PUBLIC_URL` | 浏览器访问 Veges 的公开根地址；本地默认 `http://localhost:5173`，用于飞书日报待办链接。 |
-| `AI_API_BASE`、`AI_API_KEY`、`AI_MODEL` | 整个实例共用的 OpenAI 兼容模型配置，直接由服务端环境变量注入。 |
-| `AI_RATE_*`、`AI_GLOBAL_RATE_LIMIT`、`AI_MAX_*` | 单用户/实例级 AI 请求频率、输入长度和上下文上限。 |
-| `GITHUB_ACTIONS_TOKEN` | 镜像同步工作台使用的实例级 GitHub Token，仅限 `sealos-apps/sealos-pro` 的 Actions 写权限。 |
-| `FEISHU_*` | 飞书 OAuth、事件回调和通知投递；启用事件回调前必须配置 `FEISHU_VERIFICATION_TOKEN`。 |
-| `OSS_*`、`PACKAGE_MARKET_*` | 待办图片、安装包浏览和签名下载；启用对应能力时配置。 |
+| `DB_POOL_*` | API 与 worker 的 PostgreSQL 连接池限制。 |
 | `PORT` | API 监听端口，默认 `8787`。 |
+
+公网地址、全局 AI、邮箱、对象存储、包市场规则、飞书和 GitHub Actions 配置由超级管理员在账户菜单的“平台管理”中维护。配置加密、版本化存入 PostgreSQL，保存后通过通知和定时对账自动加载，无需重启服务。内置 `admin` 始终是不可移除的超级管理员；其他超级管理员使用数据库授权，与职业角色分开。新用户只能通过飞书 OAuth 自动注册，已有密码账号仍可登录。
+
+Sealos 首次安装会在应用启动前应用数据库结构，并用模板中的一次性初始密码创建内置 `admin`、默认平台配置和当前域名对应的固定飞书回调。初始化容器以外的应用与定时任务不会收到该密码；已有数据但尚未迁移的平台会拒绝自动初始化，必须按运行手册执行升级导入。
+
+旧部署升级时，先用 `npm run platform:config -- inspect` 和 `verify` 检查原配置，再运行 `bootstrap-admin` 与一次性的 `import`。`VEGES_ADMIN_USERNAMES` 及其他旧业务变量只会在该导入命令读取的旧配置文件中使用，应用运行时不再读取。
 
 > [!CAUTION]
 > 不要提交 `.env`、数据库口令、加密密钥、飞书密钥或 OSS 访问凭据。加密密钥丢失后，已有密文无法恢复。
@@ -79,7 +80,7 @@ npm run dev
 - AI 服务地址只接受无凭据的 HTTPS 公网地址，并禁止自动跟随重定向；本地代理返回
   `198.18.0.0/15` Fake-IP 时会经固定公共 DNS-over-HTTPS 复核，并把验证后的地址固定到
   实际连接；其他私网地址仍拒绝。
-- 共享 AI 启用后，密码注册必须来自有效项目邀请；飞书 OAuth 登录仍作为企业身份入口。单用户和实例总量使用同一时间窗限流。
+- 新账号只允许通过飞书 OAuth 自动注册；已有密码账号继续使用原登录方式。AI 同时执行单用户和实例总量限流。
 - AI 对话由服务端保存 canonical turns，浏览器不能提交或伪造助手历史；普通对话不会隐式读取整个工作区。新消息先由共享模型在不读取项目或工作区事实的前提下返回严格的语义意图 JSON，不用浏览器正则猜测能力，也不允许浏览器提交可信意图。流式连接只承载增量正文、固定进度和终态通知，断流后浏览器回查服务端结果，不能把 partial text 当成完成。对话标题、用户/助手正文和附件名称/正文均加密，历史接口只返回附件元数据；删除后的会话 UUID 会保留墓碑，晚到请求不能把历史重新创建出来。
 - 工作区复盘只响应明确的当前日/周复盘意图。服务端记录该 turn 使用的全部来源项目；失去任一来源项目权限或项目被删除后，该 turn 不再出现在历史接口或后续模型上下文中，重新获得全部权限后才可再次读取。
 - 飞书事件回调在处理 challenge 或事件前校验 verification token；安装包下载只签发规则允许的 OSS Object Key。
@@ -100,9 +101,9 @@ git diff --check
 
 ## 部署边界
 
-- 从主分支升级到 AI 对话历史与飞书日报版本时，部署负责人应先完成 [配置更新说明](./docs/configuration-update-main-to-ai-workflows.md)，尤其要准备实例级 AI 配置并保留现有数据库与完整加密 key ring。
+- 升级到平台管理版本时，部署负责人应按 [运行手册](./docs/runbook.md) 完成内置管理员初始化与旧业务配置的一次性导入，并保留现有数据库与完整加密 key ring。
 - [Dockerfile](./Dockerfile) 构建前后端并以单个 Node.js 服务监听 `8787`；`main` 推送后 CI 会分别构建 `linux/amd64` 与 `linux/arm64` 镜像，再用 `docker manifest` 合并为同一个不可变标签。
 - CI 工作流见 [.github/workflows](./.github/workflows)：PR 只构建镜像不推送；`main` 推送后推送 `ghcr.io/<仓库>/vege-basket:main-<12位sha>` 合并镜像，以及 `-amd64`、`-arm64` 分架构标签，镜像名由仓库名自动生成。
 - [.sealos/template/index.yaml](./.sealos/template/index.yaml) 负责创建 PostgreSQL、应用工作负载、待办日报 CronJob、健康检查、Service 和 TLS Ingress。部署时必须通过 `VEGES_IMAGE` 提供由当前源码构建的不可变 `main-<12位sha>` 合并镜像标签或分架构标签/摘要；应用和日报 worker 共用这一输入。
-- AI、飞书和 OSS 等运行配置与其他服务配置一样，由部署输入直接传入容器环境变量；不要把真实值写入仓库或镜像。
+- 业务配置与密钥在平台管理中加密落库；部署环境只提供数据库、应用加密、端口和连接池参数。不要把真实值写入仓库或镜像。
 - 提交到 `main` 会自动构建并发布新镜像，但不会自动更新线上实例。部署仍需要把新镜像标签填入模板的 `VEGES_IMAGE`，再执行运行时健康检查。

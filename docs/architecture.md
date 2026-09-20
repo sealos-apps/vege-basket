@@ -93,7 +93,8 @@ The production image builds `src/` into `dist/`, copies `server/`, and starts
   organization collection status, AI draft generation, Feishu reminder delivery, and
   authenticated browser deep links.
 - `server/changelog.ts`: authenticated global update-log reads, encrypted Markdown
-  persistence, and system-administrator-only create/update authorization.
+  persistence, system-administrator-only create/update authorization, and per-user monotonic
+  acknowledgement of login announcements.
 - `server/roles.ts`, `server/organization-scope.ts`, `server/test-workbench.ts`:
   session-scoped business personas, additive organization-administrator capability,
   and resource-scoped read/write authorization boundaries.
@@ -152,6 +153,25 @@ sections for their active tab; omitting the section parameter preserves the comp
 response used by mutations and compatibility callers. Every section performs the same server-side
 authentication and resource authorization as the complete response.
 
+The application shell no longer uses the legacy complete workspace response for routine loading.
+Authentication returns only the project catalog. Catalog reconciliation runs every 30 seconds,
+while the visible view refreshes its PostgreSQL-backed data every 15 seconds and immediately on
+focus or navigation. The application shell refreshes the authenticated account and role context
+through a separate lightweight endpoint on the same 15-second cadence and on focus, so platform
+administrator grants, revocations, and account disabling take effect without reloading workspace
+data. Project overview, journals, todos, todo detail, drafts, AI documents, and
+cross-project search have separate authorized routes. Superseded navigation reads are aborted.
+Mutation responses use the narrowest matching read model; only the compatibility
+`GET /api/workspace` route may build the complete legacy response.
+
+For a conservative model of 10 projects with 100 todos, 300 notes, and 100 journals per project,
+the complete response visits about 5,660 entity rows. A current-project refresh visits about 236
+rows because Todo details and notes load only when opened, a 96% reduction in rows serialized and
+encrypted text decrypted. Common project metadata writes fall from 12 workspace queries to 2;
+todo writes fall to 3; document writes fall to 2.
+Actual latency remains data- and database-dependent, so these figures are planning estimates rather
+than production measurements.
+
 Test-workbench content sections are additionally scoped to the active test space. Case reads may
 narrow further to one subject, while Bug list reads omit comments, events, verification submissions,
 and large detail text until a single authorized Bug is selected. Notification rows carry bounded
@@ -166,10 +186,20 @@ diagnostics contain only duration and aggregate connection counts, never SQL tex
 
 ## Request And Authorization Path
 
-Password or Feishu sign-in creates a random session token stored in `sessions` for 30
-days. Protected endpoints accept `Authorization: Bearer <token>`. Project-scoped routes
+Legacy password sign-in or Feishu sign-in creates a random session token stored in `sessions`
+for 30 days. Only successful Feishu OAuth may create a new ordinary account. Feishu returns the
+authorization result to the immutable instance callback; after processing it, the API redirects
+the browser to the configured platform public origin and its validated original application path.
+Protected endpoints accept `Authorization: Bearer <token>`. Project-scoped routes
 must resolve `getProjectAccess(projectId, userId)` before reading or mutating nested IDs;
 owner-only actions add an explicit role check.
+
+`users.display_name` follows the account's identity source. The built-in `admin` account may edit
+only its own display name and is excluded from Feishu binding and synchronization. Every other
+account receives its display name from verified Feishu OAuth or an explicit synchronization that
+reads the bound Open ID from Feishu's directory API. Both self-service and platform-administrator
+synchronization recheck the stored Open ID after the external request and before the database
+write; platform administrators cannot type or submit a replacement name for another account.
 
 `organization_admin` is an additive account capability rather than a session persona.
 The browser exposes it as a workspace identity in both login selection and the account
@@ -228,22 +258,35 @@ creation and revocation are another explicit exception: managed organization adm
 share todos in projects attached to their organization without receiving general project mutation
 access.
 
-System administrators identified by `VEGES_ADMIN_USERNAMES` may read organization-attached
+Platform administrators with active database grants may read organization-attached
 projects and todos and may update only a todo's due date, priority, module, assignee, watchers,
 or reviewer. This does not make the project writable and does not grant access to unscoped
 projects or other todo fields.
 
+Managed platform-administrator grants accept active users with a verified Feishu identity. For
+accounts created before registration provenance was recorded, an existing canonical `ou_` Open ID
+is retained as compatible verification evidence; newer Feishu accounts require the OAuth
+verification timestamp. The server returns grant eligibility so the browser does not duplicate
+this policy.
+
 The update log is a global authenticated read surface. Its create and update routes require
-`isSystemAdmin(username)`, which is derived from `VEGES_ADMIN_USERNAMES`; an
+the database-backed platform administrator check; an
 `organization_admin` role does not grant global update-log write access.
 
-`AI_API_BASE`, `AI_API_KEY`, and `AI_MODEL` form one deployment-level provider
-configuration. Users never submit or read AI credentials. When that shared provider is
-configured, password registration requires an active project or organization invite;
-Feishu OAuth can still create or link an internal user. An active organization invite
+The platform configuration's AI base URL, API key, and model form one shared provider
+configuration. Users never submit or read AI credentials. Password registration is disabled;
+Feishu OAuth can create or link an internal user. An active organization invite
 link also adds the authenticated account to that organization. AI calls
 pass both per-user and application-replica
 sliding-window limits.
+
+Platform configuration versions are encrypted snapshots. The administration API derives
+field-level history from those snapshots and exposes only formatted ordinary values and secret
+configuration states. Restore audit events record their source revision, and restore previews
+compare that snapshot with the current configuration. Canonically unchanged saves and restores
+commit only their idempotency receipt; they do not create a version, audit event, or reload
+notification. After a real change, the browser follows the target revision until every online API
+instance applies it or reports an explicit error, offline, or superseded state.
 
 Veges AI conversations are private to the authenticated user and persist in PostgreSQL.
 Each conversation has an immutable `general`, `project`, or `conversation-analysis`
@@ -365,7 +408,7 @@ External entry points have separate trust boundaries:
   work, and uses the canonical semantic classification and AI turn lifecycle. Forwarded
   source text and processing errors are encrypted. Group messages never receive project
   or workspace AI data.
-- Conversation-analysis webhooks require configured HTTP Basic credentials.
+- Conversation analysis is available through the browser Veges AI composer and the Feishu private-chat integration; the retired fixed-user HTTP webhook is no longer exposed.
 - AI provider URLs must use HTTPS, contain no credentials, resolve only to public
   addresses, and are fetched without following redirects. If system DNS returns only
   `198.18.0.0/15` proxy Fake-IP addresses for a hostname, the provider boundary verifies
@@ -408,9 +451,12 @@ The schema is normalized around these groups:
   weekday-based week-start preference, from Monday through Sunday; member reports and
   administrator summaries derive the current seven-day period from that shared setting.
 - Product updates: `changelog_entries` stores encrypted title, version, and Markdown content,
-  with queryable publication timestamps and nullable creator/editor references. Entries are
-  immediately visible after a system administrator saves them; there is no draft or delete
-  lifecycle.
+  with queryable publication timestamps, a login-announcement flag, and nullable creator/editor
+  references. Existing entries remain non-announcements; newly created entries default to login
+  announcements. `user_changelog_announcement_states` stores one monotonic acknowledgement cursor
+  per user so the latest unread announcement can cover earlier unread entries across devices.
+  Entries are immediately visible after a system administrator saves them; there is no draft or
+  delete lifecycle. Editing an acknowledged entry does not move users' cursors backward.
 - Projects and collaboration: `projects`, `project_memberships`,
   `project_invite_links`, `project_integrations`, `collaborators`.
 - Personal image-sync history: `image_sync_workflow_runs` binds each local request to its
@@ -645,19 +691,41 @@ Owner、任意有效项目成员，以及同时拥有 `organization_admin` 账�
 分享来源留言不接受图片 Markdown，并在公开页按纯文本展示；公开备注列表只返回最近 100
 条。原本拥有项目访问权的登录用户可从分享页打开内部待办详情。
 
-Server startup validates encryption keys and executes `schemaSql`; starting the API is a
-database mutation, not a read-only smoke test. Versioned files under
-`server/migrations/` are the operator-facing incremental DDL record and must be
-applied before code that depends on a new structure. The application does not
-automatically execute those versioned files, and there is no automatic down migration.
-The image-sync surface additionally requires an instance-level `GITHUB_ACTIONS_TOKEN` scoped
-to `sealos-apps/sealos-pro` Actions write. It never accepts repository, workflow, ref, or token
-values from the browser. Each dispatch carries a server-generated UUID as the workflow
+Server startup validates encryption keys, starts the health/status HTTP surface, and then
+coordinates database migration through a PostgreSQL session advisory lock. One replica applies
+the idempotent `schemaSql` baseline and encrypted data initialization while other replicas wait.
+`application_migrations` records the migration ID, SHA-256 checksum, kind, duration, and completion
+time. Changing `schemaSql` without increasing the migration ID fails closed with a checksum error;
+every future table, constraint, or index change must also add a forward-only file under
+`server/migrations/`. There is no automatic down migration. Starting the API can mutate the
+database and is not a read-only smoke test.
+
+Platform maintenance state is stored independently from configuration history. Manual maintenance,
+an incomplete or failed database migration, or a missing platform configuration blocks ordinary
+API routes with `503 PLATFORM_MAINTENANCE`. Health/status remain public; after migration, the
+built-in administrator can log in during system-forced maintenance and use platform configuration,
+security, runtime, migration, and maintenance routes. Manual maintenance permits password or Feishu
+login only for accounts with an active platform-administrator grant; Feishu login reuses an existing
+verified account without registration or invitation processing. Recovery and maintenance login never
+accept pending project or organization invitations. PostgreSQL
+`LISTEN/NOTIFY` plus polling synchronizes maintenance state between replicas. System-forced
+maintenance cannot be disabled, and manual maintenance can end only after required platform
+configuration is valid and every online API replica has loaded the current configuration revision.
+Each manual maintenance period is stored separately with its message, initiating administrator,
+database start time, and starting revision. Ending maintenance records the ending administrator,
+database end time, ending revision, and computed duration in the same transaction. Editing the
+message updates the open period without resetting its start time. System-forced maintenance is not
+included in this history. The schema baseline backfills an already-active manual period when its
+initiator and start time are available.
+The image-sync surface uses the repository, workflow, branch, and token in the encrypted
+platform configuration. Only platform administrators may edit or test those values. Each dispatch carries a server-generated UUID as the workflow
 `request_id`; uncertain POST responses remain recoverable until a matching GitHub `run-name`
 is found or the five-minute reconciliation window expires. Real dispatch verification consumes
 GitHub runner and OSS resources and therefore requires explicit authorization.
-The Sealos template provisions PostgreSQL, injects runtime configuration, probes
-`/api/health`, deploys one application replica, and runs the todo-digest worker every
+The Sealos template provisions PostgreSQL, injects only startup configuration, mounts the initial
+admin password as a Secret file, and deploys two application Pods with one Veges container in each.
+There are no application init containers. Liveness probes `/api/health`; readiness probes
+`/api/ready`, which succeeds after automatic migrations. The separate todo-digest worker runs every
 five minutes. Digest runs are unique per subscription/date, claimed with row locking and
 a lease, retried at most three times, and terminally failed when the last lease expires.
 Build receipts and deployment state under `.sealos/` are historical evidence; all three

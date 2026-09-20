@@ -79,6 +79,7 @@ export type Todo = {
   offboardingTransferredFromName?: string
   title: string
   detail: string
+  detailsLoaded?: boolean
   dueDate: string
   priority: Priority
   done: boolean
@@ -257,6 +258,7 @@ export type Summary = {
 export type SummaryPeriodType = 'daily' | 'weekly'
 
 export type ChangelogEntry = {
+  announceOnLogin: boolean
   content: string
   createdAt: string
   createdByUserId: number | null
@@ -266,6 +268,11 @@ export type ChangelogEntry = {
   updatedAt: string
   updatedByUserId: number | null
   version: string
+}
+
+export type ChangelogAnnouncementResponse = {
+  entry: ChangelogEntry | null
+  unreadCount: number
 }
 
 export type {
@@ -350,6 +357,7 @@ export type ProjectPackageItem = {
   objectKey: string
   objectLastModified?: string
   sizeBytes?: number
+  sourceConfigRevision?: number
   createdAt: string
 }
 

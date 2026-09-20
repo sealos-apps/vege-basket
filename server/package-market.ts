@@ -1,4 +1,5 @@
 import OSS from 'ali-oss'
+import { normalizeOssEndpoint } from './oss-endpoint.ts'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -70,39 +71,51 @@ type OssObject = {
   LastModified?: string
 }
 
-const downloadExpireSeconds = Number(
-  process.env.PACKAGE_MARKET_DOWNLOAD_EXPIRE_SECONDS ??
-    process.env.OSS_UI_DOWNLOAD_EXPIRE_SECONDS ??
-    30 * 60,
-)
 export const packageMarketExpireMinuteOptions = [240, 480, 1440, 4320, 10080] as const
 export const packageMarketExpireMaxMinutes = 365 * 24 * 60
 const defaultMiddlewareRoot = 'offline/sealos-pro/'
-const fallbackMiddlewareRoots = normalizeList([
-  process.env.PACKAGE_MARKET_MIDDLEWARE_ROOT,
-  process.env.OSS_UI_MIDDLEWARE_ROOT,
-  defaultMiddlewareRoot,
-]).map(normalizePrefix)
 let configuredMiddlewareRoots: string[] | null = null
 let configuredPageKinds: Record<string, PackageMarketPageKind> | null = null
 let configuredDiscoveryRoots: Record<string, string[]> = {}
-const baseObjectTemplate = normalizeString(
-  process.env.PACKAGE_MARKET_BASE_OBJECT_TEMPLATE ?? process.env.OSS_UI_BASE_OBJECT_TEMPLATE,
-)
-const baseListPrefixTemplate = normalizeString(
-  process.env.PACKAGE_MARKET_BASE_LIST_PREFIX_TEMPLATE ??
-    process.env.OSS_UI_BASE_LIST_PREFIX_TEMPLATE,
-)
 const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const bundledRulesFile = path.join(serverDir, 'trial-combo-package-rules.yaml')
-const rulesFile = normalizeString(
-  process.env.PACKAGE_MARKET_RULES_FILE ??
-    process.env.TRIAL_COMBO_PACKAGE_RULES_FILE ??
-    bundledRulesFile,
-)
+const bundledRulesYaml = fs.readFileSync(bundledRulesFile, 'utf8')
+
+type PackageMarketRuntimeConfig = {
+  packages: {
+    downloadExpireSeconds: number
+    legacyBaseListPrefixTemplate: string
+    legacyBaseObjectTemplate: string
+    legacyMiddlewareRoots: string[]
+    rulesYaml: string
+  }
+  storage: {
+    accessKeyId: string
+    accessKeySecret: string
+    bucket: string
+    endpoint: string
+  }
+}
+
+let runtimeConfigProvider: () => PackageMarketRuntimeConfig = () => ({
+  packages: {
+    downloadExpireSeconds: 30 * 60,
+    legacyBaseListPrefixTemplate: '',
+    legacyBaseObjectTemplate: '',
+    legacyMiddlewareRoots: [defaultMiddlewareRoot],
+    rulesYaml: bundledRulesYaml,
+  },
+  storage: { accessKeyId: '', accessKeySecret: '', bucket: '', endpoint: '' },
+})
+
+export function configurePackageMarketRuntime(provider: () => PackageMarketRuntimeConfig) {
+  runtimeConfigProvider = provider
+  cachedRules = null
+  cachedRulesSource = ''
+}
 
 let cachedRules: PackageMarketRule[] | null = null
-let cachedRulesMtimeMs = -1
+let cachedRulesSource = ''
 
 function normalizeString(value: unknown) {
   return String(value ?? '').trim()
@@ -113,40 +126,31 @@ function normalizePrefix(value: unknown) {
   return normalized && !normalized.endsWith('/') ? `${normalized}/` : normalized
 }
 
-export function normalizeOssEndpoint(value: unknown) {
-  const rawEndpoint = normalizeString(value)
-  if (!rawEndpoint) return ''
-  const endpointWithProtocol = /^https?:\/\//i.test(rawEndpoint)
-    ? rawEndpoint
-    : `https://${rawEndpoint}`
-
-  let endpoint: URL
-  try {
-    endpoint = new URL(endpointWithProtocol)
-  } catch {
-    throw new Error('OSS_ENDPOINT must be a valid HTTP or HTTPS endpoint')
-  }
-  if (
-    !['http:', 'https:'].includes(endpoint.protocol) ||
-    endpoint.username ||
-    endpoint.password ||
-    endpoint.search ||
-    endpoint.hash ||
-    (endpoint.pathname && endpoint.pathname !== '/')
-  ) {
-    throw new Error('OSS_ENDPOINT must be an HTTP or HTTPS origin without credentials, path, query, or fragment')
-  }
-  if (
-    endpoint.protocol === 'http:' &&
-    endpoint.hostname.toLowerCase().endsWith('.aliyuncs.com')
-  ) {
-    endpoint.protocol = 'https:'
-  }
-  if (endpoint.protocol !== 'https:') {
-    throw new Error('OSS_ENDPOINT must be an HTTPS origin without credentials, path, query, or fragment')
-  }
-  return endpoint.origin
+function currentPackageConfig() {
+  return runtimeConfigProvider().packages
 }
+
+function currentStorageConfig() {
+  return runtimeConfigProvider().storage
+}
+
+function packageRulesYaml() {
+  return currentPackageConfig().rulesYaml || bundledRulesYaml
+}
+
+function baseObjectTemplate() {
+  return currentPackageConfig().legacyBaseObjectTemplate
+}
+
+function baseListPrefixTemplate() {
+  return currentPackageConfig().legacyBaseListPrefixTemplate
+}
+
+function defaultDownloadExpireSeconds() {
+  return currentPackageConfig().downloadExpireSeconds
+}
+
+export { normalizeOssEndpoint } from './oss-endpoint.ts'
 
 function normalizeVersion(value: unknown) {
   const version = normalizeString(value).toLowerCase()
@@ -167,7 +171,10 @@ function normalizeList(values: unknown[]) {
 }
 
 function middlewareRootsForConfig() {
-  return configuredMiddlewareRoots ?? fallbackMiddlewareRoots
+  return configuredMiddlewareRoots ?? normalizeList([
+    ...currentPackageConfig().legacyMiddlewareRoots,
+    defaultMiddlewareRoot,
+  ]).map(normalizePrefix)
 }
 
 function pageKindForCategory(category: string): PackageMarketPageKind {
@@ -562,8 +569,8 @@ export function isAllowedPackageMarketObjectKey(value: unknown) {
   for (const deployType of ['pro', 'oss']) {
     const appRuleId = deployType === 'oss' ? 'sealos-oss' : 'sealos-pro'
     if (rules.some((rule) => rule.id === appRuleId)) continue
-    if (templateMatcher(baseObjectTemplate, false, { deployType })?.test(objectKey)) return true
-    const prefixMatch = templateMatcher(baseListPrefixTemplate, true, { deployType })?.exec(objectKey)
+    if (templateMatcher(baseObjectTemplate(), false, { deployType })?.test(objectKey)) return true
+    const prefixMatch = templateMatcher(baseListPrefixTemplate(), true, { deployType })?.exec(objectKey)
     if (!prefixMatch) continue
     const [version, fileName, ...extra] = objectKey.slice(prefixMatch[0].length).split('/')
     if (
@@ -644,8 +651,8 @@ function dependencyRuleAllowsObjectKey(
 
 function baseTemplateAllowsObjectKey(packageId: string, objectKey: string) {
   const deployType = packageId === 'base-oss' ? 'oss' : 'pro'
-  if (templateMatcher(baseObjectTemplate, false, { deployType })?.test(objectKey)) return true
-  const prefixMatch = templateMatcher(baseListPrefixTemplate, true, { deployType })?.exec(objectKey)
+  if (templateMatcher(baseObjectTemplate(), false, { deployType })?.test(objectKey)) return true
+  const prefixMatch = templateMatcher(baseListPrefixTemplate(), true, { deployType })?.exec(objectKey)
   if (!prefixMatch) return false
   const [version, fileName, ...extra] = objectKey.slice(prefixMatch[0].length).split('/')
   return Boolean(
@@ -711,10 +718,11 @@ export function isPackageMarketObjectKeyAllowedForRule(params: {
 }
 
 function ossClient() {
-  const endpoint = normalizeOssEndpoint(process.env.OSS_ENDPOINT)
-  const accessKeyId = normalizeString(process.env.OSS_ACCESS_KEY_ID)
-  const accessKeySecret = normalizeString(process.env.OSS_ACCESS_KEY_SECRET)
-  const bucket = normalizeString(process.env.OSS_BUCKET)
+  const storage = currentStorageConfig()
+  const endpoint = normalizeOssEndpoint(storage.endpoint)
+  const accessKeyId = normalizeString(storage.accessKeyId)
+  const accessKeySecret = normalizeString(storage.accessKeySecret)
+  const bucket = normalizeString(storage.bucket)
   if (!endpoint || !accessKeyId || !accessKeySecret || !bucket) {
     throw new Error('OSS_ENDPOINT, OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_BUCKET must be set')
   }
@@ -777,7 +785,7 @@ function normalizeDownloadExpireSeconds(expireMinutes?: number) {
   return minutes * 60
 }
 
-function signedDownloadUrl(client: OSS, objectKey: string, expireSeconds = downloadExpireSeconds) {
+function signedDownloadUrl(client: OSS, objectKey: string, expireSeconds = defaultDownloadExpireSeconds()) {
   return client.signatureUrl(objectKey, { expires: expireSeconds, method: 'GET' })
 }
 
@@ -786,7 +794,7 @@ function objectToLink(
   name: string,
   version: string,
   object: OssObject,
-  expireSeconds = downloadExpireSeconds,
+  expireSeconds = defaultDownloadExpireSeconds(),
   downloadable = true,
 ): PackageMarketLink {
   return {
@@ -818,24 +826,17 @@ function ruleCategory(rule: {
   explicitCategory: string
   parent: string
   roots: string[]
-}) {
+}, middlewareRoots: readonly string[]) {
   if (rule.explicitCategory) return rule.explicitCategory
   if (rule.parent || rule.dependencyRoots.length > 0) return 'dependency' as const
-  if (rule.roots.some((root) => middlewareRootsForConfig().some((middlewareRoot) => root.startsWith(middlewareRoot)))) {
+  if (rule.roots.some((root) => middlewareRoots.some((middlewareRoot) => root.startsWith(middlewareRoot)))) {
     return 'middleware' as const
   }
   return 'apps' as const
 }
 
-function parseRulesFile() {
-  if (!rulesFile) {
-    throw new Error('PACKAGE_MARKET_RULES_FILE must be set')
-  }
-  const stat = fs.statSync(rulesFile)
-  if (cachedRules && cachedRulesMtimeMs === stat.mtimeMs) return cachedRules
-
-  const file = fs.readFileSync(rulesFile, 'utf8')
-  const parsed = yaml.load(file) as {
+function parsePackageRulesSource(source: string, legacyMiddlewareRoots: readonly string[]) {
+  const parsed = yaml.load(source) as {
     middleware?: { roots?: unknown[] }
     page_kinds?: Record<string, Record<string, unknown>>
     rules?: Record<string, Record<string, unknown>>
@@ -843,7 +844,6 @@ function parseRulesFile() {
   const rawPageKinds = parsed?.page_kinds ?? {}
   const pageKinds: Record<string, PackageMarketPageKind> = {}
   const discoveryRoots: Record<string, string[]> = {}
-  configuredPageKinds = null
   for (const [rawCode, rawPageKind] of Object.entries(rawPageKinds)) {
     const code = normalizeString(rawCode).toLowerCase()
     if (!code) continue
@@ -861,16 +861,20 @@ function parseRulesFile() {
     if (roots.length > 0) discoveryRoots[code] = roots
   }
   for (const category of ['apps', 'middleware', 'dependency'] as const) {
-    pageKinds[category] ??= pageKindForCategory(category)
+    pageKinds[category] ??= {
+      code: category,
+      key: category === 'middleware' ? 'pro' : category === 'apps' ? 'app' : 'dependency',
+      labelZh: category === 'middleware' ? '中间件' : category === 'apps' ? '应用' : '依赖',
+    }
   }
-  configuredPageKinds = pageKinds
-  configuredDiscoveryRoots = discoveryRoots
   const configuredRoots = normalizeList(
     (rawPageKinds.middleware?.discovery as { roots?: unknown[] } | undefined)?.roots ??
       parsed?.middleware?.roots ??
       [],
   ).map(normalizePrefix)
-  configuredMiddlewareRoots = configuredRoots.length > 0 ? configuredRoots : null
+  const effectiveMiddlewareRoots = configuredRoots.length > 0
+    ? configuredRoots
+    : normalizeList([...legacyMiddlewareRoots, defaultMiddlewareRoot]).map(normalizePrefix)
   const rawRules = parsed?.rules ?? {}
   const rules: PackageMarketRule[] = []
 
@@ -913,14 +917,29 @@ function parseRulesFile() {
         explicitCategory,
         parent,
         roots,
-      }),
+      }, effectiveMiddlewareRoots),
       mode: 'release',
       pageKind,
     })
   }
 
-  cachedRules = rules.sort((a, b) => a.id.localeCompare(b.id))
-  cachedRulesMtimeMs = stat.mtimeMs
+  return {
+    configuredMiddlewareRoots: configuredRoots.length > 0 ? configuredRoots : null,
+    discoveryRoots,
+    pageKinds,
+    rules: rules.sort((a, b) => a.id.localeCompare(b.id)),
+  }
+}
+
+function parseRulesFile() {
+  const source = packageRulesYaml()
+  if (cachedRules && cachedRulesSource === source) return cachedRules
+  const parsed = parsePackageRulesSource(source, currentPackageConfig().legacyMiddlewareRoots)
+  configuredMiddlewareRoots = parsed.configuredMiddlewareRoots
+  configuredPageKinds = parsed.pageKinds
+  configuredDiscoveryRoots = parsed.discoveryRoots
+  cachedRules = parsed.rules
+  cachedRulesSource = source
   return cachedRules
 }
 
@@ -934,6 +953,13 @@ function publicRule(rule: PackageMarketRule): PackageMarketRule {
     fileNameFormats: [...rule.fileNameFormats],
     ciFileNameFormats: [...rule.ciFileNameFormats],
   }
+}
+
+export function parsePackageMarketRulesYaml(
+  source: string,
+  legacyMiddlewareRoots: readonly string[] = [],
+) {
+  return parsePackageRulesSource(source || bundledRulesYaml, legacyMiddlewareRoots).rules.map(publicRule)
 }
 
 function proMiddlewareNameFromId(packageId: string) {
@@ -1127,7 +1153,7 @@ async function buildDependencyPackage(
   arch: string,
   requestedHash: string,
   includeAll = false,
-  expireSeconds = downloadExpireSeconds,
+  expireSeconds = defaultDownloadExpireSeconds(),
 ): Promise<PackageMarketDetail> {
   const versions = await listDependencyVersions(client, rule, arch, includeAll)
   const hash = normalizeString(requestedHash) || versions[0]?.hash || ''
@@ -1204,7 +1230,7 @@ async function buildProMiddlewarePackage(
   name: string,
   arch: string,
   requestedVersion: string,
-  expireSeconds = downloadExpireSeconds,
+  expireSeconds = defaultDownloadExpireSeconds(),
   roots = middlewareRootsForConfig(),
 ): Promise<PackageMarketDetail> {
   const versions = await listProMiddlewareReleaseVersions(client, name, arch, roots)
@@ -1267,7 +1293,7 @@ async function buildProMiddlewareCiPackage(
   name: string,
   arch: string,
   requestedHash: string,
-  expireSeconds = downloadExpireSeconds,
+  expireSeconds = defaultDownloadExpireSeconds(),
   roots = middlewareRootsForConfig(),
 ): Promise<PackageMarketDetail> {
   const versions = await listProMiddlewareCiVersions(client, name, arch, roots)
@@ -1295,10 +1321,11 @@ async function buildProMiddlewareCiPackage(
 
 async function listBaseVersions(client: OSS, deployType: string, arch: string) {
   const normalizedDeployType = normalizeString(deployType || 'pro').toLowerCase()
-  if (!baseListPrefixTemplate) return []
+  const template = baseListPrefixTemplate()
+  if (!template) return []
   const packageNames =
     normalizedDeployType === 'pro' ? ['sealos-pro', 'sealos-commercial'] : [`sealos-${normalizedDeployType}`]
-  const listPrefix = normalizePrefix(renderTemplate(baseListPrefixTemplate, { deployType: normalizedDeployType, arch }))
+  const listPrefix = normalizePrefix(renderTemplate(template, { deployType: normalizedDeployType, arch }))
   const objects = await listAllObjects(client, listPrefix)
   const versions = new Map<string, { object: OssObject; version: string }>()
 
@@ -1332,9 +1359,10 @@ async function buildBasePackage(
   deployType: string,
   releaseVersion: string,
   arch: string,
-  expireSeconds = downloadExpireSeconds,
+  expireSeconds = defaultDownloadExpireSeconds(),
 ): Promise<PackageMarketDetail> {
-  if (!baseObjectTemplate) throw new Error('PACKAGE_MARKET_BASE_OBJECT_TEMPLATE must be set')
+  const template = baseObjectTemplate()
+  if (!template) throw new Error('当前平台配置缺少基础包对象路径模板。')
   const versions = await listBaseVersions(client, deployType, arch)
   const version = normalizeVersion(releaseVersion) || versions[0]?.version || ''
   const normalizedDeployType = normalizeString(deployType || 'pro').toLowerCase()
@@ -1348,7 +1376,7 @@ async function buildBasePackage(
 
   for (const packageName of packageNames) {
     for (const fileName of candidateFileNames([`${packageName}-%s-%s.tar`], version, arch)) {
-      const key = renderTemplate(baseObjectTemplate, {
+      const key = renderTemplate(template, {
         deployType: normalizedDeployType,
         version,
         fileName,
@@ -1466,7 +1494,7 @@ async function buildCiPackage(
   requestedBranch: string,
   requestedHash: string,
   includeAll = false,
-  expireSeconds = downloadExpireSeconds,
+  expireSeconds = defaultDownloadExpireSeconds(),
 ): Promise<PackageMarketDetail> {
   const { branch, roots } = await resolveCiRoots(client, rule, requestedBranch)
   const versions = await listCiVersionsFromRoots(client, rule, arch, roots, includeAll)
@@ -1517,7 +1545,7 @@ async function buildComboPackage(
   ciBranch: string,
   ciVersion: string,
   includeAll = false,
-  expireSeconds = downloadExpireSeconds,
+  expireSeconds = defaultDownloadExpireSeconds(),
 ): Promise<PackageMarketDetail> {
   if (channel === 'ci') {
     if (rule.category === 'dependency' && rule.dependencyRoots.length > 0) {
@@ -1565,7 +1593,7 @@ async function buildComboPackage(
 }
 
 export function getPackageMarketExpireMinutes() {
-  return Math.round(downloadExpireSeconds / 60)
+  return Math.round(defaultDownloadExpireSeconds() / 60)
 }
 
 export function normalizePackageMarketExpireMinutes(value: unknown) {

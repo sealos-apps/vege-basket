@@ -22,7 +22,6 @@ import {
   normalizeProjectMilestoneStatus,
   verifyFeishuCardSignature,
 } from './organization-policy.ts'
-import { isSystemAdmin } from './roles.ts'
 
 const organizationsSource = readFileSync(new URL('./organizations.ts', import.meta.url), 'utf8')
 const appSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
@@ -32,20 +31,13 @@ const organizationWorkbenchSource = readFileSync(
   'utf8',
 )
 const apiSource = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8')
+const platformAdminSource = readFileSync(new URL('./platform-admins.ts', import.meta.url), 'utf8')
+const platformOrganizationsSource = readFileSync(new URL('./platform-organizations.ts', import.meta.url), 'utf8')
 
-test('system administrator access requires an explicit username configuration', () => {
-  const previous = process.env.VEGES_ADMIN_USERNAMES
-  try {
-    delete process.env.VEGES_ADMIN_USERNAMES
-    assert.equal(isSystemAdmin('admin'), false)
-
-    process.env.VEGES_ADMIN_USERNAMES = ' owner@example.com, ops@example.com '
-    assert.equal(isSystemAdmin('OWNER@example.com'), true)
-    assert.equal(isSystemAdmin('admin'), false)
-  } finally {
-    if (previous === undefined) delete process.env.VEGES_ADMIN_USERNAMES
-    else process.env.VEGES_ADMIN_USERNAMES = previous
-  }
+test('system administrator access comes from active database grants', () => {
+  assert.match(platformAdminSource, /from platform_admin_grants grant_row/u)
+  assert.match(platformAdminSource, /users\.account_status = 'active'/u)
+  assert.doesNotMatch(platformAdminSource, /VEGES_ADMIN_USERNAMES/u)
 })
 
 test('system administrator todo updates are limited to assignment metadata', () => {
@@ -61,7 +53,7 @@ test('todo update route keeps system administrator access organization-scoped', 
   const routeEnd = appSource.indexOf("app.delete('/api/todos/:todoId'", routeStart)
   const routeSource = appSource.slice(routeStart, routeEnd)
 
-  assert.match(routeSource, /isSystemAdmin\(session\.username\)/u)
+  assert.match(routeSource, /await isPlatformAdmin\(userId\)/u)
   assert.match(routeSource, /systemAdmin && existingTodo\.rows\[0\]\.organization_id != null/u)
   assert.match(routeSource, /isOrganizationTodoFieldUpdate\(request\.body\)/u)
   assert.match(routeSource, /nextTitle =/u)
@@ -116,12 +108,13 @@ test('test-environment fields are bounded and URLs cannot carry credentials or u
 })
 
 test('new organization owners are provisioned as organization administrators', () => {
-  const routeStart = organizationsSource.indexOf("router.post('/admin/organizations'")
-  const routeEnd = organizationsSource.indexOf("router.get('/organizations/:organizationId'", routeStart)
-  const routeSource = organizationsSource.slice(routeStart, routeEnd)
+  const routeStart = platformOrganizationsSource.indexOf('export async function createPlatformOrganization')
+  const routeEnd = platformOrganizationsSource.indexOf('export async function deletePlatformOrganization', routeStart)
+  const routeSource = platformOrganizationsSource.slice(routeStart, routeEnd)
 
-  assert.match(routeSource, /insert into user_roles \(user_id, role\)[\s\S]+organization_admin/u)
+  assert.match(routeSource, /insert into user_roles \(user_id, role\) values \(\$1, 'organization_admin'\)/u)
   assert.match(routeSource, /on conflict \(user_id, role\) do nothing/u)
+  assert.match(routeSource, /platform_user_permission_versions/u)
   assert.match(schemaSource, /select owner_user_id, 'organization_admin'[\s\S]+from organizations/u)
 })
 
@@ -208,10 +201,17 @@ test('organization deletion requires the exact full organization name', () => {
   assert.equal(matchesOrganizationDeleteConfirmation('Sealos 项目组', null), false)
 })
 
-test('organization deletion detaches owned resources inside the transaction', () => {
-  assert.match(organizationsSource, /update projects set organization_id = null, updated_at = now\(\)/u)
-  assert.match(organizationsSource, /update test_spaces set organization_id = null, updated_at = now\(\)/u)
-  assert.match(organizationsSource, /delete from organizations where id = \$1/u)
+test('organization deletion moved to platform management and rejects non-empty organizations', () => {
+  const routeStart = organizationsSource.indexOf("router.delete('/organizations/:organizationId'")
+  const routeEnd = organizationsSource.indexOf("router.post('/organizations/:organizationId/invitations'", routeStart)
+  const routeSource = organizationsSource.slice(routeStart, routeEnd)
+  assert.match(routeSource, /response\.status\(410\)/u)
+  assert.match(routeSource, /ORGANIZATION_DELETE_MOVED/u)
+  assert.match(platformOrganizationsSource, /organizationBlockers/u)
+  assert.match(platformOrganizationsSource, /ORGANIZATION_NOT_EMPTY/u)
+  assert.match(platformOrganizationsSource, /delete from organizations where id = \$1/u)
+  assert.doesNotMatch(platformOrganizationsSource, /update projects set organization_id = null/u)
+  assert.doesNotMatch(platformOrganizationsSource, /update test_spaces set organization_id = null/u)
 })
 
 test('organization test-space attachment locks the space before validating members', () => {
@@ -333,17 +333,14 @@ test('organization invitation UI uses direct add and browser invite links', () =
   assert.doesNotMatch(organizationWorkbenchSource, /inviteOrganizationMember\(/u)
 })
 
-test('organization invite tokens flow through password and Feishu sign-in', () => {
-  assert.match(appSource, /organizationInviteToken: request\.body\.organizationInviteToken/u)
+test('organization invite tokens flow through legacy login and Feishu sign-in', () => {
   assert.match(
     appSource,
     /await acceptOrganizationInviteToken\(userId, request\.body\.organizationInviteToken\)/u,
   )
   assert.match(appSource, /state\.organizationInviteToken/u)
-  assert.match(
-    appSource,
-    /Password registration requires an active project or organization invite/u,
-  )
+  assert.match(appSource, /REGISTRATION_VIA_FEISHU_ONLY/u)
+  assert.doesNotMatch(appSource, /async function registerPasswordUser/u)
 })
 
 test('Feishu organization invitations map lookup and duplicate errors explicitly', () => {

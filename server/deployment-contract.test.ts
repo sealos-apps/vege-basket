@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { loadAll } from 'js-yaml'
 
 const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8')
 const sealosTemplate = readFileSync(
@@ -11,6 +12,13 @@ const dockerPushWorkflow = readFileSync(
   new URL('../.github/workflows/docker-push.yml', import.meta.url),
   'utf8',
 )
+const sealosResources = loadAll(sealosTemplate) as Array<Record<string, unknown>>
+const applicationDeployment = sealosResources.find((resource) => resource.kind === 'Deployment') as {
+  spec: {
+    replicas: number
+    template: { spec: { containers: Array<{ env?: Array<{ name: string }>; readinessProbe?: { httpGet?: { path?: string } } }>; initContainers?: unknown[] } }
+  }
+}
 
 test('runtime image installs production dependencies from the canonical lockfile', () => {
   const runtimeStage = dockerfile.slice(dockerfile.indexOf('FROM node:24-alpine AS runtime'))
@@ -32,13 +40,40 @@ test('Sealos application and digest worker share one required immutable image in
   )
 })
 
-test('Sealos does not grant system administration to a predictable default username', () => {
-  const adminInput = sealosTemplate.slice(
-    sealosTemplate.indexOf('VEGES_ADMIN_USERNAMES:'),
-    sealosTemplate.indexOf('AI_API_BASE:'),
+test('Sealos injects only startup configuration into application processes', () => {
+  const businessEnvironmentKeys = [
+    'APP_PUBLIC_URL',
+    'VEGES_ADMIN_USERNAMES',
+    'AI_API_BASE',
+    'AI_API_KEY',
+    'AI_MODEL',
+    'FEISHU_APP_ID',
+    'FEISHU_APP_SECRET',
+    'OSS_ENDPOINT',
+    'OSS_ACCESS_KEY_ID',
+    'OSS_ACCESS_KEY_SECRET',
+    'OSS_BUCKET',
+    'PACKAGE_MARKET_RULES_FILE',
+  ]
+  for (const key of businessEnvironmentKeys) {
+    assert.doesNotMatch(sealosTemplate, new RegExp(`(?:name:|inputs\\.) ${key}|inputs\\.${key}`, 'u'))
+  }
+  assert.equal(sealosTemplate.match(/name: APP_ENCRYPTION_KEYS\b/gu)?.length, 2)
+  assert.equal(sealosTemplate.match(/name: DATABASE_URL\b/gu)?.length, 2)
+  assert.equal(sealosTemplate.match(/name: VEGES_BOOTSTRAP_ADMIN_PASSWORD\b/gu)?.length ?? 0, 0)
+  assert.match(sealosTemplate, /kind: Secret[\s\S]*?name: \$\{\{ defaults\.app_name \}\}-bootstrap-admin[\s\S]*?password: \$\{\{ inputs\.VEGES_BOOTSTRAP_ADMIN_PASSWORD \}\}/u)
+})
+
+test('Sealos application Deployment uses two single-container Pods without init containers', () => {
+  assert.ok(applicationDeployment)
+  assert.equal(applicationDeployment.spec.replicas, 2)
+  assert.equal(applicationDeployment.spec.template.spec.containers.length, 1)
+  assert.equal(applicationDeployment.spec.template.spec.initContainers, undefined)
+  assert.equal(applicationDeployment.spec.template.spec.containers[0].readinessProbe?.httpGet?.path, '/api/ready')
+  assert.equal(
+    applicationDeployment.spec.template.spec.containers[0].env?.some((entry) => entry.name === 'VEGES_BOOTSTRAP_ADMIN_PASSWORD'),
+    false,
   )
-  assert.match(adminInput, /default: ''/u)
-  assert.doesNotMatch(adminInput, /default: admin/u)
 })
 
 test('Sealos bounds application and digest worker database pools separately', () => {

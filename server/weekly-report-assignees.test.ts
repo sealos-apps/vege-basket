@@ -8,6 +8,7 @@ const migrationSource = readFileSync(
   'utf8',
 )
 const organizationsSource = readFileSync(new URL('./organizations.ts', import.meta.url), 'utf8')
+const platformOrganizationsSource = readFileSync(new URL('./platform-organizations.ts', import.meta.url), 'utf8')
 const weeklyReportsSource = readFileSync(new URL('./weekly-reports.ts', import.meta.url), 'utf8')
 const apiSource = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8')
 const organizationWorkbenchSource = readFileSync(
@@ -38,7 +39,7 @@ test('organization memberships default to requiring weekly reports while the res
     organizationsSource,
     /select \$1, \$2, 'member', 'active', lower\(email\) <> 'admin'/u,
   )
-  assert.match(organizationsSource, /ownerUsername !== 'admin'/u)
+  assert.match(platformOrganizationsSource, /!ownerRow\.is_builtin_admin/u)
   assert.match(organizationsSource, /username !== 'admin'/u)
   assert.equal(
     organizationsSource.match(
