@@ -221,6 +221,11 @@ import {
   stopPlatformConfigRuntime,
 } from './platform-config-runtime.ts'
 import { markPlatformStorageUsed } from './platform-config-store.ts'
+import {
+  isTodoImageSignatureValid,
+  legacyTodoImageUrlSecretFromEnvironment,
+  todoImageSignature,
+} from './todo-image-signature.ts'
 import { runAutomaticDatabaseMigrations, stopAutomaticDatabaseMigrations } from './database-migrations.ts'
 import {
   platformMaintenanceMiddleware,
@@ -784,23 +789,18 @@ function todoImageUrlSecret() {
   return secret
 }
 
-function todoImageSignature(objectKey: string, secret = todoImageUrlSecret()) {
-  return crypto.createHmac('sha256', secret).update(objectKey).digest('base64url')
-}
-
 async function isValidTodoImageSignature(objectKey: string, signature: string) {
   if (!signature) return false
-  const secrets = [todoImageUrlSecret(), ...(await getLegacyPlatformSecrets('todo_image_url'))]
-  return secrets.some((secret) => {
-    const expectedBuffer = Buffer.from(todoImageSignature(objectKey, secret))
-    const signatureBuffer = Buffer.from(signature)
-    return expectedBuffer.length === signatureBuffer.length &&
-      crypto.timingSafeEqual(expectedBuffer, signatureBuffer)
-  })
+  const secrets = [
+    todoImageUrlSecret(),
+    ...(await getLegacyPlatformSecrets('todo_image_url')),
+    legacyTodoImageUrlSecretFromEnvironment(),
+  ]
+  return isTodoImageSignatureValid(objectKey, signature, secrets)
 }
 
 function todoImageUrl(objectKey: string) {
-  return `/api/todo-images?key=${encodeURIComponent(objectKey)}&sig=${encodeURIComponent(todoImageSignature(objectKey))}`
+  return `/api/todo-images?key=${encodeURIComponent(objectKey)}&sig=${encodeURIComponent(todoImageSignature(objectKey, todoImageUrlSecret()))}`
 }
 
 function formatPriorityLabel(priority: Priority) {
