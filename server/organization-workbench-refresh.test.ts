@@ -119,14 +119,12 @@ test('organization overview renders every current Bug status as user-facing Chin
   assert.match(workbenchSource, /pending_confirmation: '待确认'/u)
 })
 
-test('organization weekly reminders stay outside the native disclosure trigger', () => {
-  const summaryStart = workbenchSource.indexOf('<summary>')
-  const summaryEnd = workbenchSource.indexOf('</summary>', summaryStart)
-
-  assert.notEqual(summaryStart, -1)
-  assert.notEqual(summaryEnd, -1)
-  assert.doesNotMatch(workbenchSource.slice(summaryStart, summaryEnd), /<Button/u)
-  assert.match(workbenchSource, /className="organization-weekly-reminder"/u)
+test('organization collection separates reading and reminder actions and guards stale week responses', () => {
+  assert.match(workbenchSource, /className="wr-collection-table"/u)
+  assert.match(workbenchSource, /setWeeklyReadingUserId\(member.userId\)/u)
+  assert.match(workbenchSource, /remindWeeklyReportUsers\(\[member.userId\]\)/u)
+  assert.match(workbenchSource, /if \(request === weeklyCollectionRequest.current.version\) setWeeklyCollection\(collection\)/u)
+  assert.match(workbenchSource, /return \(\) => \{ requests.version\+\+ \}/u)
 })
 
 test('organization workbench uses readable scoped colors for secondary and status text', () => {

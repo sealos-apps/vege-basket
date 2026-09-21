@@ -11,6 +11,7 @@ import { formatTestSpaceReference } from '../../shared/test-space-reference'
 import { createPortal } from 'react-dom'
 import {
   Buildings,
+  ArrowLeft,
   ArrowsLeftRight,
   Bug,
   CalendarBlank,
@@ -92,6 +93,7 @@ import {
   defaultWeeklyReportRules,
   getShanghaiDateTime,
   getWeeklyReportRulesExample,
+  getWeeklyReportWindow,
   getWeeklyReportTargetWeekStart,
   normalizeWeeklyReportRules,
 } from '../../shared/weekly-report-availability'
@@ -347,7 +349,8 @@ function reportWeekStart(
   return getWeeklyReportTargetWeekStart({ now, rules, weekStartsOn })
 }
 
-function formatDateTime(value: string) {
+function formatDateTime(value: string | null) {
+  if (!value) return '--'
   return new Intl.DateTimeFormat('zh-CN', {
     day: '2-digit',
     hour: '2-digit',
@@ -445,8 +448,11 @@ export function OrganizationWorkbench({
   const [weeklyCollectionRefresh, setWeeklyCollectionRefresh] = useState(0)
   const [backgroundRefreshVersion, setBackgroundRefreshVersion] = useState(0)
   const [weeklyReminderNotice, setWeeklyReminderNotice] = useState('')
-  const [weeklyRulesOpen, setWeeklyRulesOpen] = useState(false)
   const [weeklyAdminTab, setWeeklyAdminTab] = useState<'collection' | 'summary' | 'rules'>('collection')
+  const [weeklyReadingUserId, setWeeklyReadingUserId] = useState<number | null>(null)
+  const [selectedReportWeek, setSelectedReportWeek] = useState('')
+  const weeklyRulesContext = useRef(0)
+  const weeklyCollectionRequest = useRef({ version: 0 })
   const [weeklyRulesError, setWeeklyRulesError] = useState('')
   const [weeklyRulesDraft, setWeeklyRulesDraft] = useState<WeeklyReportRules>(defaultWeeklyReportRules)
   const [weeklyRulesWeekStartsOn, setWeeklyRulesWeekStartsOn] = useState(1)
@@ -623,21 +629,24 @@ export function OrganizationWorkbench({
   }, [backgroundRefreshVersion, packageMarketOrganizationId, tab])
 
   useEffect(() => {
-    if (detail) {
+    if (detail && weeklyRulesContext.current !== detail.id) {
+      weeklyRulesContext.current = detail.id
       setWeeklyRulesDraft(detail.weeklyReportRules)
       setWeeklyRulesWeekStartsOn(detail.weekStartsOn)
       setWeeklyReportAssigneeUserIds(detail.weeklyReportAssigneeUserIds)
+      setSelectedReportWeek('')
+      setWeeklyReadingUserId(null)
+      setWeeklyAdminTab('collection')
     }
   }, [detail])
 
-  function openWeeklyRulesDialog() {
+  function resetWeeklyRules() {
     if (!detail) return
     setWeeklyRulesDraft(detail.weeklyReportRules)
     setWeeklyRulesWeekStartsOn(detail.weekStartsOn)
     setWeeklyReportAssigneeUserIds(detail.weeklyReportAssigneeUserIds)
     setWeeklyReportAssigneeQuery('')
     setWeeklyRulesError('')
-    setWeeklyRulesOpen(true)
   }
 
   async function mutate(operation: () => Promise<OrganizationDetail>, confirmed = false, matches: (data: OrganizationDetail) => boolean = () => false) {
@@ -758,18 +767,20 @@ export function OrganizationWorkbench({
     setBusy(true)
     setWeeklyRulesError('')
     setError('')
+    const scope = actionScopeRef.current
     try {
       const nextDetail = await updateOrganizationWeeklyReportRules(detail.id, {
         weekStartsOn: weeklyRulesWeekStartsOn,
         weeklyReportAssigneeUserIds,
         weeklyReportRules: rules,
       })
+      if (scope !== actionScopeRef.current) return
       setDetail(nextDetail)
       setWeeklyCollection(null)
       setWeeklyCollectionRefresh((value) => value + 1)
-      setWeeklyRulesOpen(false)
+      setWeeklyAdminTab('collection')
     } catch (saveError) {
-      setWeeklyRulesError(errorMessage(saveError))
+      if (scope === actionScopeRef.current) setWeeklyRulesError(errorMessage(saveError))
     } finally {
       setBusy(false)
     }
@@ -842,16 +853,28 @@ export function OrganizationWorkbench({
     ))
   }, [detail, projectHealth, projectQuery, projectStatus])
 
-  const weekStart = reportWeekStart(
+  const targetReportWeek = reportWeekStart(
     detail?.weekStartsOn ?? 1,
     detail?.weeklyReportRules ?? defaultWeeklyReportRules,
   )
+  const weekStart = selectedReportWeek || targetReportWeek
+  const weeklyReadingMember = weeklyCollection?.members.find(member => member.userId === weeklyReadingUserId && member.revision != null)
   const weeklyReportMemberCount = weeklyCollection?.members.length
     ?? detail?.members.filter((member) => (
       member.weeklyReportRequired && member.username.toLowerCase() !== 'admin'
     )).length
     ?? 0
   const currentSummary = detail?.summaries.find((summary) => summary.weekStart === weekStart)
+  const weeklySubmittedCount = weeklyCollection?.members.filter(member => member.revision != null).length ?? 0
+  const weeklyDeadline = getWeeklyReportWindow({ weekStart, rules: detail?.weeklyReportRules }).closesAt
+  function collectionMemberRoles(member: WeeklyReportCollection['members'][number]) {
+    if (member.reportProfile) return [member.reportProfile]
+    if (member.revision != null) return []
+    return detail?.members.find(candidate => candidate.id === member.userId)?.roles.filter(role => role === 'developer' || role === 'tester') ?? []
+  }
+  const visibleWeeklyMembers = weeklyCollection?.members.filter(member => member.memberName.includes(reportMemberQuery)
+    && (reportMemberRole === 'all' || collectionMemberRoles(member).includes(reportMemberRole))
+    && (reportMemberStatus === 'all' || (reportMemberStatus === 'submitted' ? member.revision !== null : member.revision === null))) ?? []
   const weeklyReportAssigneeCandidates = detail?.members.filter((member) => (
     member.username.toLowerCase() !== 'admin'
   )) ?? []
@@ -895,19 +918,27 @@ export function OrganizationWorkbench({
   const weeklyOrganizationId = detail?.id ?? 0
   const canManageWeeklyReports = detail?.canManageWeeklyReports ?? false
   const loadWeeklyCollection = useCallback(async () => {
+    const request = ++weeklyCollectionRequest.current.version
     if (!canManageWeeklyReports || !weeklyOrganizationId) {
       setWeeklyCollection(null)
       return
     }
     setWeeklyCollectionLoading(true)
     try {
-      setWeeklyCollection(await fetchWeeklyReportCollection(weeklyOrganizationId, weekStart))
+      const collection = await fetchWeeklyReportCollection(weeklyOrganizationId, weekStart)
+      if (request === weeklyCollectionRequest.current.version) setWeeklyCollection(collection)
     } catch (loadError) {
-      setError(errorMessage(loadError))
+      if (request === weeklyCollectionRequest.current.version) setError(errorMessage(loadError))
     } finally {
-      setWeeklyCollectionLoading(false)
+      if (request === weeklyCollectionRequest.current.version) setWeeklyCollectionLoading(false)
     }
   }, [canManageWeeklyReports, weekStart, weeklyOrganizationId])
+
+  useEffect(() => {
+    const requests = weeklyCollectionRequest.current
+    setWeeklyCollection(null)
+    return () => { requests.version++ }
+  }, [weekStart, weeklyOrganizationId])
 
   useEffect(() => {
     if (tab !== 'reports') return
@@ -1425,35 +1456,22 @@ export function OrganizationWorkbench({
                 <span>{formatWeekRange(weekStart)}</span>
               </div>
               <div className="organization-report-header-actions">
-                {detail.canManageWeeklyReports ? (
-                  <Dialog open={weeklyRulesOpen} onOpenChange={(open) => {
-                    setWeeklyRulesOpen(open)
-                    setWeeklyRulesError('')
-                    if (open) {
-                      setWeeklyRulesDraft(detail.weeklyReportRules)
-                      setWeeklyRulesWeekStartsOn(detail.weekStartsOn)
-                      setWeeklyReportAssigneeUserIds(detail.weeklyReportAssigneeUserIds)
-                      setWeeklyReportAssigneeQuery('')
-                    }
-                  }}>
-                    <DialogTrigger asChild>
-                      <Button
-                        disabled={busy}
-                        type="button"
-                        variant="outline"
-                      >
-                        <GearSix size={16} /> 配置周报规则
-                      </Button>
-                    </DialogTrigger>
-                    <DialogContent className="organization-weekly-rules-dialog">
-                      <DialogHeader>
-                        <DialogTitle>配置周报规则</DialogTitle>
-                        <DialogDescription>
-                          设置组织周起始日和周报可填写时段，时间均按北京时间计算。
-                        </DialogDescription>
-                      </DialogHeader>
+                <Select value={weekStart} onValueChange={value => { setSelectedReportWeek(value); setWeeklyReadingUserId(null) }}>
+                  <SelectTrigger aria-label="组织周报周期" disabled={busy}><CalendarBlank size={16} /><SelectValue /></SelectTrigger>
+                  <SelectContent>{Array.from({ length: 12 }, (_, index) => shiftDateOnly(targetReportWeek, -index * 7)).map(value => <SelectItem value={value} key={value}>{formatWeekRange(value)}</SelectItem>)}</SelectContent>
+                </Select>
+                {weeklyReadingMember ? <Button variant="outline" onClick={() => { setWeeklyReadingUserId(null); setWeeklyAdminTab('collection') }}><ArrowLeft size={16} />返回收集列表</Button> : null}
+              </div>
+            </header>
+            {detail.canManageWeeklyReports && !weeklyReadingMember ? <nav className="organization-weekly-report-tabs" aria-label="组织周报视图">
+              {(['collection', 'summary', 'rules'] as const).map(view => <button key={view} type="button" disabled={busy} aria-pressed={weeklyAdminTab === view} onClick={() => setWeeklyAdminTab(view)}>{view === 'collection' ? `收集情况 ${weeklyCollection?.members.filter(member => member.revision != null).length ?? 0}/${weeklyReportMemberCount}` : view === 'summary' ? '组织汇总' : '周报规则'}</button>)}
+            </nav> : null}
+            {detail.canManageWeeklyReports && weeklyAdminTab === 'rules' && !weeklyReadingMember ? (
+              <div className="organization-weekly-rules-layout">
+                <section className="organization-weekly-rules-page">
+                      <h3>填写周期</h3>
                       {weeklyRulesError ? <div className="organization-error" role="alert">{weeklyRulesError}</div> : null}
-                      <form className="organization-weekly-rules-form" onSubmit={submitWeeklyReportRules}>
+                      <form className="organization-weekly-rules-form" onSubmit={submitWeeklyReportRules}><fieldset disabled={busy} className="wr-rules-fields">
                         <Label>
                           周起始日
                           <Select
@@ -1613,40 +1631,29 @@ export function OrganizationWorkbench({
                           </ol>
                           <p>未选成员仍可查看自己的历史周报，但不再计入提交统计和填写提醒。</p>
                         </fieldset>
-                        <DialogFooter>
-                          <DialogClose asChild><Button disabled={busy} type="button" variant="outline">取消</Button></DialogClose>
+                        <footer className="wr-rules-footer">
+                          <Button disabled={busy} type="button" variant="outline" onClick={() => { resetWeeklyRules(); setWeeklyAdminTab('collection') }}>取消</Button>
                           <Button disabled={busy} type="submit">保存规则</Button>
-                        </DialogFooter>
-                      </form>
-                    </DialogContent>
-                  </Dialog>
-                ) : null}
-                <Button
-                  disabled={
-                    busy
-                    || weeklyCollectionLoading
-                    || !weeklyCollection?.members.some((member) => member.revision != null)
-                    || !detail.canManageWeeklyReports
-                  }
-                  type="button"
-                  onClick={() => void mutate(() => generateOrganizationWeeklySummary(detail.id, weekStart))}
-                ><Sparkle size={16} /> AI 汇总</Button>
+                        </footer>
+                      </fieldset></form>
+                </section>
+                <aside className="wr-admin-aside"><h3>规则如何生效</h3><p>开发和测试分别使用自己的周报模板。</p><p>取消填写资格后，成员仍可阅读历史周报，不再计入收集和催交名单。</p><p>同一成员每个组织周只有一份周报。已选成员的排列顺序在保存后生效。</p></aside>
               </div>
-            </header>
-            {detail.canManageWeeklyReports ? (
+            ) : null}
+            {detail.canManageWeeklyReports && weeklyReadingMember ? <div className="wr-admin-reading">
+              <aside className="wr-admin-members"><h3>已提交成员</h3>{weeklyCollection?.members.filter(member => member.revision != null).map(member => <button key={member.userId} type="button" aria-pressed={member.userId === weeklyReadingUserId} onClick={() => setWeeklyReadingUserId(member.userId)}><strong>{member.memberName}</strong><small>{member.reportProfile ? weeklyReportProfiles[member.reportProfile].label : '历史周报'} · 第 {member.revision} 版</small></button>)}</aside>
+              <article className="wr-admin-paper"><p className="wr-published-note">{weeklyReadingMember.state === 'modified' ? '该成员有未提交修改，以下为上次确认提交的版本。' : '以下为成员已确认提交的版本。'}</p><div className="wr-paper-title"><small>{detail.name} / 已提交周报</small><h2>{weeklyReadingMember.memberName}的{weeklyReadingMember.reportProfile ? weeklyReportProfiles[weeklyReadingMember.reportProfile].label : '周报'}</h2><p>{formatWeekRange(weekStart)} · 第 {weeklyReadingMember.revision} 版 · {formatDateTime(weeklyReadingMember.submittedAt)}</p></div><WeeklyReportReading content={weeklyReadingMember.content} sourceSnapshots={weeklyReadingMember.sourceSnapshots} published /></article>
+            </div> : null}
+            {detail.canManageWeeklyReports && !weeklyReadingMember ? (
               <>
-                <nav className="organization-weekly-report-tabs" aria-label="组织周报视图" role="tablist">
-                  <button type="button" role="tab" aria-selected={weeklyAdminTab === 'collection'} onClick={() => setWeeklyAdminTab('collection')}>收集情况</button>
-                  <button type="button" role="tab" aria-selected={weeklyAdminTab === 'summary'} onClick={() => setWeeklyAdminTab('summary')}>组织汇总</button>
-                  <button type="button" role="tab" aria-selected={weeklyAdminTab === 'rules'} onClick={() => { setWeeklyAdminTab('rules'); openWeeklyRulesDialog() }}>周报规则</button>
-                </nav>
-                {weeklyAdminTab === 'collection' ? <div className="organization-weekly-tab-intro">按成员查看提交状态、角色和任务平均进度；草稿内容不会出现在这里。</div> : null}
                 {weeklyAdminTab === 'collection' ? <div className="organization-report-collection-toolbar">
                   <div>
                     <strong>
                       已提交 {weeklyCollection?.members.filter((member) => member.revision != null).length ?? 0}
                       {' / '}{weeklyReportMemberCount}
                     </strong>
+                    <progress aria-label="周报提交率" max={weeklyReportMemberCount || 1} value={weeklySubmittedCount} />
+                    <span>待提交 {weeklyReportMemberCount - weeklySubmittedCount} 人 · 截止 {formatWeeklyRuleBoundary(weeklyDeadline)}</span>
                     <span>{weeklyReminderNotice || '草稿正文仅成员本人可见'}</span>
                   </div>
                   <Button
@@ -1660,41 +1667,24 @@ export function OrganizationWorkbench({
                     )}
                   ><PaperPlaneTilt size={16} /> 提醒未提交成员</Button>
                 </div> : null}
-                {weeklyAdminTab === 'summary' ? <>
+                {weeklyAdminTab !== 'rules' ? <>
                   <div className="wr-org-progress">{(['all', 'developer', 'tester'] as const).map(profile => <WeeklyReportProgress key={profile} title={profile === 'all' ? '已提交任务平均进度' : `${profile === 'developer' ? '开发' : '测试'}任务平均进度`} summary={combineWeeklyReportProgress((weeklyCollection?.members ?? []).filter(member => member.revision != null && (profile === 'all' || member.reportProfile === profile)).map(member => member.progressSummary))} />)}</div>
                   <p className="wr-source-note">仅统计已提交任务记录；未提交成员及个人草稿不计入。已记录进度 {weeklyCollection?.members.filter(member => member.revision && member.progressSummary).length ?? 0} / {weeklyCollection?.members.filter(member => member.revision).length ?? 0} 份提交周报；历史无进度报告不纳入均值。各组按全部任务等权计算，列表筛选不改变组织统计范围。</p>
                 </> : null}
                 {weeklyAdminTab === 'collection' ? <>
                 <div className="wr-org-filters"><Input aria-label="搜索周报成员" placeholder="搜索成员" value={reportMemberQuery} onChange={e => setReportMemberQuery(e.target.value)} /><select aria-label="筛选周报身份" value={reportMemberRole} onChange={e => setReportMemberRole(e.target.value as typeof reportMemberRole)}><option value="all">全部身份</option><option value="developer">开发</option><option value="tester">测试</option></select><select aria-label="筛选周报提交状态" value={reportMemberStatus} onChange={e => setReportMemberStatus(e.target.value)}><option value="all">全部提交状态</option><option value="submitted">已有提交版</option><option value="pending">尚未提交</option></select></div>
-                <div className="organization-weekly-collection">
+                <div className="organization-weekly-collection wr-collection-scroll">
                   {weeklyCollectionLoading && !weeklyCollection ? <EmptyRow text="正在加载周报收集状态..." /> : null}
-                  {weeklyCollection?.members.filter(member => member.memberName.includes(reportMemberQuery) && (reportMemberRole === 'all' || member.reportProfile === reportMemberRole) && (reportMemberStatus === 'all' || (reportMemberStatus === 'submitted' ? member.revision !== null : member.revision === null))).map((member) => (
-                    <div className="organization-weekly-member" key={member.userId}>
-                      <details>
-                        <summary>
-                          <span>
-                            <UserName departedUserIds={detail.departedUserIds} name={member.memberName} userId={member.userId} />
-                            <small>{member.reportProfile ? weeklyReportProfiles[member.reportProfile].label : '历史或尚未创建'} · {member.submittedAt ? `最近提交 ${formatDateTime(member.submittedAt)}` : '尚未提交本周周报'}</small>
-                            <small>任务平均进度 {formatWeeklyReportPercent(member.progressSummary?.averagePercent ?? null)}{member.progressSummary ? ` · ${member.progressSummary.taskCount} 项任务` : ''}</small>
-                          </span>
-                          <span className={`organization-weekly-state ${member.state}`}>
-                            {weeklyReportStateLabel[member.state]}
-                          </span>
-                          <span className="organization-weekly-revision">
-                            {member.revision ? `第 ${member.revision} 版` : '无提交版本'}
-                          </span>
-                          <CaretDown size={16} />
-                        </summary>
-                        {member.content ? (
-                          <div className="organization-weekly-content">
-                            {member.state === 'modified' ? <p className="wr-source-note">该成员有未提交修改，以下仍为上次提交的内容和进度。</p> : null}
-                            <WeeklyReportReading content={member.content} />
-                          </div>
-                        ) : <EmptyRow text="该成员还没有可查看的提交版本" />}
-                      </details>
-                      {member.revision == null ? (
+                  <table className="wr-collection-table"><thead><tr><th>成员</th><th>职业身份</th><th>提交状态</th><th>任务平均进度</th><th>最近提交</th><th>操作</th></tr></thead><tbody>
+                  {visibleWeeklyMembers.map((member) => (
+                    <tr key={member.userId}>
+                      <td><UserName departedUserIds={detail.departedUserIds} name={member.memberName} userId={member.userId} /></td>
+                      <td>{member.reportProfile ? weeklyReportProfiles[member.reportProfile].label : member.revision ? '历史周报' : collectionMemberRoles(member).map(role => role === 'developer' ? '开发' : '测试').join(' / ') || '尚未确定'}</td>
+                      <td><span className={`organization-weekly-state ${member.state}`}>{weeklyReportStateLabel[member.state]}</span></td>
+                      <td><strong>{formatWeeklyReportPercent(member.progressSummary?.averagePercent ?? null)}</strong><small>{member.progressSummary ? `${member.progressSummary.taskCount} 项任务` : member.revision ? '历史周报无进度' : '尚未提交，不计入'}</small>{member.progressSummary ? <progress max={100} value={member.progressSummary.averagePercent ?? 0} /> : null}</td>
+                      <td>{formatDateTime(member.submittedAt)}<small>{member.revision ? `第 ${member.revision} 版` : '尚未提交'}</small></td>
+                      <td>{member.revision != null ? <Button variant="ghost" size="sm" onClick={() => setWeeklyReadingUserId(member.userId)}>阅读周报</Button> : (
                         <Button
-                          className="organization-weekly-reminder"
                           disabled={busy || !member.feishuBound}
                           size="sm"
                           title={member.feishuBound ? '发送飞书私信提醒' : '该成员未绑定飞书'}
@@ -1702,25 +1692,27 @@ export function OrganizationWorkbench({
                           variant="outline"
                           onClick={() => void remindWeeklyReportUsers([member.userId])}
                         >{member.feishuBound ? '提醒填写' : '未绑定飞书'}</Button>
-                      ) : null}
-                    </div>
+                      )}</td>
+                    </tr>
                   ))}
+                  {!weeklyCollectionLoading && !visibleWeeklyMembers.length ? <tr><td colSpan={6}>没有符合条件的成员。</td></tr> : null}
+                  </tbody></table>
                 </div>
                 </> : null}
               </>
-            ) : (
+            ) : !detail.canManageWeeklyReports ? (
               <EmptyRow text="需要组织管理员身份才能管理周报收集" />
-            )}
-            {weeklyAdminTab === 'summary' ? <div className="organization-summary-band">
+            ) : null}
+            {detail.canManageWeeklyReports && !weeklyReadingMember && weeklyAdminTab === 'summary' ? <div className="organization-summary-band wr-summary-layout">
               <div>
-                <strong>组织汇总</strong>
-                <span>仅使用成员已确认提交的版本</span>
-              </div>
+                <div className="wr-paper-title"><small>{detail.name} / 已提交周报汇总</small><h2>本周组织工作汇总</h2><p>{formatWeekRange(weekStart)}{currentSummary ? ` · 基于 ${currentSummary.sourceReportCount} 份提交版本 · ${formatDateTime(currentSummary.createdAt)}` : ''}</p></div>
               {currentSummary ? (
                 <div className="organization-summary-content">
                   <MarkdownPreview content={currentSummary.content} />
                 </div>
               ) : <EmptyRow text="本周暂无组织周报汇总" />}
+              </div>
+              <aside className="wr-admin-aside"><h3>汇总范围</h3><p>当前已提交 {weeklyCollection?.members.filter(member => member.revision != null).length ?? 0} / {weeklyReportMemberCount} 份</p><p>草稿及未提交修改不参与。执行记录按成员分别呈现，不直接累加可能重复的用例数。</p><Button disabled={busy || weeklyCollectionLoading || !weeklyCollection?.members.some(member => member.revision != null)} onClick={() => void mutate(() => generateOrganizationWeeklySummary(detail.id, weekStart))}><Sparkle size={16} />{currentSummary ? '重新生成' : '生成组织汇总'}</Button><h3>已提交来源</h3>{weeklyCollection?.members.filter(member => member.revision != null).map(member => <Button key={member.userId} variant="ghost" onClick={() => setWeeklyReadingUserId(member.userId)}>{member.memberName} · 第 {member.revision} 版</Button>)}</aside>
             </div> : null}
           </section>
         ) : null}

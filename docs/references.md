@@ -232,7 +232,10 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   `period.start/endExclusive`, `matchedDate`, and `matchReason`. Project sources use `projectId`;
   Bug/test-plan sources use `testSpaceId`. Source identities and parent IDs are validated on the server.
 - `PUT /api/weekly-reports/:organizationId/:weekStart/draft` accepts the existing Markdown `content`,
-  `expectedVersion`, `sourceMode`, and `sources`; `convertLegacy: true` explicitly converts a strictly
+  `expectedVersion`, `sourceMode`, `sources`, and optional `itemSources` (`itemIndex` plus canonical
+  source references). Item references must belong to `sources`; client statistics are discarded.
+  Detail returns `itemSources`, `publishedSourceSnapshots`, `organizationName`, and `authorName`;
+  organization collection returns only published `sourceSnapshots`. `convertLegacy: true` explicitly converts a strictly
   recognizable legacy report and fixes its persona. New reports always use the active developer/tester
   persona. The legacy `PUT /api/organizations/:organizationId/weekly-reports/:weekStart` returns 410.
 - Task progress is a nullable integer in drafts and required for submission. Status derives from exact

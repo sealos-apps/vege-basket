@@ -87,3 +87,13 @@ export type WeeklyReportSourceResult = {
 export function weeklyReportSourceIdentity(source: WeeklyReportSourceRef) {
   return `${source.kind}:${source.id}:${'projectId' in source ? source.projectId : source.testSpaceId}`
 }
+
+export type WeeklyReportItemSources = {
+  itemIndex: number
+  sources: WeeklyReportSourceRef[]
+}
+
+export type WeeklyReportSourceSnapshot = {
+  itemIndex: number
+  sources: (WeeklyReportSourceRef & Omit<WeeklyReportSourceCandidate, 'personalExecutionRecords'>)[]
+}

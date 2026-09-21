@@ -1,4 +1,6 @@
 import type express from 'express'
+import { buildWeeklyReportSnapshots, normalizeWeeklyReportItemSources, retainWeeklyReportItemSources } from './weekly-report-snapshots.ts'
+import type { WeeklyReportItemSources, WeeklyReportSourceSnapshot } from '../shared/weekly-report-profile.ts'
 import { Router } from 'express'
 import type { PoolClient } from 'pg'
 import { decryptText, encryptText } from './crypto.ts'
@@ -328,6 +330,7 @@ async function saveDraft(params: {
   profile: WeeklyReportProfile
   strictSources?: boolean
   convertLegacy?: boolean
+  itemSources?: unknown
   sourceMode: WeeklyReportSourceMode
   sources: WeeklyReportSourceRef[]
   userId: number
@@ -371,6 +374,9 @@ async function saveDraft(params: {
     }
     const profile = report && !params.convertLegacy ? report.report_profile : params.profile
     assertReportContent(params.content, profile)
+    let itemSources: WeeklyReportItemSources[]
+    try { itemSources = normalizeWeeklyReportItemSources(params.itemSources, params.content, params.sources) }
+    catch (error) { throw new WeeklyReportError(400, error instanceof Error ? error.message : '事项来源无效') }
     const existing = report ? await readDraftSources(client, report.id) : []
     const previous = new Set(existing.map(weeklyReportSourceIdentity))
     const added = params.sources.filter(ref => !previous.has(weeklyReportSourceIdentity(ref)))
@@ -411,6 +417,7 @@ async function saveDraft(params: {
       )
     }
     await replaceDraftSources(client, reportId, params.sources)
+    await client.query('update organization_weekly_reports set draft_item_sources = $1::text where id = $2::bigint', [encryptText(JSON.stringify(itemSources)), reportId])
     await client.query('commit')
   } catch (error) {
     await client.query('rollback')
@@ -435,13 +442,20 @@ async function getWeeklyReport(organizationId: number, userId: number, weekStart
       published_draft_version: number | null
       published_revision_number: number | null
       published_submitted_at: Date | null
+      draft_item_sources: string | null
+      source_snapshots: string | null
+      organization_name: string
+      author_name: string
     }>(
       `select report.id, report.report_profile, report.draft_content, report.draft_version,
          report.draft_source_mode, revision.content as published_content,
          revision.draft_version as published_draft_version,
          revision.revision_number as published_revision_number,
-         revision.submitted_at as published_submitted_at
+         revision.submitted_at as published_submitted_at, report.draft_item_sources, revision.source_snapshots,
+         organization.name as organization_name, coalesce(nullif(author.display_name, ''), author.email) as author_name
        from organization_weekly_reports report
+       join organizations organization on organization.id = report.organization_id
+       join users author on author.id = report.user_id
        left join organization_weekly_report_revisions revision
          on revision.id = report.published_revision_id
        where report.organization_id = $1 and report.user_id = $2 and report.week_start = $3`,
@@ -460,6 +474,10 @@ async function getWeeklyReport(organizationId: number, userId: number, weekStart
           : 'modified'
     return {
       content: report ? decryptText(report.draft_content) : '',
+      itemSources: retainWeeklyReportItemSources(report?.draft_item_sources ? JSON.parse(decryptText(report.draft_item_sources)) as WeeklyReportItemSources[] : [], sources),
+      publishedSourceSnapshots: report?.source_snapshots ? JSON.parse(decryptText(report.source_snapshots)) as WeeklyReportSourceSnapshot[] : [],
+      organizationName: report ? decryptText(report.organization_name) : '',
+      authorName: report?.author_name ?? '',
       draftVersion,
       publishedContent: report?.published_content ? decryptText(report.published_content) : '',
       publishedRevision,
@@ -572,8 +590,9 @@ async function submitWeeklyReport(params: {
       draft_source_mode: WeeklyReportSourceMode
       draft_version: number
       id: string
+      draft_item_sources: string | null
     }>(
-      `select id, report_profile, draft_content, draft_version, draft_source_mode
+      `select id, report_profile, draft_content, draft_version, draft_source_mode, draft_item_sources
        from organization_weekly_reports
        where organization_id = $1 and user_id = $2 and week_start = $3
        for update`,
@@ -588,8 +607,11 @@ async function submitWeeklyReport(params: {
     await requireWeeklyProfile(client, params.userId, params.profile)
     if (report.report_profile && report.report_profile !== params.profile) throw new WeeklyReportError(409, '请切换到周报对应身份后提交')
     assertReportContent(content, report.report_profile, true)
-    await checkSources(client, { organizationId: params.organizationId, userId: params.userId, weekStart, profile: params.profile,
+    const canonicalSources = await checkSources(client, { organizationId: params.organizationId, userId: params.userId, weekStart, profile: params.profile,
       refs: await readDraftSources(client, report.id), enforcePeriod: Boolean(report.report_profile), allowHistoricalKinds: !report.report_profile, lock: true })
+    const retainedBindings = retainWeeklyReportItemSources(report.draft_item_sources ? JSON.parse(decryptText(report.draft_item_sources)) : [], canonicalSources)
+    const bindings = normalizeWeeklyReportItemSources(retainedBindings, content, canonicalSources)
+    const sourceSnapshots = buildWeeklyReportSnapshots(content, bindings, canonicalSources)
     const parsed = parseWeeklyReportDocument(content)
     const publishedContent = encryptText(parsed ? serializeWeeklyReportDocument({ ...parsed,
       items: parsed.items.filter(hasItemContent).map(item => ({ ...item, tasks: item.tasks.filter(hasTaskContent) })) }) : content)
@@ -614,6 +636,7 @@ async function submitWeeklyReport(params: {
         report.report_profile,
       ],
     )
+    await client.query('update organization_weekly_report_revisions set source_snapshots = $1::text where id = $2::bigint', [encryptText(JSON.stringify(sourceSnapshots)), revision.rows[0].id])
     await client.query(
       `insert into organization_weekly_report_sources (
          report_id, revision_id, project_id, todo_id, package_event_id, milestone_id
@@ -853,6 +876,7 @@ async function loadCollection(client: PoolClient, organizationId: number, weekSt
     feishu_user_id: string | null
     report_profile: WeeklyReportProfile | null
     published_content: string | null
+    source_snapshots: string | null
     published_draft_version: number | null
     revision_number: number | null
     submitted_at: Date | null
@@ -862,7 +886,7 @@ async function loadCollection(client: PoolClient, organizationId: number, weekSt
        users.feishu_email, users.feishu_user_id,
        report.draft_version, revision.report_profile, revision.content as published_content,
        revision.draft_version as published_draft_version,
-       revision.revision_number, revision.submitted_at
+       revision.revision_number, revision.submitted_at, revision.source_snapshots
      from organization_memberships membership
      join users on users.id = membership.user_id
      left join organization_weekly_reports report
@@ -881,6 +905,7 @@ async function loadCollection(client: PoolClient, organizationId: number, weekSt
   )
   return result.rows.map((row) => ({
     content: row.published_content ? decryptText(row.published_content) : '',
+    sourceSnapshots: row.source_snapshots ? JSON.parse(decryptText(row.source_snapshots)) as WeeklyReportSourceSnapshot[] : [],
     reportProfile: row.report_profile,
     progressSummary: row.published_content ? weeklyReportContentProgress(decryptText(row.published_content)) : null,
     feishuBound: Boolean(row.feishu_user_id || row.feishu_email),
@@ -1013,6 +1038,7 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
     await saveDraft({
       profile,
       convertLegacy: request.body?.convertLegacy === true,
+      itemSources: request.body?.itemSources,
       content,
       expectedVersion,
       organizationId,

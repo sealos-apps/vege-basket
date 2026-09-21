@@ -405,6 +405,14 @@ draft references retain text while access is rechecked, and submission revalidat
 Canonical Bug/plan rows are locked before the final eligibility check and revision write. Task/source
 edits freeze while leaving, generating, or submitting; failed saves retain the editor and draft.
 
+Item/source bindings are stored separately from Markdown in encrypted `draft_item_sources`.
+Submission revalidates all references and writes encrypted `source_snapshots` in the same revision
+transaction. Snapshots contain canonical plan metadata and personal period execution counts, with
+indices remapped after blank items are removed. They omit detailed execution records and never
+read live counts when displaying a published revision. Historical null snapshots remain empty.
+The personal preview and administrator reader share the same read-only renderer. Organization
+collection, summary, and rules are separate page tabs; rules retain member ordering and search.
+
 Organization collection and reminder actions require both owner/admin organization
 membership and the additive `organization_admin` role.
 The membership row also stores the organization's long-lived weekly-report assignment. Rule

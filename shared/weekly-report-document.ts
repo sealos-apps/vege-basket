@@ -2,6 +2,7 @@ import {
   isWeeklyReportProfile,
   weeklyReportProfiles,
   type WeeklyReportProfile,
+  type WeeklyReportSourceRef,
 } from './weekly-report-profile.ts'
 
 export const WEEKLY_REPORT_CONTENT_LIMIT = 12_000
@@ -13,6 +14,7 @@ export type WeeklyReportTask = {
   progressPercent: number | null
 }
 export type WeeklyReportItem = {
+  sourceRefs?: WeeklyReportSourceRef[]
   id: string
   title: string
   tasks: WeeklyReportTask[]

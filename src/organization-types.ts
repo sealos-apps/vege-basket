@@ -162,10 +162,14 @@ export type OrganizationWeeklySummary = {
 }
 
 export type { WeeklyReportSourceKind, WeeklyReportSourceRef, WeeklyReportSourceCandidate } from '../shared/weekly-report-profile'
-import type { WeeklyReportProfile, WeeklyReportSourceKind, WeeklyReportSourceRef } from '../shared/weekly-report-profile'
+import type { WeeklyReportItemSources, WeeklyReportSourceSnapshot, WeeklyReportProfile, WeeklyReportSourceKind, WeeklyReportSourceRef } from '../shared/weekly-report-profile'
 import type { WeeklyReportProgressSummary } from '../shared/weekly-report-document'
 
 export type PersonalWeeklyReport = {
+  itemSources: WeeklyReportItemSources[]
+  publishedSourceSnapshots: WeeklyReportSourceSnapshot[]
+  organizationName: string
+  authorName: string
   activeProfile: WeeklyReportProfile
   reportProfile: WeeklyReportProfile | null
   allowedSourceKinds: WeeklyReportSourceKind[]
@@ -201,6 +205,7 @@ export type PersonalWeeklyReportList = {
 }
 
 export type WeeklyReportCollectionMember = {
+  sourceSnapshots: WeeklyReportSourceSnapshot[]
   reportProfile: WeeklyReportProfile | null
   progressSummary: WeeklyReportProgressSummary | null
   content: string

@@ -1,4 +1,4 @@
-import type { WeeklyReportSourceResult } from '../shared/weekly-report-profile'
+import type { WeeklyReportItemSources, WeeklyReportSourceResult } from '../shared/weekly-report-profile'
 import type {
   InboxItem,
   AiConversationContextKind,
@@ -1241,6 +1241,7 @@ export function savePersonalWeeklyReportDraft(
   payload: {
     content: string
     convertLegacy?: boolean
+    itemSources?: WeeklyReportItemSources[]
     expectedVersion: number
     sourceMode: 'ai' | 'manual'
     sources: WeeklyReportSourceRef[]

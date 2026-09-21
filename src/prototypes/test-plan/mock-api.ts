@@ -9,6 +9,10 @@ const response = (value: unknown, status = 200) => new Response(JSON.stringify(v
 const fail = (message: string): never => { throw new Error(message) }
 
 const emptyWeeklyReport = (weekStart: string): PersonalWeeklyReport => ({
+  itemSources: [],
+  publishedSourceSnapshots: [],
+  organizationName: '',
+  authorName: '',
   activeProfile: 'tester',
   reportProfile: null,
   allowedSourceKinds: [...weeklyReportProfiles.tester.sourceKinds],

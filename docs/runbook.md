@@ -255,7 +255,17 @@ backup; it backfills rows whose object key has the canonical `/ci/<branch>/<hash
 leaves branchless middleware CI rows unchanged. The migration is idempotent and does not rewrite
 package object keys.
 
-The weekly-report assignee release adds
+The weekly-report snapshot release adds
+encrypted nullable `organization_weekly_reports.draft_item_sources` and
+`organization_weekly_report_revisions.source_snapshots`
+(`server/migrations/20260921_weekly_report_snapshots.sql`, automatic schema version
+`20260921_schema_v8`). Startup applies the additive migration. Existing reports keep null
+snapshots; never reconstruct historical counts from current execution results. Both columns
+participate in the idempotent `db:encrypt-existing` command for legacy plaintext values.
+Before rollout, retain a database snapshot and the complete encryption key ring. An application
+rollback may leave these nullable columns intact; it does not restore the database.
+
+The earlier weekly-report assignee release adds
 `organization_memberships.weekly_report_required`. Existing and future memberships default to
 requiring a report, while the reserved `admin` account is excluded. The application startup path
 applies the compatible addition idempotently; the matching forward-only migration remains the

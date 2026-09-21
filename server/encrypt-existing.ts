@@ -174,6 +174,8 @@ async function main() {
   await encryptColumn('summaries', 'title')
   await encryptColumn('summaries', 'period')
   await encryptColumn('summaries', 'content')
+  await encryptColumn('organization_weekly_reports', 'draft_item_sources')
+  await encryptColumn('organization_weekly_report_revisions', 'source_snapshots')
   await encryptColumn('project_package_events', 'title')
   await encryptColumn('project_package_operations', 'title')
   await encryptColumn('project_package_operations', 'content')

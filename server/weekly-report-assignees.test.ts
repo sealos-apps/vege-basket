@@ -132,7 +132,7 @@ test('collection, reminders, and organization summaries use only current assigne
   )
   assert.match(
     organizationWorkbenchSource,
-    /weeklyCollection\?\.members\.some\(\(member\) => member\.revision != null\)/u,
+    /weeklyCollection\?\.members\.some\(member => member\.revision != null\)/u,
   )
 })
 
@@ -181,22 +181,15 @@ test('the rule editor combines assignment and ordering in one list while search 
   assert.match(organizationWorkbenchSource, /index === 0[\s\S]+index === selectedWeeklyReportAssignees\.length - 1/u)
 })
 
-test('weekly report member lists use the dialog as their only scroll container', () => {
-  const dialogStart = organizationWorkbenchStyles.indexOf('.organization-weekly-rules-dialog {')
-  const dialogEnd = organizationWorkbenchStyles.indexOf('.organization-weekly-rules-form {', dialogStart)
+test('weekly report rules use an inline page and avoid nested scrolling in the member list', () => {
   const listStart = organizationWorkbenchStyles.indexOf('.organization-weekly-assignee-list {')
   const listEnd = organizationWorkbenchStyles.indexOf('.organization-weekly-assignee-list > li', listStart)
 
-  assert.ok(dialogStart >= 0)
-  assert.ok(dialogEnd > dialogStart)
   assert.ok(listStart >= 0)
   assert.ok(listEnd > listStart)
-  const dialogStyles = organizationWorkbenchStyles.slice(dialogStart, dialogEnd)
   const listStyles = organizationWorkbenchStyles.slice(listStart, listEnd)
-  assert.match(dialogStyles, /overflow-y: auto/u)
-  assert.match(dialogStyles, /overscroll-behavior: contain/u)
-  assert.match(dialogStyles, /scrollbar-gutter: stable/u)
-  assert.match(dialogStyles, /::-webkit-scrollbar/u)
+  assert.match(organizationWorkbenchSource, /className="organization-weekly-rules-page"/u)
+  assert.doesNotMatch(organizationWorkbenchSource, /<DialogContent className="organization-weekly-rules-dialog"/u)
   assert.doesNotMatch(listStyles, /max-height/u)
   assert.doesNotMatch(listStyles, /overflow-y/u)
 })

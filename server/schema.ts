@@ -2673,6 +2673,10 @@ create index if not exists idx_test_bug_comments_bug_id
   on test_bug_comments(test_bug_id, created_at);
 -- Additive migration. Do not infer the occupational profile of historical reports.
 alter table organization_weekly_reports
+  add column if not exists draft_item_sources text;
+alter table organization_weekly_report_revisions
+  add column if not exists source_snapshots text;
+alter table organization_weekly_reports
   add column if not exists report_profile text check (report_profile in ('developer', 'tester'));
 alter table organization_weekly_report_revisions
   add column if not exists report_profile text check (report_profile in ('developer', 'tester'));

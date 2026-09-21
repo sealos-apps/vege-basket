@@ -1,5 +1,5 @@
 .wr-form {
-  padding: 22px;
+  padding: 24px 26px;
   overflow: auto;
   min-height: 0;
   flex: 1;
@@ -100,6 +100,20 @@
   padding: 16px 0;
   border-top: 1px solid var(--line);
 }
+
+.wr-paper-title { padding: 8px 0 20px; border-bottom: 1px solid var(--line); }
+.wr-paper-title small, .wr-paper-title p { color: var(--muted-text); font-size: 12px; line-height: 1.6; }
+.wr-paper-title h2 { margin: 10px 0; font-size: 23px; line-height: 1.35; }
+.wr-execution-summary { margin: 12px 0; padding: 14px 0; border-block: 1px solid var(--line); }
+.wr-execution-summary header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; }
+.wr-execution-summary p, .wr-execution-summary small, .wr-execution-summary header span { color: var(--muted-text); font-size: 11px; line-height: 1.6; }
+.wr-execution-counts { display: flex; flex-wrap: wrap; gap: 18px; padding: 10px 0; }
+.wr-execution-counts span { display: grid; gap: 4px; font-size: 11px; color: var(--muted-text); }
+.wr-execution-counts b { font-size: 19px; color: var(--strong); }
+.wr-execution-counts span:nth-child(2) b { color: var(--primary); }
+.wr-execution-counts span:nth-child(3) b { color: var(--destructive); }
+.wr-linked-sources { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 14px; color: var(--muted-text); font-size: 11px; }
+.wr-linked-sources span:not(:first-child) { border-left: 2px solid var(--line); padding-left: 8px; }
 .wr-item > header {
   display: flex;
   align-items: center;

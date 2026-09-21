@@ -15,6 +15,9 @@ import { MarkdownPreview } from './markdown-preview'
 import {
   weeklyReportProfiles,
   type WeeklyReportSourceCandidate,
+  type WeeklyReportItemSources,
+  type WeeklyReportSourceSnapshot,
+  weeklyReportSourceIdentity,
 } from '../../shared/weekly-report-profile'
 import {
   createWeeklyReportItem,
@@ -76,7 +79,19 @@ export function WeeklyReportProgress({
   )
 }
 
-export function WeeklyReportReading({ content }: { content: string }) {
+export function WeeklyReportExecutionSummary({ sources, published = false }: { sources: WeeklyReportSourceSnapshot['sources']; published?: boolean }) {
+  return <>{sources.filter(source => source.kind === 'test_plan' && source.personalExecutionStats).map(source => {
+    const stats = source.personalExecutionStats!
+    return <section className="wr-execution-summary" key={weeklyReportSourceIdentity(source)}>
+      <header><strong>{source.title}</strong><span>{source.testSpaceName} {source.versionLabel}</span></header>
+      <p>{source.testSubjects?.map(subject => subject.name).join(' / ')}</p>
+      <div className="wr-execution-counts">{([['记录', stats.total], ['通过', stats.passed], ['失败', stats.failed], ['阻塞', stats.blocked], ['跳过', stats.skipped]] as const).map(([label, count]) => <span key={label}><b>{count}</b>{label}</span>)}</div>
+      <small>本人本周期保留的最新执行记录 · {published ? '提交时快照' : '提交时重新核验'} · 独立于任务进度</small>
+    </section>
+  })}</>
+}
+
+export function WeeklyReportReading({ content, sourceSnapshots = [], published = false }: { content: string; sourceSnapshots?: WeeklyReportSourceSnapshot[]; published?: boolean }) {
   const document = useMemo(() => parseWeeklyReportDocument(content), [content])
   if (!document) return <MarkdownPreview content={content} />
   const labels = weeklyReportProfiles[document.profile]
@@ -89,9 +104,7 @@ export function WeeklyReportReading({ content }: { content: string }) {
           <MarkdownPreview content={document.goal} />
         </section>
       ) : null}
-      {document.items
-        .filter((item) => item.title.trim() || item.tasks.some(hasTaskContent))
-        .map((item, index) => (
+      {document.items.map((item, index) => item.title.trim() || item.tasks.some(hasTaskContent) ? (
           <section key={item.id}>
             <h3>
               {String(index + 1).padStart(2, '0')} {item.title}
@@ -102,6 +115,7 @@ export function WeeklyReportReading({ content }: { content: string }) {
                 )}
               </small>
             </h3>
+            <WeeklyReportExecutionSummary sources={sourceSnapshots.find(snapshot => snapshot.itemIndex === index)?.sources ?? []} published={published} />
             <h4>{labels.progress}</h4>
             <div className="wr-reading-tasks">
               {item.tasks.filter(hasTaskContent).map((task) => (
@@ -129,7 +143,7 @@ export function WeeklyReportReading({ content }: { content: string }) {
             <h4>{labels.plan}</h4>
             <MarkdownPreview content={item.plan || '未填写'} />
           </section>
-        ))}
+        ) : null)}
     </article>
   )
 }
@@ -144,18 +158,23 @@ export type WeeklyReportFormHandle = {
 }
 export const WeeklyReportForm = forwardRef<
   WeeklyReportFormHandle,
-  { content: string; disabled?: boolean; onChange: (content: string) => void }
->(function WeeklyReportForm({ content, disabled = false, onChange }, ref) {
-  const document = useMemo(() => parseWeeklyReportDocument(content), [content])
+  { content: string; itemSources?: WeeklyReportItemSources[]; candidates?: WeeklyReportSourceCandidate[]; disabled?: boolean; onChange: (content: string, sources: WeeklyReportItemSources[]) => void }
+>(function WeeklyReportForm({ content, itemSources, candidates = [], disabled = false, onChange }, ref) {
+  const document = useMemo(() => {
+    const parsed = parseWeeklyReportDocument(content)
+    if (parsed) parsed.items.forEach((item, index) => { item.sourceRefs = itemSources?.find(binding => binding.itemIndex === index)?.sources ?? [] })
+    return parsed
+  }, [content, itemSources])
   const [active, setActive] = useState(0)
   const [validation, setValidation] = useState(false)
   const [undo, setUndo] = useState<{
     before: WeeklyReportDocument
     after: string
+    afterSources: string
   } | null>(null)
   const root = useRef<HTMLDivElement>(null)
   function emit(next: WeeklyReportDocument) {
-    onChange(serializeWeeklyReportDocument(next))
+    onChange(serializeWeeklyReportDocument(next), next.items.flatMap((item, itemIndex) => item.sourceRefs?.length ? [{ itemIndex, sources: item.sourceRefs }] : []))
   }
   function edit(fn: (next: WeeklyReportDocument) => void) {
     if (!document || disabled) return
@@ -168,8 +187,8 @@ export const WeeklyReportForm = forwardRef<
     const next = structuredClone(document)
     fn(next)
     const after = serializeWeeklyReportDocument(next)
-    setUndo({ before: document, after })
-    onChange(after)
+    setUndo({ before: document, after, afterSources: JSON.stringify(next.items.flatMap((item, itemIndex) => item.sourceRefs?.length ? [{ itemIndex, sources: item.sourceRefs }] : [])) })
+    emit(next)
   }
   function focusName(group: number, task?: number) {
     requestAnimationFrame(() =>
@@ -225,16 +244,20 @@ export const WeeklyReportForm = forwardRef<
             title: source.title,
             description,
           }
+          const ref = 'projectId' in source ? { kind: source.kind, id: source.id, projectId: source.projectId } : { kind: source.kind, id: source.id, testSpaceId: source.testSpaceId }
           if (asItems || !next.items[active]) {
             const item = createWeeklyReportItem('new')
             item.title = source.title
             item.tasks = [task]
+            item.sourceRefs = [ref]
             next.items.push(item)
             setActive(next.items.length - 1)
-          } else if (target === 'progress') next.items[active].tasks.push(task)
-          else
-            next.items[active][target] +=
-              (next.items[active][target] ? '\n' : '') + description
+          } else {
+            const item = next.items[active]
+            item.sourceRefs = [...new Map([...(item.sourceRefs ?? []), ref].map(source => [weeklyReportSourceIdentity(source), source])).values()]
+            if (target === 'progress') item.tasks.push(task)
+            else item[target] += (item[target] ? '\n' : '') + description
+          }
         }
       })
     },
@@ -361,6 +384,7 @@ export const WeeklyReportForm = forwardRef<
               <h4>
                 {labels.progress} <small>可添加多项任务</small>
               </h4>
+              <WeeklyReportExecutionSummary sources={candidates.filter(source => item.sourceRefs?.some(ref => weeklyReportSourceIdentity(ref) === weeklyReportSourceIdentity(source)))} />
               <p className="wr-hint">
                 0% 未开始 · 1–99% 进行中 · 100% 已完成
                 {document.profile === 'tester' ? '；独立于用例通过率。' : ''}
@@ -545,11 +569,12 @@ export const WeeklyReportForm = forwardRef<
               >
                 保存此项并添加下一事项
               </Button>
+              {item.sourceRefs?.length ? <div className="wr-linked-sources"><span>关联来源</span>{item.sourceRefs.map(ref => <span key={weeklyReportSourceIdentity(ref)}>{candidates.find(source => weeklyReportSourceIdentity(source) === weeklyReportSourceIdentity(ref))?.title ?? `来源 #${ref.id}`}</span>)}</div> : null}
             </fieldset>
           ) : null}
         </section>
       ))}
-      {undo && undo.after === content ? (
+      {undo && undo.after === content && undo.afterSources === JSON.stringify(itemSources ?? []) ? (
         <div className="wr-undo" role="status">
           已删除，平均进度已重新计算。
           <Button
