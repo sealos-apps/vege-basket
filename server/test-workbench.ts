@@ -46,7 +46,7 @@ import {
   packageMarketCiBranchFromObjectKey,
 } from './package-market.ts'
 import { getPlatformConfigSnapshot } from './platform-config-runtime.ts'
-import { isTestPlanImageObjectKey, testPlanImageUrl } from './test-plan-image.ts'
+import { isTestPlanImageObjectKey, testPlanImageMaxTotalBytes, testPlanImageUploadMaxBytes, testPlanImageUrl } from './test-plan-image.ts'
 import { getPackageMarketRulesForConfigRevision } from './platform-package-rules.ts'
 import {
   canDeleteTestCase,
@@ -97,8 +97,6 @@ type TestPlanExecutionImageInput = {
   objectKey: string
 }
 const maxTestPlanExecutionImages = 6
-const maxTestPlanExecutionImageBytes = 10 * 1024 * 1024
-const maxTestPlanExecutionImageTotalBytes = 30 * 1024 * 1024
 
 const testWorkbenchSections = new Set<TestWorkbenchSection>([
   'bugs',
@@ -222,10 +220,11 @@ function executionImages(value: unknown, ownerUserId: number): TestPlanExecution
     const contentType = text(input.contentType, 40) as TestPlanExecutionImageInput['contentType']
     if (!fileName || !objectKey || !isTestPlanImageObjectKey(objectKey, ownerUserId)) executionInputError('执行截图对象无效。')
     if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(contentType)) executionInputError('执行截图格式不支持。')
-    if (!Number.isSafeInteger(fileSize) || fileSize <= 0 || fileSize > maxTestPlanExecutionImageBytes) executionInputError('单张执行截图不能超过 10 MiB。')
+    const maxImageBytes = testPlanImageUploadMaxBytes()
+    if (!Number.isSafeInteger(fileSize) || fileSize <= 0 || fileSize > maxImageBytes) executionInputError(`单张执行截图不能超过 ${Math.round(maxImageBytes / 1024 / 1024)} MiB。`)
     return { contentType, fileName, fileSize, objectKey }
   })
-  if (images.reduce((total, image) => total + image.fileSize, 0) > maxTestPlanExecutionImageTotalBytes) {
+  if (images.reduce((total, image) => total + image.fileSize, 0) > testPlanImageMaxTotalBytes) {
     executionInputError('本条执行记录的图片总大小不能超过 30 MiB。')
   }
   const keys = new Set<string>()
@@ -2466,6 +2465,7 @@ async function getTestWorkbench(
   const departedUserIds = includes('core') ? await getDepartedUserIds() : []
 
   return {
+    testPlanImageMaxBytes: testPlanImageUploadMaxBytes(),
     loadedSections: sections ? [...sections] : undefined,
     departedUserIds,
     bugs: bugs.rows.map((row) => ({

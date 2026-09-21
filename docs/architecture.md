@@ -535,9 +535,10 @@ The schema is normalized around these groups:
   creator. Plan-case execution is append-only: each record keeps encrypted actual-result
   text and notes, the executing user and timestamp, while the plan-case row remains the
   latest-result projection for existing clients. Execution screenshots are private OSS
-  objects under a dedicated signed prefix, limited to six images per record, 10 MiB per
-  image and 30 MiB total; authorized workbench reads expose signed URLs, and failed-case
-  Bug creation and print/PDF reports use the latest execution evidence. Only that creator
+  objects under a dedicated signed prefix, limited to six images and 30 MiB total per
+  record; the per-image limit follows the platform storage upload setting. Authorized
+  workbench reads expose signed URLs, and failed-case Bug creation carries the latest
+  execution evidence. Only that creator
   may edit plan metadata, change the selected test-subject
   scope, append current active cases as new immutable snapshots, remove an unexecuted
   snapshot, or delete the plan. Test cases use hierarchical directories; the former

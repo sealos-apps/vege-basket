@@ -2023,9 +2023,34 @@ create table if not exists test_plan_execution_images (
   object_key text not null,
   file_name text not null default '',
   content_type text not null check (content_type in ('image/jpeg', 'image/png', 'image/webp', 'image/gif')),
-  file_size bigint not null check (file_size > 0 and file_size <= 10485760),
+  file_size bigint not null check (file_size > 0 and file_size <= 31457280),
   unique (execution_id, object_key)
 );
+
+do $$
+begin
+  if exists (
+    select 1
+      from pg_constraint
+     where conrelid = 'test_plan_execution_images'::regclass
+       and conname = 'test_plan_execution_images_file_size_check'
+       and pg_get_constraintdef(oid) not like '%31457280%'
+  ) then
+    alter table test_plan_execution_images
+      drop constraint test_plan_execution_images_file_size_check;
+  end if;
+
+  if not exists (
+    select 1
+      from pg_constraint
+     where conrelid = 'test_plan_execution_images'::regclass
+       and conname = 'test_plan_execution_images_file_size_check'
+  ) then
+    alter table test_plan_execution_images
+      add constraint test_plan_execution_images_file_size_check
+      check (file_size > 0 and file_size <= 31457280);
+  end if;
+end $$;
 
 alter table test_plan_cases
   add column if not exists test_subject_id bigint references test_subjects(id) on delete set null;

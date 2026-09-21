@@ -1,5 +1,5 @@
 import { useRef, useState, useSyncExternalStore } from 'react'
-import { Check, FilePdf, Moon, NotePencil, Sun } from '@phosphor-icons/react'
+import { Check, Moon, NotePencil, Sun } from '@phosphor-icons/react'
 import { TestWorkbench, type TestPlanPresentation } from '../../components/test-workbench'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
@@ -9,9 +9,8 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs'
 import type { TestPlanCase, TestResult, TestWorkbenchData } from '../../test-workbench-types'
 import type { PrototypeStore } from './mock-api'
-import { reportSnapshot } from './workbench-data'
-import { resultLabels, type Plan } from './data'
-import { ExecutionHistory, PlanReport } from './report'
+import { resultLabels } from './data'
+import { ExecutionHistory } from './execution-history'
 import { ExecutionImageEditor } from './execution-images'
 import type { ExecutionImage } from './data'
 
@@ -62,7 +61,7 @@ function ExecutionPanel({ row, store, initialTab, drafts, commit }: {
       <div><Label htmlFor="execution-result">执行结果</Label><Select value={draft.result} onValueChange={value => change({ result: value as TestResult })}><SelectTrigger id="execution-result"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{Object.entries(resultLabels).map(([value, label]) => <SelectItem value={value} key={value}>{label}</SelectItem>)}</SelectGroup></SelectContent></Select></div>
       <div><Label htmlFor="execution-actual">实际结果（选填）</Label><Textarea id="execution-actual" maxLength={10000} value={draft.actual} onChange={event => change({ actual: event.target.value })} /></div>
       <div><Label htmlFor="execution-note">执行备注（选填）</Label><Textarea id="execution-note" maxLength={5000} value={draft.note} onChange={event => change({ note: event.target.value })} /></div>
-      <ExecutionImageEditor disabled={saving} images={draft.images} onChange={images => change({ images })} />
+      <ExecutionImageEditor disabled={saving} images={draft.images} maxFileBytes={store.data.testPlanImageMaxBytes} onChange={images => change({ images })} />
       {draft.result === 'untested' && <p className="form-note">最终结果将重置为未执行，已有执行历史保留。</p>}
       {error && <p role="alert" className="form-error">{error}</p>}
       <footer><span>当前最终结果：{resultLabels[current.result]}</span><Button type="submit" disabled={saving}><Check />{saving ? '保存中' : '保存执行记录'}</Button></footer>
@@ -72,17 +71,11 @@ function ExecutionPanel({ row, store, initialTab, drafts, commit }: {
 
 export function TestPlanPrototype({ store }: { store: PrototypeStore }) {
   useSyncExternalStore(store.subscribe, store.getRevision)
-  const [report, setReport] = useState<{ plan: Plan; time: string }>()
   const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'))
   const drafts = useRef(new Map<number, Draft>())
   const requestedRecord = useRef<number | undefined>(undefined)
-  const exportTrigger = useRef<HTMLElement | null>(null)
   const presentation: TestPlanPresentation = {
     rowBlockSize: 116,
-    planActions: plan => <Button variant="outline" onClick={event => {
-      exportTrigger.current = event.currentTarget
-      setReport({ plan: reportSnapshot(store.data, store.histories, plan.id), time: new Date().toISOString() })
-    }}><FilePdf />导出 PDF</Button>,
     caseActions: (row, openDetail) => <Button variant="outline" onClick={() => { requestedRecord.current = row.id; openDetail() }}><NotePencil />记录执行</Button>,
     caseMetadata: row => {
       const history = store.histories[row.id] ?? []
@@ -102,6 +95,5 @@ export function TestPlanPrototype({ store }: { store: PrototypeStore }) {
     <TestWorkbench currentUserId={900001} projects={[{ id: 1, name: 'Veges 工作台' }]} planPresentation={presentation} accountMenu={
       <div className="proto-account"><span className="proto-avatar">林</span><div><strong>林晓</strong><Badge variant="outline">原型 · 示例数据</Badge></div><Button variant="ghost" size="icon" title={dark ? '切换浅色主题' : '切换深色主题'} aria-label={dark ? '切换浅色主题' : '切换深色主题'} onClick={() => { document.documentElement.classList.toggle('dark', !dark); setDark(!dark) }}>{dark ? <Sun /> : <Moon />}</Button></div>
     } />
-    {report && <PlanReport snapshot={report} onClose={() => { setReport(undefined); requestAnimationFrame(() => exportTrigger.current?.focus()) }} />}
   </div>
 }

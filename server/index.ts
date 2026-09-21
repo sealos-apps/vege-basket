@@ -245,7 +245,7 @@ import {
   normalizeTestPlanImageContentType,
   putTestPlanImage,
   testPlanImageUrl,
-  testPlanImageMaxBytes,
+  testPlanImageUploadMaxBytes,
 } from './test-plan-image.ts'
 import { runAutomaticDatabaseMigrations, stopAutomaticDatabaseMigrations } from './database-migrations.ts'
 import {
@@ -629,7 +629,7 @@ app.get('/api/todo-images', (request, response, next) => {
 app.post('/api/test-plan-images', (request, response, next) => {
   void platformConfigRequestMiddleware(request, response, next)
 }, (request, response, next) => {
-  express.raw({ limit: Math.min(testPlanImageMaxBytes, getPlatformConfigSnapshot().config.storage.uploadMaxBytes), type: ['image/*'] })(request, response, next)
+  express.raw({ limit: testPlanImageUploadMaxBytes(), type: ['image/*'] })(request, response, next)
 }, asyncHandler(async (request, response) => {
   const session = await requireActiveRole(request, response, 'tester')
   if (!session) return
@@ -643,8 +643,9 @@ app.post('/api/test-plan-images', (request, response, next) => {
     response.status(400).json({ error: '图片文件不能为空。' })
     return
   }
-  if (request.body.length > testPlanImageMaxBytes) {
-    response.status(413).json({ error: '单张图片不能超过 10 MiB。' })
+  const maxBytes = testPlanImageUploadMaxBytes()
+  if (request.body.length > maxBytes) {
+    response.status(413).json({ error: `单张图片不能超过 ${Math.round(maxBytes / 1024 / 1024)} MiB。` })
     return
   }
   const objectKey = createTestPlanImageObjectKey(userId, contentType)

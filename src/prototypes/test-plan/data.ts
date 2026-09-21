@@ -30,13 +30,13 @@ export type Execution = {
   images?: ExecutionImage[]
 }
 
-export function validateExecutionImages(existing: ExecutionImage[], files: Array<Pick<File, 'name' | 'size' | 'type'>>) {
+export function validateExecutionImages(existing: ExecutionImage[], files: Array<Pick<File, 'name' | 'size' | 'type'>>, maxFileBytes = executionImageLimits.maxFileBytes) {
   if (!files.length) return '请选择图片。'
   if (existing.length + files.length > executionImageLimits.maxCount) return `每条执行记录最多上传 ${executionImageLimits.maxCount} 张图片。`
   const unsupported = files.find(file => !executionImageTypes.includes(file.type as ExecutionImage['type']))
   if (unsupported) return `“${unsupported.name}”格式不支持，请选择 PNG、JPEG、WebP 或 GIF 图片。`
-  const oversized = files.find(file => file.size > executionImageLimits.maxFileBytes)
-  if (oversized) return `“${oversized.name}”超过 10 MiB，请压缩后重试。`
+  const oversized = files.find(file => file.size > maxFileBytes)
+  if (oversized) return `“${oversized.name}”超过 ${maxFileBytes / 1024 / 1024} MiB，请压缩后重试。`
   const totalBytes = [...existing, ...files].reduce((total, item) => total + item.size, 0)
   if (totalBytes > executionImageLimits.maxTotalBytes) return '本条执行记录的图片总大小不能超过 30 MiB。'
   return ''

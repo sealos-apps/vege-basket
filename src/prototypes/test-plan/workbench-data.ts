@@ -1,5 +1,5 @@
 import type { TestBug, TestCase, TestPlanCase, TestSpaceSettings, TestWorkbenchData } from '../../test-workbench-types'
-import { initialPlans, finalResult, latest, type Execution, type Plan } from './data'
+import { initialPlans, finalResult, latest, type Execution } from './data'
 
 export const prototypeUserId = 900001
 const createdAt = '2026-09-17T01:00:00.000Z'
@@ -30,6 +30,7 @@ export function createPrototypeData() {
     }
   }))
   const data: TestWorkbenchData = {
+    testPlanImageMaxBytes: 10 * 1024 * 1024,
     spaces: [
       { id: 1, name: 'Veges 产品测试', versionLabel: 'v2.8', organizationId: 1, ownerUserId: prototypeUserId, accessLevel: 'owner', createdAt, bugCount: 0, caseCount: cases.length, planCount: initialPlans.length, canManageSettings: true, canManageMembers: true, canDelete: true, canChangeOrganization: true, canTransferOwnership: true },
       { id: 2, name: 'Veges 兼容性测试', versionLabel: 'v2.7', organizationId: 1, ownerUserId: prototypeUserId, accessLevel: 'owner', createdAt, bugCount: 0, caseCount: 0, planCount: 0, canManageSettings: true, canManageMembers: true, canDelete: true },
@@ -72,21 +73,5 @@ export function newPrototypeBug(data: TestWorkbenchData, payload: Partial<TestBu
     testSpaceName: data.spaces.find(space => space.id === spaceId)?.name,
     testPlanName: data.plans.find(plan => plan.id === payload.testPlanId)?.name,
     assigneeName: data.users.find(user => user.id === payload.assigneeUserId)?.displayName,
-  }
-}
-
-export function reportSnapshot(data: TestWorkbenchData, histories: Record<number, PrototypeExecution[]>, planId: number): Plan {
-  const plan = data.plans.find(item => item.id === planId)!
-  return {
-    id: plan.id, name: plan.name, status: ({ draft: '草稿', in_progress: '执行中', completed: '已完成', aborted: '已终止' } as const)[plan.status],
-    environment: plan.environment, version: plan.versionLabel, period: `${plan.startsOn || '未设置'} 至 ${plan.endsOn || '未设置'}`, description: '',
-    ownerName: data.users.find(user => user.id === plan.ownerUserId)?.displayName ?? '未分配',
-    spaceName: data.spaces.find(space => space.id === plan.testSpaceId)?.name ?? '', projectName: plan.projectId ? 'Veges 工作台' : '未关联项目',
-    cases: data.planCases.filter(item => item.testPlanId === planId).map(item => ({
-      id: item.id, caseCode: item.testCaseId ? `CASE-${item.testCaseId}` : `快照-${item.id}`, title: item.snapshotTitle, folder: data.subjects.find(s => s.id === item.testSubjectId)?.name ?? '原目录已删除',
-      priority: ({ high: 'P0', medium: 'P1', low: 'P2' } as const)[data.cases.find(c => c.id === item.testCaseId)?.priority ?? 'medium'],
-      preconditions: item.snapshotPreconditions, steps: item.snapshotSteps.split('\n'), expected: item.snapshotExpectedResult,
-      legacyResult: histories[item.id]?.length ? undefined : item.result, legacyNote: item.resultNote, history: structuredClone(histories[item.id] ?? []),
-    })),
   }
 }

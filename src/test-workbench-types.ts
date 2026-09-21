@@ -372,6 +372,7 @@ export type TestWorkbenchData = {
   spaces: TestSpace[]
   subjects: TestSubject[]
   testEnvironments: TestEnvironment[]
+  testPlanImageMaxBytes?: number
   users: TestWorkspaceUser[]
   loadedSections?: TestWorkbenchSection[]
 }

@@ -198,14 +198,13 @@ import { containerImageReferenceKey, normalizeContainerImageReference } from '..
 import { formatTestSpaceReference } from '../../shared/test-space-reference'
 import type { PackageMarketCiBranch, PackageMarketRule, PackageMarketVersion, Priority } from '@/types'
 import './test-workbench.css'
-import { TestPlanExecutionPanel, TestPlanExecutionReport } from './test-plan-execution'
+import { TestPlanExecutionPanel } from './test-plan-execution'
 import { testPlanExecutionBugEvidence } from '../test-plan-execution'
 
 type WorkbenchTab = 'cases' | 'plans' | 'bugs' | 'weekly_report' | 'notifications'
 
 export type TestPlanPresentation = {
   rowBlockSize?: number
-  planActions?: (plan: TestPlan) => ReactNode
   caseActions?: (planCase: TestWorkbenchData['planCases'][number], openDetail: () => void) => ReactNode
   caseMetadata?: (planCase: TestWorkbenchData['planCases'][number]) => ReactNode
   caseDetail?: (planCase: TestWorkbenchData['planCases'][number], commit: (operation: () => Promise<TestWorkbenchData>) => Promise<boolean>) => ReactNode
@@ -2513,7 +2512,6 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
   const [executionPage, setExecutionPage] = useState(0)
   const [executionPageSize, setExecutionPageSize] = useState(6)
   const [detailExecutionId, setDetailExecutionId] = useState<number>()
-  const [reportOpen, setReportOpen] = useState(false)
   const executionListRef = useRef<HTMLDivElement>(null)
   const selected = visiblePlans.find((item) => item.id === selectedId)
   const executions = data.planCases.filter((item) => item.testPlanId === selectedId)
@@ -2591,7 +2589,6 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
               </div>
               <div className="test-plan-heading-actions">
                 <div className="test-plan-primary-actions">
-                  {presentation?.planActions?.(selected) ?? <Button variant="outline" onClick={() => setReportOpen(true)}><DownloadSimple />导出 PDF</Button>}
                   <Select value={selected.status} onValueChange={(value) => onStatus(selected, value as TestPlan['status'])} disabled={busy || readOnly}>
                     <SelectTrigger aria-label={`${selected.name} 计划状态`} className="test-status-select"><SelectValue /></SelectTrigger>
                     <SelectContent><SelectItem value="draft">草稿</SelectItem><SelectItem value="in_progress">执行中</SelectItem><SelectItem value="completed">已完成</SelectItem><SelectItem value="aborted">已终止</SelectItem></SelectContent>
@@ -2645,9 +2642,8 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
         </div>
       </div>
       <PlanCaseDetailDialog planCase={detailExecution} onClose={() => { setDetailExecutionId(undefined); presentation?.onDetailClose?.() }}>
-        {detailExecution ? presentation?.caseDetail?.(detailExecution, onPresentationCommit) ?? <TestPlanExecutionPanel plan={selected!} planCase={detailExecution} commit={onPresentationCommit} /> : null}
+        {detailExecution ? presentation?.caseDetail?.(detailExecution, onPresentationCommit) ?? <TestPlanExecutionPanel plan={selected!} planCase={detailExecution} commit={onPresentationCommit} maxImageBytes={data.testPlanImageMaxBytes} /> : null}
       </PlanCaseDetailDialog>
-      {reportOpen && selected ? <TestPlanExecutionReport plan={selected} planCases={executions} onClose={() => setReportOpen(false)} /> : null}
     </div>
   )
 }

@@ -3,9 +3,13 @@ import { getOssObject, putOssObject } from './package-market.ts'
 import { getLegacyPlatformSecrets } from './platform-config-store.ts'
 import { getPlatformConfigSnapshot } from './platform-config-runtime.ts'
 
-export const testPlanImageMaxBytes = 10 * 1024 * 1024
+export const testPlanImageMaxTotalBytes = 30 * 1024 * 1024
 export const testPlanImageTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'] as const
 export type TestPlanImageContentType = typeof testPlanImageTypes[number]
+
+export function testPlanImageUploadMaxBytes() {
+  return Math.min(testPlanImageMaxTotalBytes, getPlatformConfigSnapshot().config.storage.uploadMaxBytes)
+}
 
 export function normalizeTestPlanImageContentType(value: unknown): TestPlanImageContentType | '' {
   const contentType = String(value ?? '').split(';')[0].trim().toLowerCase()

@@ -4,6 +4,10 @@ import { Button } from '../../components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '../../components/ui/dialog'
 import { executionImageLimits, validateExecutionImages, type ExecutionImage } from './data'
 
+function formatMiB(bytes: number) {
+  return `${(bytes / (1024 * 1024)).toFixed(bytes % (1024 * 1024) === 0 ? 0 : 1)} MiB`
+}
+
 function imageFromFile(file: File): ExecutionImage {
   return {
     id: crypto.randomUUID(),
@@ -14,19 +18,23 @@ function imageFromFile(file: File): ExecutionImage {
   }
 }
 
-export function ExecutionImageEditor({ disabled = false, images, onChange }: {
+export function ExecutionImageEditor({ disabled = false, images, maxFileBytes = executionImageLimits.maxFileBytes, onChange }: {
   disabled?: boolean
   images: ExecutionImage[]
+  maxFileBytes?: number
   onChange: (images: ExecutionImage[]) => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [error, setError] = useState('')
   const [dragging, setDragging] = useState(false)
   const [preview, setPreview] = useState<ExecutionImage>()
+  const usedBytes = images.reduce((total, image) => total + image.size, 0)
+  const remainingBytes = Math.max(0, executionImageLimits.maxTotalBytes - usedBytes)
+  const remainingCount = Math.max(0, executionImageLimits.maxCount - images.length)
 
   function addFiles(files: File[]) {
     if (disabled || !files.length) return
-    const validationError = validateExecutionImages(images, files)
+    const validationError = validateExecutionImages(images, files, Math.min(maxFileBytes, remainingBytes))
     if (validationError) {
       setError(validationError)
       return
@@ -47,15 +55,15 @@ export function ExecutionImageEditor({ disabled = false, images, onChange }: {
 
   return <section className="proto-image-editor">
     <div className="proto-image-editor-heading">
-      <div><strong>执行截图（选填）</strong><small>最多 {executionImageLimits.maxCount} 张，单张 10 MiB，总计 30 MiB</small></div>
-      <Button type="button" variant="outline" disabled={disabled || images.length >= executionImageLimits.maxCount} onClick={() => inputRef.current?.click()}><UploadSimple />添加截图</Button>
+      <div><strong>执行截图（选填）</strong><small>最多 {executionImageLimits.maxCount} 张，剩余 {remainingCount} 张；已用 {formatMiB(usedBytes)} / {formatMiB(executionImageLimits.maxTotalBytes)}，剩余 {formatMiB(remainingBytes)}；单张上限 {formatMiB(Math.min(maxFileBytes, remainingBytes))}</small></div>
+      <Button type="button" variant="outline" disabled={disabled || images.length >= executionImageLimits.maxCount || remainingBytes === 0} onClick={() => inputRef.current?.click()}><UploadSimple />添加截图</Button>
     </div>
     <div
       className={dragging ? 'proto-image-dropzone dragging' : 'proto-image-dropzone'}
       role="group"
       tabIndex={disabled ? -1 : 0}
       aria-label="添加执行截图，可点击、粘贴或拖入图片"
-      onClick={() => !disabled && inputRef.current?.click()}
+      onClick={() => !disabled && remainingCount > 0 && remainingBytes > 0 && inputRef.current?.click()}
       onPaste={pastedFiles}
       onDragEnter={event => { event.preventDefault(); if (!disabled) setDragging(true) }}
       onDragOver={event => event.preventDefault()}
