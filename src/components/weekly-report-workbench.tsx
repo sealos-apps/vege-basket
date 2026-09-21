@@ -353,7 +353,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
       embedded ? 'weekly-report-embedded-toolbar-actions' : 'weekly-report-topbar-actions',
     ))
     return () => setTopbarActionHost(null)
-  }, [embedded, organizationId, workspaceView])
+  }, [embedded, loading, organizationId, preview, workspaceView])
 
   const weekOptions = useMemo(() => {
     const current = currentWeekStart(weekStartsOn, today)
@@ -846,34 +846,26 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     ? '当前无需填写本组织周报。'
     : createAvailability.reason
 
-  const weeklyReportToolbar = topbarActionHost && organizationId > 0
+  const weeklyReportToolbar = topbarActionHost && organizationId > 0 && workspaceView === 'editor'
     ? createPortal(
       <div className="weekly-report-toolbar">
-        {workspaceView === 'editor' ? (
-          <Select value={weekStart} onValueChange={(value) => void changeEditorWeek(value)}>
-            <SelectTrigger
-              aria-label="选择周报周期"
-              className="weekly-report-select weekly-report-period-select"
-              disabled={busy || saveState === 'saving'}
-            >
-              <CalendarBlank size={16} />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {weekOptions.map((value, index) => (
-                <SelectItem key={value} value={value}>
-                  {index === 0 ? '本周 · ' : ''}{formatWeekRange(value)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <CreateWeeklyReportButton
-            enabled={canCreateWeeklyReport}
-            reason={weeklyReportCreationReason}
-            onCreate={() => openEditor(activeWeekStart)}
-          />
-        )}
+        <Select value={weekStart} onValueChange={(value) => void changeEditorWeek(value)}>
+          <SelectTrigger
+            aria-label="选择周报周期"
+            className="weekly-report-select weekly-report-period-select"
+            disabled={busy || saveState === 'saving'}
+          >
+            <CalendarBlank size={16} />
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {weekOptions.map((value, index) => (
+              <SelectItem key={value} value={value}>
+                {index === 0 ? '本周 · ' : ''}{formatWeekRange(value)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>,
       topbarActionHost,
     )
@@ -1014,13 +1006,6 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
             <div className="weekly-report-index-empty">
               <ClipboardText size={32} weight="duotone" />
               <strong>{canWriteWeeklyReport ? '还没有周报' : '当前无需填写周报'}</strong>
-              {canWriteWeeklyReport ? (
-                <CreateWeeklyReportButton
-                  enabled={canCreateWeeklyReport}
-                  reason={weeklyReportCreationReason}
-                  onCreate={() => openEditor(activeWeekStart)}
-                />
-              ) : null}
             </div>
           )}
 
