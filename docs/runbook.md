@@ -143,6 +143,33 @@ existing database. Do not run the migration separately merely to repeat startup 
 
 ## Database Operations
 
+### Legacy Weekly-Report Cleanup
+
+After explicit authorization to delete historical-format weekly reports, inspect the
+configured database first (this command does not start the API or apply schema changes):
+
+```bash
+node --import tsx server/weekly-report-legacy-cleanup.ts --env-file /secure/path/runtime.env
+```
+
+Apply only with the inspected report count and a new private backup path:
+
+```bash
+node --import tsx server/weekly-report-legacy-cleanup.ts --env-file /secure/path/runtime.env \
+  --apply --expected-count 8 --backup /secure/path/weekly-reports.enc
+```
+
+The command locks report tables, rechecks the count, writes and flushes an encrypted
+0600 backup, then deletes only recognizable legacy reports with null profile metadata
+throughout their drafts and revisions. Older free-form Markdown revisions are included.
+Any v3/future marker, unrecognized current draft/content, or non-null profile preserves
+the whole report. Report revisions and source links cascade; linked
+tasks, Bugs, test plans and reminder history remain. Organization summaries for periods
+with removed submitted reports are invalidated in the same transaction. Retain the
+backup and its encryption key ring; do not commit either. A failed command requires a
+fresh inspection because a lost connection during commit can leave an uncertain result.
+This is an explicit operator action, never an automatic startup migration.
+
 ### Bug Case Association and Module Migration
 
 `server/migrations/20260914_test_workbench_modules_optional_bugs.sql` adds organization module

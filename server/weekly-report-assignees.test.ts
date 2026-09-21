@@ -142,8 +142,8 @@ test('the client saves assignees and keeps non-assignees on a read-only history 
   assert.match(organizationWorkbenchSource, /weeklyReportAssigneeUserIds/u)
   assert.match(organizationWorkbenchSource, /setWeeklyReportAssigneeUserIds\(\[\]\)/u)
   assert.match(weeklyReportWorkbenchSource, /detail\.canWriteWeeklyReport/u)
-  assert.match(weeklyReportWorkbenchSource, /canEdit = Boolean\(canWriteWeeklyReport && !report\?\.readOnlyReason\)/u)
-  assert.match(weeklyReportWorkbenchSource, /readOnly=\{!canEdit \|\| busy\}/u)
+  assert.match(weeklyReportWorkbenchSource, /canEdit = Boolean\(canWriteWeeklyReport && !report\?\.readOnlyReason && structuredDocument\)/u)
+  assert.match(weeklyReportWorkbenchSource, /<WeeklyReportForm\b[^>]*disabled=\{!canEdit \|\| busy\}/u)
   assert.match(weeklyReportWorkbenchSource, /当前无需填写本组织周报/u)
 })
 

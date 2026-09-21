@@ -238,6 +238,9 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   organization collection returns only published `sourceSnapshots`. `convertLegacy: true` explicitly converts a strictly
   recognizable legacy report and fixes its persona. New reports always use the active developer/tester
   persona. The legacy `PUT /api/organizations/:organizationId/weekly-reports/:weekStart` returns 410.
+  The browser uses the task form for all new reports. Legacy content is read-only with an
+  explicit conversion preview; it never reopens the old free-form editor. Authorized legacy
+  cleanup is an explicit operator command documented in the runbook, not a startup migration.
 - Task progress is a nullable integer in drafts and required for submission. Status derives from exact
   percentages: 0 not started, 1–99 in progress, 100 complete. Reports retain raw percentage sums/counts
   for aggregation and display the task average to one decimal. Historical reports without task records

@@ -1,8 +1,6 @@
 import {
   Component,
   forwardRef,
-  Suspense,
-  lazy,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -22,7 +20,6 @@ import {
 import {
   hasWeeklyReportBodyContent,
   isDefaultWeeklyReportTemplate,
-  WEEKLY_REPORT_TEMPLATE,
 } from '../../shared/weekly-report-template'
 import {
   ArrowLeft,
@@ -60,7 +57,6 @@ import type {
   WeeklyReportSourceKind,
   WeeklyReportSourceRef,
 } from '../organization-types'
-import type { MarkdownWysiwygEditorHandle } from './markdown-wysiwyg-editor'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import {
@@ -75,12 +71,6 @@ import { weeklyReportProfiles, weeklyReportSourceIdentity, type WeeklyReportItem
 import { WeeklyReportForm, WeeklyReportReading, type WeeklyReportFormHandle } from './weekly-report-form'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog'
 import './weekly-report-workbench.css'
-
-const MarkdownWysiwygEditor = lazy(() => (
-  import('./markdown-wysiwyg-editor').then((module) => ({
-    default: module.MarkdownWysiwygEditor,
-  }))
-))
 
 class WeeklyReportEditorBoundary extends Component<
   { children: ReactNode },
@@ -255,13 +245,6 @@ function sourceKey(source: WeeklyReportSourceRef) {
   return `${source.kind}:${source.id}`
 }
 
-function markdownForSources(sources: WeeklyReportSourceCandidate[]) {
-  if (sources.length === 0) return ''
-  return sources.map((source) => (
-    `- **${sourceKindMeta[source.kind].label}｜${source.projectName}**：${source.title}（${sourceStatusLabel[source.status] ?? source.status}${source.date ? `，${source.date}` : ''}）`
-  )).join('\n')
-}
-
 export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, WeeklyReportWorkbenchProps>(function WeeklyReportWorkbench({
   activeProfile = 'developer',
   navigationBusy = false,
@@ -320,8 +303,6 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   const [saveState, setSaveState] = useState<'idle' | 'saved' | 'saving'>('idle')
   const lastSavedSignature = useRef('')
   const saveInFlight = useRef(false)
-  const [editorReady, setEditorReady] = useState(false)
-  const editorRef = useRef<MarkdownWysiwygEditorHandle>(null)
   const loadedOrganizationId = useRef<number | null>(null)
   const activeContext = useRef(`${organizationId}:${weekStart}:${activeProfile}`)
   const selectedWeekStart = useRef('')
@@ -599,7 +580,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   async function convertLegacyDraft() {
     if (busy || saveInFlight.current || !report) return
     const converted = legacyPreview ? parseWeeklyReportDocument(legacyPreview) : null
-    if (!converted) { setError('原文无法安全识别，已保留原文编辑'); return }
+    if (!converted) { setError('原文无法安全识别，已保留原文供查看'); return }
     const compatibleSources = selectedSources.filter(source => (weeklyReportProfiles[activeProfile].sourceKinds as readonly string[]).includes(source.kind))
     setBusy(true)
     try {
@@ -720,17 +701,9 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
       setSourceMode('manual')
       return
     }
-    const markdown = markdownForSources(selected)
-    if (!markdown) return
-    if (editorRef.current?.insertMarkdownAtCursor(markdown)) setSourceMode('manual')
   }
 
-  function insertWeeklyReportTemplate() {
-    if (editorRef.current?.insertMarkdownAtCursor(WEEKLY_REPORT_TEMPLATE)) setSourceMode('manual')
-  }
-
-  function resetEditorState(resetEditorReadiness = false) {
-    if (resetEditorReadiness) setEditorReady(false)
+  function resetEditorState() {
     setReport(null)
     setContent('')
     setItemSources([])
@@ -747,7 +720,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
 
   function openEditor(targetWeekStart: string, published = false) {
     openPublishedOnLoad.current = published
-    resetEditorState(true)
+    resetEditorState()
     setWeekStart(targetWeekStart)
     setWorkspaceView('editor')
     setError('')
@@ -779,7 +752,6 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
       return
     }
     setError('')
-    setEditorReady(false)
     setWorkspaceView('list')
     setReportListPage(0)
     setReportListRefresh((value) => value + 1)
@@ -844,7 +816,9 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   }
 
   const structuredDocument = useMemo(() => parseWeeklyReportDocument(content), [content])
-  const canEdit = Boolean(canWriteWeeklyReport && !report?.readOnlyReason)
+  const canEdit = Boolean(canWriteWeeklyReport && !report?.readOnlyReason && structuredDocument)
+  const legacyConversion = !structuredDocument && !report?.reportProfile
+    ? convertLegacyWeeklyReport(content, activeProfile) : null
   const allowedSources = report?.allowedSourceKinds ?? []
   const unlistedSources = selectedSources.filter(source => !sourceCandidates.some(candidate => sourceKey(candidate) === sourceKey(source)))
   async function previewReport() {
@@ -1097,7 +1071,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
                   <span>{report?.publishedRevision ? `已提交第 ${report.publishedRevision} 版` : '尚未提交'}</span>
                 </div>
               </div>
-              {canWriteWeeklyReport ? (
+              {canEdit ? (
                 <div className="weekly-report-header-tools">
                 <Button
                   aria-busy={generating}
@@ -1121,29 +1095,17 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
           </div>
           {report?.readOnlyReason ? <p className="weekly-report-readonly-note">{report.readOnlyReason}</p> : null}
           {report?.publishedRevision ? <div className="wr-published-note"><span>草稿仅自己可见，管理员仍阅读上次提交版。</span><Button size="sm" variant="ghost" onClick={() => setPreview('published')}>查看已提交版</Button></div> : null}
-          {structuredDocument ? <WeeklyReportForm ref={formRef} key={`${organizationId}:${weekStart}:${activeProfile}`} content={content} itemSources={itemSources} candidates={sourceCandidates} disabled={!canEdit || busy} onChange={(value, bindings) => { setContent(value); setItemSources(bindings); setSourceMode('manual') }} /> : <WeeklyReportEditorBoundary>
-            <Suspense fallback={<div className="weekly-report-editor-loading">正在加载编辑器...</div>}>
-              <MarkdownWysiwygEditor
-                ref={editorRef}
-                ariaLabel="周报正文"
-                normalizeOnCreate={false}
-                placeholder="记录本周完成事项、风险阻塞和下周计划..."
-                readOnly={!canEdit || busy}
-                value={content}
-                onReady={() => {
-                  setEditorReady(true)
-                }}
-                onChange={(nextContent) => {
-                  setContent(nextContent)
-                  if (editorReady) setSourceMode('manual')
-                }}
-              />
-            </Suspense>
-          </WeeklyReportEditorBoundary>}
+          <WeeklyReportEditorBoundary key={`${organizationId}:${weekStart}:${activeProfile}`}>
+            {structuredDocument ? <WeeklyReportForm ref={formRef} content={content} itemSources={itemSources} candidates={sourceCandidates} disabled={!canEdit || busy} onChange={(value, bindings) => { setContent(value); setItemSources(bindings); setSourceMode('manual') }} /> : <>
+              <div className="wr-published-note">
+                <span>{legacyConversion ? '历史格式周报 · 只读' : '正文格式无法识别 · 原文已保留'}</span>
+                {canWriteWeeklyReport && !report?.readOnlyReason && legacyConversion ? <Button disabled={busy || saveState === 'saving'} variant="outline" onClick={() => setLegacyPreview(serializeWeeklyReportDocument(legacyConversion))}>转为任务填写</Button> : null}
+              </div>
+              <WeeklyReportReading content={content} />
+            </>}
+          </WeeklyReportEditorBoundary>
           {canEdit ? <footer className="weekly-report-actions">
             <div>
-              {!structuredDocument && !report?.reportProfile && convertLegacyWeeklyReport(content, activeProfile) ? <Button disabled={busy || saveState === 'saving'} variant="outline" onClick={() => setLegacyPreview(serializeWeeklyReportDocument(convertLegacyWeeklyReport(content, activeProfile)!))}>转为任务填写</Button> : null}
-              {!structuredDocument ? <Button disabled={busy || !editorReady} type="button" variant="outline" onClick={insertWeeklyReportTemplate}><ClipboardText size={16} />插入历史模板</Button> : null}
 
             </div>
             <div>
@@ -1165,7 +1127,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
                 <strong>{activeProfile === 'tester' ? '关联本周测试工作' : '关联本周开发工作'}</strong><span>已选 {selectedSources.length}</span>
               </div>
               <div className="weekly-report-source-actions">
-                <Button disabled={selectedSources.length === 0 || (!structuredDocument && !editorReady)} size="sm" type="button" variant="outline" onClick={() => insertSelectedSources()}>
+                <Button disabled={selectedSources.length === 0} size="sm" type="button" variant="outline" onClick={() => insertSelectedSources()}>
                   插入当前事项
                 </Button>
                 <Button
