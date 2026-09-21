@@ -31,6 +31,8 @@ The current migrations are:
 | `20260914_test_workbench_modules_optional_bugs.sql` | Adds organization module references to test cases and Bugs, and allows Bugs without a case or subject. |
 | `20260916_test_case_csv_root_paths.sql` | Adds the case-directory root marker, makes CSV case IDs unique per test space, and permits atomic case/Bug scope updates during strict CSV import. |
 | `20260917_test_bug_verification_package_branches.sql` | Adds immutable CI-branch snapshots to Bug verification packages and backfills canonical historical CI object paths. |
+| `20260920_test_plan_executions.sql` | Adds append-only test-plan execution history and allowlisted execution-image metadata. |
+| `20260921_test_plan_execution_image_platform_limit.sql` | Aligns the persisted execution-image size ceiling with the per-record 30 MiB total; the effective per-image cap comes from platform storage configuration. |
 
 For the organization package-market policy release, update the image only. API startup applies
 the matching idempotent `schemaSql` definition, so no manual `psql` or `db:init` run is required.

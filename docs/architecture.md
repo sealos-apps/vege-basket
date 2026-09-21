@@ -553,7 +553,14 @@ The schema is normalized around these groups:
   Test subjects describe the tested object itself and record their creator; only that
   creator may delete the subject and its cascading test data. Test plans may optionally
   link to an accessible project after project access is checked, and also record their
-  creator. Only that creator may edit plan metadata, change the selected test-subject
+  creator. Plan-case execution is append-only: each record keeps encrypted actual-result
+  text and notes, the executing user and timestamp, while the plan-case row remains the
+  latest-result projection for existing clients. Execution screenshots are private OSS
+  objects under a dedicated signed prefix, limited to six images and 30 MiB total per
+  record; the per-image limit follows the platform storage upload setting. Authorized
+  workbench reads expose signed URLs, and failed-case Bug creation carries the latest
+  execution evidence. Only that creator
+  may edit plan metadata, change the selected test-subject
   scope, append current active cases as new immutable snapshots, remove an unexecuted
   snapshot, or delete the plan. Test cases use hierarchical directories; the former
   baseline/archiving concept has been removed. Deleting a plan

@@ -46,6 +46,7 @@ import {
   packageMarketCiBranchFromObjectKey,
 } from './package-market.ts'
 import { getPlatformConfigSnapshot } from './platform-config-runtime.ts'
+import { isTestPlanImageObjectKey, testPlanImageMaxTotalBytes, testPlanImageUploadMaxBytes, testPlanImageUrl } from './test-plan-image.ts'
 import { getPackageMarketRulesForConfigRevision } from './platform-package-rules.ts'
 import {
   canDeleteTestCase,
@@ -89,6 +90,13 @@ type TestWorkbenchNotificationKind =
   | 'test_bug_comment_added'
   | 'package_event_comment_added'
 type TestWorkbenchSection = 'bugs' | 'cases' | 'core' | 'notifications' | 'plans'
+type TestPlanExecutionImageInput = {
+  contentType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+  fileName: string
+  fileSize: number
+  objectKey: string
+}
+const maxTestPlanExecutionImages = 6
 
 const testWorkbenchSections = new Set<TestWorkbenchSection>([
   'bugs',
@@ -187,6 +195,44 @@ function text(value: unknown, maxLength: number) {
 function positiveId(value: unknown) {
   const id = Number(value)
   return Number.isSafeInteger(id) && id > 0 ? id : null
+}
+
+function executionClientId(value: unknown) {
+  const id = text(value, 80)
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ? id : null
+}
+
+function executionInputError(message: string): never {
+  throw Object.assign(new Error(message), { status: 400 })
+}
+
+function executionImages(value: unknown, ownerUserId: number): TestPlanExecutionImageInput[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > maxTestPlanExecutionImages) {
+    executionInputError(`每条执行记录最多上传 ${maxTestPlanExecutionImages} 张图片。`)
+  }
+  const images = value.map((item) => {
+    if (!item || typeof item !== 'object') executionInputError('执行截图格式无效。')
+    const input = item as Record<string, unknown>
+    const fileName = text(input.fileName, 255)
+    const objectKey = text(input.objectKey, 512)
+    const fileSize = Number(input.fileSize)
+    const contentType = text(input.contentType, 40) as TestPlanExecutionImageInput['contentType']
+    if (!fileName || !objectKey || !isTestPlanImageObjectKey(objectKey, ownerUserId)) executionInputError('执行截图对象无效。')
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(contentType)) executionInputError('执行截图格式不支持。')
+    const maxImageBytes = testPlanImageUploadMaxBytes()
+    if (!Number.isSafeInteger(fileSize) || fileSize <= 0 || fileSize > maxImageBytes) executionInputError(`单张执行截图不能超过 ${Math.round(maxImageBytes / 1024 / 1024)} MiB。`)
+    return { contentType, fileName, fileSize, objectKey }
+  })
+  if (images.reduce((total, image) => total + image.fileSize, 0) > testPlanImageMaxTotalBytes) {
+    executionInputError('本条执行记录的图片总大小不能超过 30 MiB。')
+  }
+  const keys = new Set<string>()
+  for (const image of images) {
+    if (keys.has(image.objectKey)) executionInputError('执行截图不能重复。')
+    keys.add(image.objectKey)
+  }
+  return images
 }
 
 type VerificationPackageInput = {
@@ -1671,6 +1717,8 @@ async function getTestWorkbench(
     plans,
     planSubjects,
     planCases,
+    planExecutions,
+    planExecutionImages,
     bugs,
     comments,
     events,
@@ -1873,6 +1921,57 @@ async function getTestWorkbench(
         on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
       where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlanCases}
       order by pc.id
+      `,
+      [userId],
+    ) : Promise.resolve({ rows: [] }),
+    includes('plans') ? workbenchQuery<{
+      actual_result: string
+      actor_display_name: string | null
+      actor_email: string | null
+      executed_at: Date
+      executed_by_user_id: string | null
+      id: string
+      note: string
+      result: string
+      test_plan_case_id: string
+    }>(
+      `
+      select execution.id, execution.test_plan_case_id, execution.result,
+        execution.actual_result, execution.note, execution.executed_at,
+        execution.executed_by_user_id,
+        actor.display_name as actor_display_name, actor.email as actor_email
+      from test_plan_executions execution
+      join test_plan_cases pc on pc.id = execution.test_plan_case_id
+      join test_plans p on p.id = pc.test_plan_id
+      join test_spaces space on space.id = p.test_space_id
+      left join test_space_memberships m
+        on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
+      left join users actor on actor.id = execution.executed_by_user_id
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlanCases}
+      order by execution.test_plan_case_id, execution.id
+      `,
+      [userId],
+    ) : Promise.resolve({ rows: [] }),
+    includes('plans') ? workbenchQuery<{
+      content_type: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+      execution_id: string
+      file_name: string
+      file_size: string
+      id: string
+      object_key: string
+    }>(
+      `
+      select image.id, image.execution_id, image.object_key, image.file_name,
+        image.content_type, image.file_size
+      from test_plan_execution_images image
+      join test_plan_executions execution on execution.id = image.execution_id
+      join test_plan_cases pc on pc.id = execution.test_plan_case_id
+      join test_plans p on p.id = pc.test_plan_id
+      join test_spaces space on space.id = p.test_space_id
+      left join test_space_memberships m
+        on m.test_space_id = p.test_space_id and m.user_id = $1 and m.status = 'active'
+      where (${testSpaceMembershipPresentSql('m')} or ${managedOrganizationReadScopeSql('space.organization_id')})${scopePlanCases}
+      order by image.execution_id, image.id
       `,
       [userId],
     ) : Promise.resolve({ rows: [] }),
@@ -2298,6 +2397,53 @@ async function getTestWorkbench(
     const planId = Number(row.test_plan_id)
     subjectIdsByPlan.set(planId, [...(subjectIdsByPlan.get(planId) ?? []), Number(row.test_subject_id)])
   }
+  const imagesByExecution = new Map<number, Array<{
+    id: number
+    name: string
+    size: number
+    src: string
+    type: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+  }>>()
+  for (const row of planExecutionImages.rows) {
+    let src = ''
+    try {
+      src = testPlanImageUrl(row.object_key)
+    } catch {
+      // Object storage may be configured after legacy execution metadata exists.
+    }
+    const executionId = Number(row.execution_id)
+    imagesByExecution.set(executionId, [
+      ...(imagesByExecution.get(executionId) ?? []),
+      { id: Number(row.id), name: decryptText(row.file_name), size: Number(row.file_size), src, type: row.content_type },
+    ])
+  }
+  const executionsByCase = new Map<number, Array<{
+    actualResult: string
+    actorName?: string
+    actorUserId?: number
+    executedAt: string
+    id: number
+    images: Array<{ id: number; name: string; size: number; src: string; type: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' }>
+    note: string
+    result: string
+  }>>()
+  for (const row of planExecutions.rows) {
+    const executionId = Number(row.id)
+    const caseId = Number(row.test_plan_case_id)
+    executionsByCase.set(caseId, [
+      ...(executionsByCase.get(caseId) ?? []),
+      {
+        actualResult: decryptText(row.actual_result),
+        actorName: row.actor_display_name || row.actor_email || undefined,
+        actorUserId: row.executed_by_user_id ? Number(row.executed_by_user_id) : undefined,
+        executedAt: row.executed_at.toISOString(),
+        id: executionId,
+        images: imagesByExecution.get(executionId) ?? [],
+        note: decryptText(row.note),
+        result: row.result,
+      },
+    ])
+  }
   const editableSpaces = spaces.rows.filter((row) => row.access_level !== 'viewer')
   const testEnvironmentsById = new Map<number, {
     accessUrl: string
@@ -2319,6 +2465,7 @@ async function getTestWorkbench(
   const departedUserIds = includes('core') ? await getDepartedUserIds() : []
 
   return {
+    testPlanImageMaxBytes: testPlanImageUploadMaxBytes(),
     loadedSections: sections ? [...sections] : undefined,
     departedUserIds,
     bugs: bugs.rows.map((row) => ({
@@ -2468,6 +2615,7 @@ async function getTestWorkbench(
     planCases: planCases.rows.map((row) => ({
       executedAt: row.executed_at?.toISOString(),
       executedByUserId: row.executed_by_user_id ? Number(row.executed_by_user_id) : undefined,
+      executions: executionsByCase.get(Number(row.id)) ?? [],
       id: Number(row.id),
       result: row.result,
       resultNote: decryptText(row.result_note),
@@ -4406,12 +4554,73 @@ router.delete('/test-spaces/:spaceId/plans/:planId', asyncRoute(async (request, 
   response.json(await getTestWorkbench(session.userId))
 }))
 
+async function appendTestPlanExecution(client: PoolClient, input: {
+  actualResult: string
+  clientId: string
+  images: TestPlanExecutionImageInput[]
+  note: string
+  planCaseId: number
+  result: TestResult
+  sessionUserId: number
+  spaceId: number
+}) {
+  const target = await client.query<{ plan_id: string }>(
+    `
+    select p.id as plan_id
+    from test_plan_cases pc
+    join test_plans p on p.id = pc.test_plan_id
+    where pc.id = $1 and p.test_space_id = $2
+    for update of pc, p
+    `,
+    [input.planCaseId, input.spaceId],
+  )
+  if (!target.rows[0]) throw Object.assign(new Error('Plan case not found'), { status: 404 })
+  const inserted = await client.query<{ id: string }>(
+    `
+    insert into test_plan_executions
+      (test_plan_case_id, client_id, result, actual_result, note, executed_by_user_id)
+    values ($1, $2, $3, $4, $5, $6)
+    on conflict (test_plan_case_id, client_id) do nothing
+    returning id
+    `,
+    [input.planCaseId, input.clientId, input.result, encryptText(input.actualResult), encryptText(input.note), input.sessionUserId],
+  )
+  if (!inserted.rows[0]) return
+  for (const image of input.images) {
+    await client.query(
+      `
+      insert into test_plan_execution_images
+        (execution_id, object_key, file_name, content_type, file_size)
+      values ($1, $2, $3, $4, $5)
+      `,
+      [inserted.rows[0].id, image.objectKey, encryptText(image.fileName), image.contentType, image.fileSize],
+    )
+  }
+  await client.query(
+    `
+    update test_plan_cases
+    set result = $1, result_note = $2, executed_by_user_id = $3, executed_at = now()
+    where id = $4
+    `,
+    [input.result, encryptText(input.note), input.sessionUserId, input.planCaseId],
+  )
+  await client.query(
+    `
+    update test_plans
+    set status = case when status = 'draft' then 'in_progress' else status end,
+        updated_at = now()
+    where id = $1
+    `,
+    [Number(target.rows[0].plan_id)],
+  )
+}
+
 router.patch('/test-spaces/:spaceId/plan-cases/:planCaseId', asyncRoute(async (request, response) => {
   const session = await requireActiveRole(request, response, 'tester')
   if (!session) return
   const spaceId = positiveId(request.params.spaceId)
   const planCaseId = positiveId(request.params.planCaseId)
-  if (!(await requireSpaceAccess(response, spaceId, session.userId, true)) || !planCaseId) return
+  if (!spaceId || !planCaseId || !(await requireSpaceAccess(response, spaceId, session.userId, true))) return
   if (!isTestResult(request.body.result)) {
     response.status(400).json({ error: 'Valid test result is required' })
     return
@@ -4419,38 +4628,68 @@ router.patch('/test-spaces/:spaceId/plan-cases/:planCaseId', asyncRoute(async (r
   const client = await pool.connect()
   try {
     await client.query('begin')
-    const updated = await client.query<{ test_plan_id: string }>(
-      `
-      update test_plan_cases pc set
-        result = $1, result_note = $2, executed_by_user_id = $3, executed_at = now()
-      from test_plans p
-      where pc.id = $4 and p.id = pc.test_plan_id and p.test_space_id = $5
-      returning pc.test_plan_id
-      `,
-      [request.body.result, encryptText(text(request.body.resultNote, 5000)), session.userId, planCaseId, spaceId],
-    )
-    if (!updated.rows[0]) {
-      await client.query('rollback')
-      response.status(404).json({ error: 'Plan case not found' })
-      return
-    }
-    await client.query(
-      `
-      update test_plans
-      set status = case when status = 'draft' then 'in_progress' else status end,
-          updated_at = now()
-      where id = $1
-      `,
-      [Number(updated.rows[0].test_plan_id)],
-    )
+    await appendTestPlanExecution(client, {
+      actualResult: '',
+      clientId: executionClientId(request.body.clientId) ?? crypto.randomUUID(),
+      images: [],
+      note: text(request.body.resultNote, 5000),
+      planCaseId,
+      result: request.body.result,
+      sessionUserId: session.userId,
+      spaceId,
+    })
     await client.query('commit')
-    onTestExecutionResultChanged({ actorUserId: session.userId, planCaseId })
   } catch (error) {
     await client.query('rollback')
     throw error
   } finally {
     client.release()
   }
+  onTestExecutionResultChanged({ actorUserId: session.userId, planCaseId })
+  response.json(await getTestWorkbench(session.userId))
+}))
+
+router.post('/test-spaces/:spaceId/plan-cases/:planCaseId/executions', asyncRoute(async (request, response) => {
+  const session = await requireActiveRole(request, response, 'tester')
+  if (!session) return
+  const spaceId = positiveId(request.params.spaceId)
+  const planCaseId = positiveId(request.params.planCaseId)
+  if (!spaceId || !planCaseId) {
+    response.status(400).json({ error: 'Valid test-space and plan-case ids are required' })
+    return
+  }
+  if (!(await requireSpaceAccess(response, spaceId, session.userId, true))) return
+  if (!isTestResult(request.body.result)) {
+    response.status(400).json({ error: 'Valid test result is required' })
+    return
+  }
+  const clientId = executionClientId(request.body.clientId)
+  if (!clientId) {
+    response.status(400).json({ error: 'Valid execution client id is required' })
+    return
+  }
+  const images = executionImages(request.body.images, session.userId)
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    await appendTestPlanExecution(client, {
+      actualResult: text(request.body.actualResult, 10000),
+      clientId,
+      images,
+      note: text(request.body.note, 5000),
+      planCaseId,
+      result: request.body.result,
+      sessionUserId: session.userId,
+      spaceId,
+    })
+    await client.query('commit')
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
+  onTestExecutionResultChanged({ actorUserId: session.userId, planCaseId })
   response.json(await getTestWorkbench(session.userId))
 }))
 

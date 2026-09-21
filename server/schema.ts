@@ -2005,6 +2005,53 @@ create table if not exists test_plan_cases (
   unique (id, test_plan_id)
 );
 
+create table if not exists test_plan_executions (
+  id bigserial primary key,
+  test_plan_case_id bigint not null references test_plan_cases(id) on delete cascade,
+  client_id uuid not null,
+  result text not null check (result in ('untested', 'passed', 'failed', 'blocked', 'skipped')),
+  actual_result text not null default '',
+  note text not null default '',
+  executed_by_user_id bigint references users(id) on delete set null,
+  executed_at timestamptz not null default now(),
+  unique (test_plan_case_id, client_id)
+);
+
+create table if not exists test_plan_execution_images (
+  id bigserial primary key,
+  execution_id bigint not null references test_plan_executions(id) on delete cascade,
+  object_key text not null,
+  file_name text not null default '',
+  content_type text not null check (content_type in ('image/jpeg', 'image/png', 'image/webp', 'image/gif')),
+  file_size bigint not null check (file_size > 0 and file_size <= 31457280),
+  unique (execution_id, object_key)
+);
+
+do $$
+begin
+  if exists (
+    select 1
+      from pg_constraint
+     where conrelid = 'test_plan_execution_images'::regclass
+       and conname = 'test_plan_execution_images_file_size_check'
+       and pg_get_constraintdef(oid) not like '%31457280%'
+  ) then
+    alter table test_plan_execution_images
+      drop constraint test_plan_execution_images_file_size_check;
+  end if;
+
+  if not exists (
+    select 1
+      from pg_constraint
+     where conrelid = 'test_plan_execution_images'::regclass
+       and conname = 'test_plan_execution_images_file_size_check'
+  ) then
+    alter table test_plan_execution_images
+      add constraint test_plan_execution_images_file_size_check
+      check (file_size > 0 and file_size <= 31457280);
+  end if;
+end $$;
+
 alter table test_plan_cases
   add column if not exists test_subject_id bigint references test_subjects(id) on delete set null;
 
@@ -2599,6 +2646,10 @@ create index if not exists idx_test_plan_subjects_subject_id
   on test_plan_subjects(test_subject_id, test_plan_id);
 create index if not exists idx_test_plan_cases_plan_id
   on test_plan_cases(test_plan_id, id);
+create index if not exists idx_test_plan_executions_case_id
+  on test_plan_executions(test_plan_case_id, id);
+create index if not exists idx_test_plan_execution_images_execution_id
+  on test_plan_execution_images(execution_id, id);
 create index if not exists idx_test_bugs_space_status
   on test_bugs(test_space_id, status, updated_at desc);
 create index if not exists idx_test_bugs_assignee_id

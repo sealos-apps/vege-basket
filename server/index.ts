@@ -186,6 +186,7 @@ import {
   getAuthenticatedRoleSession,
   getUserRoleContext,
   getSwitchableUserRoles,
+  requireActiveRole,
   requirePlatformAdminSession,
   roleRouter,
   type UserRole,
@@ -235,6 +236,16 @@ import {
   legacyTodoImageUrlSecretFromEnvironment,
   todoImageSignature,
 } from './todo-image-signature.ts'
+import {
+  createTestPlanImageObjectKey,
+  getTestPlanImage,
+  isTestPlanImageObjectKey,
+  isTestPlanImageSignatureValid,
+  normalizeTestPlanImageContentType,
+  putTestPlanImage,
+  testPlanImageUrl,
+  testPlanImageUploadMaxBytes,
+} from './test-plan-image.ts'
 import { runAutomaticDatabaseMigrations, stopAutomaticDatabaseMigrations } from './database-migrations.ts'
 import {
   platformMaintenanceMiddleware,
@@ -610,6 +621,57 @@ app.get('/api/todo-images', (request, response, next) => {
   const contentType = Array.isArray(contentTypeHeader) ? contentTypeHeader[0] : contentTypeHeader
   response.setHeader('Cache-Control', 'private, max-age=86400')
   response.setHeader('Content-Type', normalizeTodoImageContentType(contentType) ?? 'application/octet-stream')
+  response.setHeader('X-Content-Type-Options', 'nosniff')
+  response.send(result.content)
+}))
+
+app.post('/api/test-plan-images', (request, response, next) => {
+  void platformConfigRequestMiddleware(request, response, next)
+}, (request, response, next) => {
+  express.raw({ limit: testPlanImageUploadMaxBytes(), type: ['image/*'] })(request, response, next)
+}, asyncHandler(async (request, response) => {
+  const session = await requireActiveRole(request, response, 'tester')
+  if (!session) return
+  const userId = session.userId
+  const contentType = normalizeTestPlanImageContentType(request.headers['content-type'])
+  if (!contentType) {
+    response.status(415).json({ error: '仅支持 PNG、JPEG、WebP 或 GIF 图片。' })
+    return
+  }
+  if (!Buffer.isBuffer(request.body) || request.body.length === 0) {
+    response.status(400).json({ error: '图片文件不能为空。' })
+    return
+  }
+  const maxBytes = testPlanImageUploadMaxBytes()
+  if (request.body.length > maxBytes) {
+    response.status(413).json({ error: `单张图片不能超过 ${Math.round(maxBytes / 1024 / 1024)} MiB。` })
+    return
+  }
+  const objectKey = createTestPlanImageObjectKey(userId, contentType)
+  await markPlatformStorageUsed(getPlatformConfigSnapshot().revision)
+  await putTestPlanImage(objectKey, request.body, contentType)
+  response.status(201).json({
+    contentType,
+    imageUrl: testPlanImageUrl(objectKey),
+    objectKey,
+  })
+}))
+
+app.get('/api/test-plan-images', (request, response, next) => {
+  void platformConfigRequestMiddleware(request, response, next)
+}, asyncHandler(async (request, response) => {
+  const objectKey = String(request.query.key ?? '')
+  const signature = String(request.query.sig ?? '')
+  if (!isTestPlanImageObjectKey(objectKey) || !(await isTestPlanImageSignatureValid(objectKey, signature))) {
+    response.status(400).json({ error: '无效的测试计划截图地址。' })
+    return
+  }
+  const result = await getTestPlanImage(objectKey)
+  const headers = (result.res?.headers ?? {}) as Record<string, string | string[] | undefined>
+  const contentTypeHeader = headers['content-type']
+  const contentType = Array.isArray(contentTypeHeader) ? contentTypeHeader[0] : contentTypeHeader
+  response.setHeader('Cache-Control', 'private, max-age=86400')
+  response.setHeader('Content-Type', normalizeTestPlanImageContentType(contentType) || 'application/octet-stream')
   response.setHeader('X-Content-Type-Options', 'nosniff')
   response.send(result.content)
 }))

@@ -43,6 +43,7 @@ import {
   ListChecks,
   LinkSimple,
   MagnifyingGlass,
+  NotePencil,
   PencilSimple,
   Plus,
   Stack,
@@ -197,8 +198,19 @@ import { containerImageReferenceKey, normalizeContainerImageReference } from '..
 import { formatTestSpaceReference } from '../../shared/test-space-reference'
 import type { PackageMarketCiBranch, PackageMarketRule, PackageMarketVersion, Priority } from '@/types'
 import './test-workbench.css'
+import { TestPlanExecutionPanel } from './test-plan-execution'
+import { testPlanExecutionBugEvidence } from '../test-plan-execution'
 
 type WorkbenchTab = 'cases' | 'plans' | 'bugs' | 'weekly_report' | 'notifications'
+
+export type TestPlanPresentation = {
+  rowBlockSize?: number
+  caseActions?: (planCase: TestWorkbenchData['planCases'][number], openDetail: () => void) => ReactNode
+  caseMetadata?: (planCase: TestWorkbenchData['planCases'][number]) => ReactNode
+  caseDetail?: (planCase: TestWorkbenchData['planCases'][number], commit: (operation: () => Promise<TestWorkbenchData>) => Promise<boolean>) => ReactNode
+  onDetailClose?: () => void
+  bugActualResult?: (planCase: TestWorkbenchData['planCases'][number]) => string | undefined
+}
 type VerificationPackageSelection = {
   arch: string
   channel: 'release' | 'ci'
@@ -459,7 +471,7 @@ function uniqueBugFilterOptions(
     left.label.localeCompare(right.label, 'zh-CN')
   ))
 }
-const PLAN_EXECUTION_ROW_BLOCK_SIZE = 88
+const PLAN_EXECUTION_ROW_BLOCK_SIZE = 116
 const emptyTestSpaceSettings: TestSpaceSettings = { invitations: [], organizations: [], spaces: [] }
 const testSpaceInviteParam = 'testSpaceInvite'
 const seenBugCommentStoragePrefix = 'veges.testWorkbench.seenBugComments.v1'
@@ -657,6 +669,7 @@ export function TestWorkbench({
   currentUserId,
   projects,
   workspaceContent,
+  planPresentation,
 }: {
   navigationBusy?: boolean
   weeklyReportRef?: { current: WeeklyReportWorkbenchHandle | null }
@@ -664,6 +677,7 @@ export function TestWorkbench({
   currentUserId?: number
   projects: TestWorkbenchProjectOption[]
   workspaceContent?: ReactNode
+  planPresentation?: TestPlanPresentation
 }) {
   const [data, setData] = useState<TestWorkbenchData>(emptyWorkbench)
   const [loading, setLoading] = useState(true)
@@ -1517,6 +1531,8 @@ export function TestWorkbench({
             <>
               <WorkspaceError message={error} />
               <PlansView
+                presentation={planPresentation}
+                onPresentationCommit={mutate}
                 key={`plans:${spaceId}`}
                 busy={busy}
                 data={data}
@@ -1545,11 +1561,11 @@ export function TestWorkbench({
                       (next) => next.plans.some((item) => item.id === plan.id && item.status === status)))
                   } else void mutate(() => updateTestPlanStatus(plan.testSpaceId, plan.id, status))
                 }}
-                onResult={(planCaseId, result) => void mutate(() => updateTestPlanCase(spaceId!, planCaseId, { result }))}
+                onResult={(planCaseId, result) => void mutate(() => updateTestPlanCase(spaceId!, planCaseId, { result, clientId: crypto.randomUUID() }))}
                 onCreateBug={(plan, planCase) => {
                   setEditingBug(undefined)
                   setBugSeed({
-                    actualResult: planCase.resultNote,
+                    actualResult: planPresentation?.bugActualResult?.(planCase) ?? testPlanExecutionBugEvidence(planCase),
                     environment: plan.environment,
                     expectedResult: planCase.snapshotExpectedResult,
                     reproductionSteps: planCase.snapshotSteps,
@@ -2477,7 +2493,9 @@ export function CasesView({ busy, currentUserId, subjects, spaceId, cases, data,
   )
 }
 
-function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemoveCase, onResult, onSelect, onStatus, plans, projects, readOnly, selectedId }: {
+function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemoveCase, onResult, onSelect, onStatus, onPresentationCommit, plans, presentation, projects, readOnly, selectedId }: {
+  presentation?: TestPlanPresentation
+  onPresentationCommit: (operation: () => Promise<TestWorkbenchData>) => Promise<boolean>
   busy: boolean
   data: TestWorkbenchData
   onCreate: () => void
@@ -2527,14 +2545,14 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
         return
       }
       const availableHeight = list.getBoundingClientRect().height
-      const nextPageSize = Math.max(3, Math.min(20, Math.floor((availableHeight + 8) / PLAN_EXECUTION_ROW_BLOCK_SIZE)))
+      const nextPageSize = Math.max(3, Math.min(20, Math.floor((availableHeight + 8) / (presentation?.rowBlockSize ?? PLAN_EXECUTION_ROW_BLOCK_SIZE))))
       setExecutionPageSize((current) => current === nextPageSize ? current : nextPageSize)
     }
     updatePageSize()
     const observer = new ResizeObserver(updatePageSize)
     observer.observe(list)
     return () => observer.disconnect()
-  }, [selectedId])
+  }, [selectedId, presentation?.rowBlockSize])
 
   useEffect(() => {
     setExecutionPage(0)
@@ -2581,13 +2599,17 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
                 </p>
               </div>
               <div className="test-plan-heading-actions">
-                <Select value={selected.status} onValueChange={(value) => onStatus(selected, value as TestPlan['status'])} disabled={busy || readOnly}>
-                  <SelectTrigger className="test-status-select"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem value="draft">草稿</SelectItem><SelectItem value="in_progress">执行中</SelectItem><SelectItem value="completed">已完成</SelectItem><SelectItem value="aborted">已终止</SelectItem></SelectContent>
-                </Select>
+                <div className="test-plan-primary-actions">
+                  <Select value={selected.status} onValueChange={(value) => onStatus(selected, value as TestPlan['status'])} disabled={busy || readOnly}>
+                    <SelectTrigger aria-label={`${selected.name} 计划状态`} className="test-status-select"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="draft">草稿</SelectItem><SelectItem value="in_progress">执行中</SelectItem><SelectItem value="completed">已完成</SelectItem><SelectItem value="aborted">已终止</SelectItem></SelectContent>
+                  </Select>
+                </div>
                 {selected.canManage && !readOnly ? <>
-                  <Button variant="outline" disabled={busy} onClick={() => onEdit(selected)}><PencilSimple /> 编辑</Button>
-                  <Button variant="destructive" disabled={busy} onClick={() => onDelete(selected)}><Trash /> 删除</Button>
+                  <div className="test-plan-manage-actions">
+                    <Button variant="outline" disabled={busy} onClick={() => onEdit(selected)}><PencilSimple /> 编辑</Button>
+                    <Button variant="destructive" disabled={busy} onClick={() => onDelete(selected)}><Trash /> 删除</Button>
+                  </div>
                 </> : null}
               </div>
             </div>
@@ -2596,10 +2618,11 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
             <div className="test-plan-progress"><div><strong>{passed}</strong><span>通过</span></div><div><strong>{executions.filter((item) => item.result === 'failed').length}</strong><span>失败</span></div><div><strong>{executions.filter((item) => item.result === 'blocked').length}</strong><span>阻塞</span></div><div><strong>{executions.length ? Math.round((executions.filter((item) => item.result !== 'untested').length / executions.length) * 100) : 0}%</strong><span>进度</span></div></div>
             <div ref={executionListRef} className="test-execution-list">
               {visibleExecutions.map((row) => <article key={row.id}>
-                <div className="test-execution-copy"><code>CASE-{row.testCaseId ?? 'SNAPSHOT'}</code><strong>{row.snapshotTitle}</strong><small>{data.subjects.find((subject) => subject.id === row.testSubjectId)?.name || '未知一级目录'}</small></div>
-                <Select value={row.result} onValueChange={(value) => onResult(row.id, value as TestResult)} disabled={busy || readOnly}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{Object.entries(resultLabel).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
+                <div className="test-execution-copy"><code>CASE-{row.testCaseId ?? 'SNAPSHOT'}</code><strong>{row.snapshotTitle}</strong><small>{data.subjects.find((subject) => subject.id === row.testSubjectId)?.name || '未知一级目录'}</small>{presentation?.caseMetadata?.(row) ?? <small>{row.executions?.length ? `${row.executions.length} 次执行记录` : row.result === 'untested' ? '暂无执行记录' : '历史结果 · 暂无执行记录'}</small>}</div>
+                <div className="test-execution-result"><span>执行结果</span><Select value={row.result} onValueChange={(value) => onResult(row.id, value as TestResult)} disabled={busy || readOnly}><SelectTrigger aria-label={`${row.snapshotTitle} 执行结果`}><SelectValue /></SelectTrigger><SelectContent>{Object.entries(resultLabel).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></div>
                 <div className="test-execution-actions">
                   <Button variant="outline" onClick={() => setDetailExecutionId(row.id)}><ClipboardText /> 详情</Button>
+                  {!readOnly ? presentation?.caseActions?.(row, () => setDetailExecutionId(row.id)) ?? <Button variant="outline" onClick={() => setDetailExecutionId(row.id)}><NotePencil />记录执行</Button> : null}
                   {row.result === 'failed' && !readOnly ? <Button variant="outline" onClick={() => onCreateBug(selected, row)}><Bug /> 创建 Bug</Button> : null}
                   {selected.canManage && !readOnly && row.result === 'untested' ? <Button
                     aria-label={`从计划移除 ${row.snapshotTitle}`}
@@ -2629,12 +2652,15 @@ function PlansView({ busy, data, onCreate, onCreateBug, onDelete, onEdit, onRemo
           </> : <div className="test-detail-empty"><ListChecks size={28} /><p>选择一个计划开始执行。</p></div>}
         </div>
       </div>
-      <PlanCaseDetailDialog planCase={detailExecution} onClose={() => setDetailExecutionId(undefined)} />
+      <PlanCaseDetailDialog planCase={detailExecution} onClose={() => { setDetailExecutionId(undefined); presentation?.onDetailClose?.() }}>
+        {detailExecution ? presentation?.caseDetail?.(detailExecution, onPresentationCommit) ?? <TestPlanExecutionPanel plan={selected!} planCase={detailExecution} commit={onPresentationCommit} maxImageBytes={data.testPlanImageMaxBytes} /> : null}
+      </PlanCaseDetailDialog>
     </div>
   )
 }
 
-function PlanCaseDetailDialog({ onClose, planCase }: {
+function PlanCaseDetailDialog({ children, onClose, planCase }: {
+  children?: ReactNode
   onClose: () => void
   planCase?: TestWorkbenchData['planCases'][number]
 }) {
@@ -2654,6 +2680,7 @@ function PlanCaseDetailDialog({ onClose, planCase }: {
           <DetailBlock title="预期结果" content={planCase.snapshotExpectedResult} />
           {planCase.resultNote ? <DetailBlock title="执行备注" content={planCase.resultNote} /> : null}
         </div>
+        {children}
       </DialogContent>
     </Dialog>
   )
@@ -3669,7 +3696,7 @@ function BugEvidenceContent({ content, emptyText = '未填写', title = '附件'
   )
 }
 
-function DetailBlock({ content, title }: { content: string; title: string }) {
+export function DetailBlock({ content, title }: { content: string; title: string }) {
   return (
     <section className="test-detail-block">
       <h3>{title}</h3>
