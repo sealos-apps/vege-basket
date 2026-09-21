@@ -446,6 +446,7 @@ export function OrganizationWorkbench({
   const [backgroundRefreshVersion, setBackgroundRefreshVersion] = useState(0)
   const [weeklyReminderNotice, setWeeklyReminderNotice] = useState('')
   const [weeklyRulesOpen, setWeeklyRulesOpen] = useState(false)
+  const [weeklyAdminTab, setWeeklyAdminTab] = useState<'collection' | 'summary' | 'rules'>('collection')
   const [weeklyRulesError, setWeeklyRulesError] = useState('')
   const [weeklyRulesDraft, setWeeklyRulesDraft] = useState<WeeklyReportRules>(defaultWeeklyReportRules)
   const [weeklyRulesWeekStartsOn, setWeeklyRulesWeekStartsOn] = useState(1)
@@ -456,6 +457,10 @@ export function OrganizationWorkbench({
   const loadedPackageMarketCatalogOrganizationId = useRef(0)
   const detailSectionRefreshVersions = useRef<Record<string, number>>({})
   const canAccessOrganizationManagement = hasOrganizationAdminRole(currentUser.roles)
+
+  useEffect(() => {
+    if (tab !== 'reports') setWeeklyAdminTab('collection')
+  }, [tab])
 
   useEffect(() => startVisibleRefreshSchedule({
     clearInterval: (handle) => window.clearInterval(handle),
@@ -624,6 +629,16 @@ export function OrganizationWorkbench({
       setWeeklyReportAssigneeUserIds(detail.weeklyReportAssigneeUserIds)
     }
   }, [detail])
+
+  function openWeeklyRulesDialog() {
+    if (!detail) return
+    setWeeklyRulesDraft(detail.weeklyReportRules)
+    setWeeklyRulesWeekStartsOn(detail.weekStartsOn)
+    setWeeklyReportAssigneeUserIds(detail.weeklyReportAssigneeUserIds)
+    setWeeklyReportAssigneeQuery('')
+    setWeeklyRulesError('')
+    setWeeklyRulesOpen(true)
+  }
 
   async function mutate(operation: () => Promise<OrganizationDetail>, confirmed = false, matches: (data: OrganizationDetail) => boolean = () => false) {
     setBusy(true)
@@ -1620,7 +1635,13 @@ export function OrganizationWorkbench({
             </header>
             {detail.canManageWeeklyReports ? (
               <>
-                <div className="organization-report-collection-toolbar">
+                <nav className="organization-weekly-report-tabs" aria-label="组织周报视图" role="tablist">
+                  <button type="button" role="tab" aria-selected={weeklyAdminTab === 'collection'} onClick={() => setWeeklyAdminTab('collection')}>收集情况</button>
+                  <button type="button" role="tab" aria-selected={weeklyAdminTab === 'summary'} onClick={() => setWeeklyAdminTab('summary')}>组织汇总</button>
+                  <button type="button" role="tab" aria-selected={weeklyAdminTab === 'rules'} onClick={() => { setWeeklyAdminTab('rules'); openWeeklyRulesDialog() }}>周报规则</button>
+                </nav>
+                {weeklyAdminTab === 'collection' ? <div className="organization-weekly-tab-intro">按成员查看提交状态、角色和任务平均进度；草稿内容不会出现在这里。</div> : null}
+                {weeklyAdminTab === 'collection' ? <div className="organization-report-collection-toolbar">
                   <div>
                     <strong>
                       已提交 {weeklyCollection?.members.filter((member) => member.revision != null).length ?? 0}
@@ -1638,9 +1659,12 @@ export function OrganizationWorkbench({
                         .map((member) => member.userId) ?? [],
                     )}
                   ><PaperPlaneTilt size={16} /> 提醒未提交成员</Button>
-                </div>
-                <div className="wr-org-progress">{(['all', 'developer', 'tester'] as const).map(profile => <WeeklyReportProgress key={profile} title={profile === 'all' ? '已提交任务平均进度' : `${profile === 'developer' ? '开发' : '测试'}任务平均进度`} summary={combineWeeklyReportProgress((weeklyCollection?.members ?? []).filter(member => member.revision != null && (profile === 'all' || member.reportProfile === profile)).map(member => member.progressSummary))} />)}</div>
-                <p className="wr-source-note">仅统计已提交任务记录；未提交成员及个人草稿不计入。已记录进度 {weeklyCollection?.members.filter(member => member.revision && member.progressSummary).length ?? 0} / {weeklyCollection?.members.filter(member => member.revision).length ?? 0} 份提交周报；历史无进度报告不纳入均值。各组按全部任务等权计算，列表筛选不改变组织统计范围。</p>
+                </div> : null}
+                {weeklyAdminTab === 'summary' ? <>
+                  <div className="wr-org-progress">{(['all', 'developer', 'tester'] as const).map(profile => <WeeklyReportProgress key={profile} title={profile === 'all' ? '已提交任务平均进度' : `${profile === 'developer' ? '开发' : '测试'}任务平均进度`} summary={combineWeeklyReportProgress((weeklyCollection?.members ?? []).filter(member => member.revision != null && (profile === 'all' || member.reportProfile === profile)).map(member => member.progressSummary))} />)}</div>
+                  <p className="wr-source-note">仅统计已提交任务记录；未提交成员及个人草稿不计入。已记录进度 {weeklyCollection?.members.filter(member => member.revision && member.progressSummary).length ?? 0} / {weeklyCollection?.members.filter(member => member.revision).length ?? 0} 份提交周报；历史无进度报告不纳入均值。各组按全部任务等权计算，列表筛选不改变组织统计范围。</p>
+                </> : null}
+                {weeklyAdminTab === 'collection' ? <>
                 <div className="wr-org-filters"><Input aria-label="搜索周报成员" placeholder="搜索成员" value={reportMemberQuery} onChange={e => setReportMemberQuery(e.target.value)} /><select aria-label="筛选周报身份" value={reportMemberRole} onChange={e => setReportMemberRole(e.target.value as typeof reportMemberRole)}><option value="all">全部身份</option><option value="developer">开发</option><option value="tester">测试</option></select><select aria-label="筛选周报提交状态" value={reportMemberStatus} onChange={e => setReportMemberStatus(e.target.value)}><option value="all">全部提交状态</option><option value="submitted">已有提交版</option><option value="pending">尚未提交</option></select></div>
                 <div className="organization-weekly-collection">
                   {weeklyCollectionLoading && !weeklyCollection ? <EmptyRow text="正在加载周报收集状态..." /> : null}
@@ -1682,11 +1706,12 @@ export function OrganizationWorkbench({
                     </div>
                   ))}
                 </div>
+                </> : null}
               </>
             ) : (
               <EmptyRow text="需要组织管理员身份才能管理周报收集" />
             )}
-            <div className="organization-summary-band">
+            {weeklyAdminTab === 'summary' ? <div className="organization-summary-band">
               <div>
                 <strong>组织汇总</strong>
                 <span>仅使用成员已确认提交的版本</span>
@@ -1696,7 +1721,7 @@ export function OrganizationWorkbench({
                   <MarkdownPreview content={currentSummary.content} />
                 </div>
               ) : <EmptyRow text="本周暂无组织周报汇总" />}
-            </div>
+            </div> : null}
           </section>
         ) : null}
 

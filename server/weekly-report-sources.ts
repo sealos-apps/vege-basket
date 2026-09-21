@@ -126,6 +126,11 @@ type SourceRow = {
   failed?: string
   blocked?: string
   skipped?: string
+  execution_records?: Array<{
+    caseTitle: string
+    result: 'passed' | 'failed' | 'blocked' | 'skipped'
+    executedAt: string
+  }>
 }
 const projectSources = {
   todo: {
@@ -233,6 +238,9 @@ export async function loadWeeklyReportSources(
         coalesce(plan.owner_user_id = $2::bigint or plan.created_by_user_id = $2::bigint or counts.total > 0, false) as related_to_me,
         counts.*, (select coalesce(jsonb_agg(jsonb_build_object('id', subject.id, 'name', subject.name) order by subject.id), '[]'::jsonb)
           from test_subjects subject where subject.id in (select relation.test_subject_id from test_plan_subjects relation where relation.test_plan_id = plan.id)) as subjects
+        , (select coalesce(jsonb_agg(jsonb_build_object('caseTitle', pc.snapshot_title, 'result', pc.result, 'executedAt', pc.executed_at) order by pc.executed_at desc, pc.id desc), '[]'::jsonb)
+          from test_plan_cases pc where pc.test_plan_id = plan.id and pc.executed_by_user_id = $2::bigint
+            and pc.result <> 'untested' and pc.executed_at is not null and ${within('pc.executed_at')}) as execution_records
         from test_plans plan join test_spaces space on space.id = plan.test_space_id
         cross join lateral (select count(*)::int as total,
           (count(*) filter (where pc.result = 'passed'))::int as passed,
@@ -283,6 +291,11 @@ export async function loadWeeklyReportSources(
             blocked: Number(row.blocked),
             skipped: Number(row.skipped),
           },
+          personalExecutionRecords: (row.execution_records ?? []).map((record) => ({
+            caseTitle: decryptText(record.caseTitle),
+            result: record.result,
+            executedAt: record.executedAt,
+          })),
         })
       if (kind === 'bug') source.testSpaceName = source.projectName
       sources.push(source)

@@ -131,6 +131,33 @@ test('candidate truncation is explicit and matched dates come from query evidenc
   assert.equal(result.truncated.bug, true)
   assert.equal(result.sources[0].matchedDate, '2026-09-10')
 })
+test('test-plan candidates expose only the current user current-week execution records', async () => {
+  const row = {
+    id: '3',
+    parent_id: '4',
+    parent_name: '测试空间',
+    title: '支付回归',
+    version_label: 'v1.2.0',
+    status: 'in_progress',
+    date: '2026-09-10T08:00:00+08:00',
+    related_to_me: true,
+    total: '1',
+    passed: '1',
+    failed: '0',
+    blocked: '0',
+    skipped: '0',
+    subjects: [],
+    execution_records: [{
+      caseTitle: '支付成功',
+      result: 'passed' as const,
+      executedAt: '2026-09-10T08:00:00.000Z',
+    }],
+  }
+  const { client } = mockClient([row])
+  const result = await loadWeeklyReportSources(client, params)
+  const plan = result.sources.find((source) => source.kind === 'test_plan')!
+  assert.deepEqual(plan.personalExecutionRecords, row.execution_records)
+})
 test('legacy conversion preserves field text and leaves every percentage unset; ambiguous Markdown stays raw', () => {
   const raw =
     '## 本周重点工作目标：\n\n目标\n\n---\n\n## 事项一：接口验证\n\n- 本周进展：第一行\n第二行\n- 风险问题：需要协作\n- 下周计划：继续回归'

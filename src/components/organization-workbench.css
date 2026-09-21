@@ -1613,6 +1613,37 @@
   font-variant-numeric: tabular-nums;
 }
 
+.organization-weekly-report-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.organization-weekly-report-tabs button {
+  min-height: 42px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--muted-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.organization-weekly-report-tabs button[aria-selected='true'] {
+  border-bottom-color: var(--primary);
+  color: var(--primary);
+  font-weight: 650;
+}
+
+.organization-weekly-tab-intro {
+  padding: 12px 16px 0;
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
 .organization-report-collection-toolbar {
   min-height: 68px;
   display: flex;

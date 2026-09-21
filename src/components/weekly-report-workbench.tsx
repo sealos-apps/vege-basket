@@ -70,8 +70,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select'
-import { convertLegacyWeeklyReport, createWeeklyReportDocument, parseWeeklyReportDocument, serializeWeeklyReportDocument, WEEKLY_REPORT_CONTENT_LIMIT, weeklyReportValidationError } from '../../shared/weekly-report-document'
-import { weeklyReportProfiles, type WeeklyReportProfile } from '../../shared/weekly-report-profile'
+import { convertLegacyWeeklyReport, createWeeklyReportDocument, formatWeeklyReportPercent, getWeeklyReportProgress, parseWeeklyReportDocument, serializeWeeklyReportDocument, WEEKLY_REPORT_CONTENT_LIMIT, weeklyReportValidationError } from '../../shared/weekly-report-document'
+import { weeklyReportProfiles, type WeeklyReportExecutionRecord, type WeeklyReportProfile } from '../../shared/weekly-report-profile'
 import { WeeklyReportForm, WeeklyReportReading, type WeeklyReportFormHandle } from './weekly-report-form'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog'
 import './weekly-report-workbench.css'
@@ -136,6 +136,13 @@ const SOURCE_PAGE_SIZE = 8
 const REPORT_LIST_PAGE_SIZE = 10
 
 type WeeklyReportView = 'editor' | 'list'
+
+const executionResultLabel: Record<WeeklyReportExecutionRecord['result'], string> = {
+  passed: '通过',
+  failed: '失败',
+  blocked: '阻塞',
+  skipped: '跳过',
+}
 
 const sourceStatusLabel: Record<string, string> = {
   in_progress: '进行中',
@@ -291,6 +298,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   const [relatedOnly, setRelatedOnly] = useState(true)
   const [sourceQuery, setSourceQuery] = useState('')
   const [sourcePage, setSourcePage] = useState(0)
+  const [expandedSourceKeys, setExpandedSourceKeys] = useState<Set<string>>(() => new Set())
   const [sourcePanelOpen, setSourcePanelOpen] = useState(() => window.innerWidth > 1000)
   const [reportList, setReportList] = useState<PersonalWeeklyReportList | null>(null)
   const [reportListPage, setReportListPage] = useState(0)
@@ -457,6 +465,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     setSourceKind('all')
     setSourceQuery('')
     setSourcePage(0)
+    setExpandedSourceKeys(new Set())
     setSaveState('idle')
     lastSavedSignature.current = ''
     setWeekStart('')
@@ -521,6 +530,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
         openPublishedOnLoad.current = false
         setSourceQuery('')
         setSourcePage(0)
+        setExpandedSourceKeys(new Set())
         setError('')
       })
       .catch((loadError) => {
@@ -895,9 +905,63 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
 
       {error ? <div className="weekly-report-error" role="alert">{error}</div> : null}
 
-      {workspaceView === 'list' ? (
+      {preview !== null ? (
+        <div className="weekly-report-preview-workspace">
+          <header className="weekly-report-preview-header">
+            <div className="weekly-report-editor-title">
+              <Button aria-label="返回填写" disabled={busy} size="icon" title="返回填写" type="button" variant="ghost" onClick={() => setPreview(null)}><ArrowLeft /></Button>
+              <div><h2>{preview === 'published' ? '已提交周报' : '提交预览'}</h2><span>{formatWeekRange(weekStart)} · {preview === 'published' ? '管理员可见的提交快照' : '确认任务进度后提交'}</span></div>
+            </div>
+            <span className={`weekly-report-preview-badge ${preview === 'published' ? 'is-published' : ''}`}>{preview === 'published' ? '已提交版本' : '提交前确认'}</span>
+          </header>
+          <div className="weekly-report-preview-body">
+            <article className="weekly-report-preview-paper">
+              <WeeklyReportReading content={preview === 'published' ? report?.publishedContent ?? '' : content} />
+            </article>
+            {(() => {
+              const previewDocument = parseWeeklyReportDocument(preview === 'published' ? report?.publishedContent ?? '' : content)
+              const summary = previewDocument ? getWeeklyReportProgress(previewDocument.items) : null
+              return (
+                <aside className="weekly-report-preview-aside" aria-label="提交检查">
+                  <h3>{preview === 'published' ? '提交信息' : '准备提交'}</h3>
+                  <ul className="weekly-report-preview-checks">
+                    <li>✓ {summary?.taskCount ?? 0} 项任务已记录</li>
+                    <li>✓ 状态由每项进度自动计算</li>
+                    <li>✓ 平均进度 {formatWeeklyReportPercent(summary?.averagePercent ?? null)}</li>
+                  </ul>
+                  {preview === 'draft' ? <Button disabled={busy || saveState === 'saving'} type="button" onClick={() => void submitReport()}><PaperPlaneTilt size={16} /> 确认提交</Button> : null}
+                  <Button disabled={busy} type="button" variant="outline" onClick={() => setPreview(null)}>返回修改</Button>
+                  <p>管理员仅可阅读已提交的内容与进度。继续修改草稿不会改变已提交版本。</p>
+                  <hr />
+                  <h3>计算口径</h3>
+                  <p>所有任务等权平均，包含 0% 的未开始任务；各事项不再作为第二层平均的权重。</p>
+                  {previewDocument?.profile === 'tester' ? <p>任务完成进度与测试通过率独立，100% 表示任务已完成，不代表版本可发布。</p> : null}
+                </aside>
+              )
+            })()}
+          </div>
+        </div>
+      ) : workspaceView === 'list' ? (
         <div className="weekly-report-index">
           {embedded ? <div id="weekly-report-embedded-toolbar-actions" className="weekly-report-embedded-toolbar-host" /> : null}
+          {(() => {
+            const current = reportList?.items.find((item) => item.weekStart === activeWeekStart)
+            const currentState = current ? reportStateMeta[current.state] : null
+            return (
+              <section className={`weekly-report-current-status ${currentState ? `is-${currentState.tone}` : 'is-empty'}`} aria-label="本周周报状态">
+                <div>
+                  <span className="weekly-report-status-kicker">本周状态 · {formatWeekRange(activeWeekStart)}</span>
+                  <strong>{currentState?.label ?? '尚未创建周报'}</strong>
+                  <small>{current?.publishedRevision ? `已提交第 ${current.publishedRevision} 版，管理员可见提交快照。` : '草稿只对自己可见，填写完成后可在预览中确认提交。'}</small>
+                </div>
+                <CreateWeeklyReportButton
+                  enabled={current?.publishedRevision ? false : canCreateWeeklyReport}
+                  reason={current?.publishedRevision ? '本周周报已经提交。' : weeklyReportCreationReason}
+                  onCreate={() => openEditor(activeWeekStart)}
+                />
+              </section>
+            )
+          })()}
           <header className="weekly-report-index-heading">
             <div>
               <h2>我的周报</h2>
@@ -1168,7 +1232,34 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
                     <span>
                       <strong>{source.title}</strong>
                       <small>{source.projectName} · {source.kind === 'bug' && source.status === 'in_progress' ? '修复中' : sourceStatusLabel[source.status] ?? source.status}</small><small>{source.matchedDate} · {source.matchReason}</small>
-                      {source.personalExecutionStats ? <small>{source.testSubjects?.map(subject => subject.name).join('、')} · {source.versionLabel}<br />本人本周期最新记录 {source.personalExecutionStats.total} 条：通过 {source.personalExecutionStats.passed} / 失败 {source.personalExecutionStats.failed} / 阻塞 {source.personalExecutionStats.blocked} / 跳过 {source.personalExecutionStats.skipped}</small> : null}
+                      {source.personalExecutionStats ? (
+                        <>
+                          <small>{source.testSubjects?.map(subject => subject.name).join('、')} · {source.versionLabel}<br />本人本周期最新记录 {source.personalExecutionStats.total} 条：通过 {source.personalExecutionStats.passed} / 失败 {source.personalExecutionStats.failed} / 阻塞 {source.personalExecutionStats.blocked} / 跳过 {source.personalExecutionStats.skipped}</small>
+                          {source.personalExecutionRecords?.length ? (
+                            <>
+                              <button
+                                className="weekly-report-source-record-toggle"
+                                type="button"
+                                onClick={(event) => {
+                                  event.preventDefault()
+                                  event.stopPropagation()
+                                  setExpandedSourceKeys((current) => {
+                                    const next = new Set(current)
+                                    if (next.has(sourceKey(source))) next.delete(sourceKey(source))
+                                    else next.add(sourceKey(source))
+                                    return next
+                                  })
+                                }}
+                              >{expandedSourceKeys.has(sourceKey(source)) ? '收起明细' : `查看记录（${source.personalExecutionRecords.length}）`}</button>
+                              {expandedSourceKeys.has(sourceKey(source)) ? (
+                                <span className="weekly-report-source-records">
+                                  {source.personalExecutionRecords.slice(0, 6).map((record) => <span key={`${record.caseTitle}:${record.executedAt}`}><strong>{record.caseTitle}</strong><small>{executionResultLabel[record.result]} · {formatDateTime(record.executedAt)}</small></span>)}
+                                </span>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </>
+                      ) : null}
                     </span>
                   </label>
                 )
@@ -1213,12 +1304,6 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
         </DialogContent>
       </Dialog>
 
-      <Dialog open={preview !== null} onOpenChange={open => { if (!busy && !open) setPreview(null) }}>
-        <DialogContent className="wr-preview-dialog"><DialogHeader><DialogTitle>{preview === 'published' ? '已提交周报' : '提交预览'}</DialogTitle><DialogDescription>{formatWeekRange(weekStart)} · {preview === 'published' ? '管理员可见的提交快照' : '检查全部任务进展和进度后确认提交'}</DialogDescription></DialogHeader>
-          <WeeklyReportReading content={preview === 'published' ? report?.publishedContent ?? '' : content} />
-          <DialogFooter><Button variant="outline" disabled={busy} onClick={() => setPreview(null)}>返回填写</Button>{preview === 'draft' ? <Button disabled={busy || saveState === 'saving'} onClick={() => void submitReport()}>确认提交</Button> : null}</DialogFooter>
-        </DialogContent>
-      </Dialog>
     </section>
   )
 })

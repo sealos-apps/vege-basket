@@ -54,6 +54,12 @@ export type WeeklyReportExecutionStats = {
   skipped: number
 }
 
+export type WeeklyReportExecutionRecord = {
+  caseTitle: string
+  result: 'passed' | 'failed' | 'blocked' | 'skipped'
+  executedAt: string
+}
+
 export type WeeklyReportSourceCandidate = WeeklyReportSourceRef & {
   date: string
   matchedDate: string
@@ -66,6 +72,7 @@ export type WeeklyReportSourceCandidate = WeeklyReportSourceRef & {
   testSubjects?: Array<{ id: number; name: string }>
   versionLabel?: string
   personalExecutionStats?: WeeklyReportExecutionStats
+  personalExecutionRecords?: WeeklyReportExecutionRecord[]
 }
 
 export type WeeklyReportSourceResult = {
