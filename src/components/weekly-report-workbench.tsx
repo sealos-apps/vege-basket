@@ -206,6 +206,7 @@ function CreateWeeklyReportButton(props: {
     <span
       aria-label={props.reason || undefined}
       className="weekly-report-create-wrap"
+      role="group"
       tabIndex={props.enabled ? -1 : 0}
     >
       <Button
@@ -1004,8 +1005,13 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
             </div>
           ) : (
             <div className="weekly-report-index-empty">
-              <ClipboardText size={32} weight="duotone" />
-              <strong>{canWriteWeeklyReport ? '还没有周报' : '当前无需填写周报'}</strong>
+              <span className="weekly-report-index-empty-icon" aria-hidden="true">
+                <ClipboardText size={24} weight="duotone" />
+              </span>
+              <div>
+                <strong>{canWriteWeeklyReport ? '暂无历史周报' : '当前无需填写周报'}</strong>
+                <span>{canWriteWeeklyReport ? '提交后的周报将在这里展示' : '当前账号无需提交本组织周报'}</span>
+              </div>
             </div>
           )}
 
