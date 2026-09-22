@@ -41,7 +41,7 @@ test('personal and organization navigation keep their distinct daily work entrie
   assert.match(appSource, /return hasOrganizationAdminRole\(user\.roles\)/u)
   assert.match(appSource, /if \(view === 'organization'\) return canAccessOrganizationManagement\(user\)/u)
   assert.doesNotMatch(appSource, /nav-group-organization/u)
-  assert.match(appSource, /<MyWorkWorkbench\s+key=\{selectedOrganizationId \?\? 'personal'\}\s+organizationId=\{selectedOrganizationId\}\s+projects=\{scopedProjects\}/u)
+  assert.match(appSource, /<MyWorkWorkbench\s+key=\{`\$\{authUserId\}:\$\{selectedOrganizationId\}`\}[\s\S]*?organizationId=\{selectedOrganizationId\}\s+projects=\{scopedProjects\}/u)
   assert.match(appSource, /nextOrganizationId !== null && \(view === 'inbox' \|\| view === 'ai'\)/u)
 })
 

@@ -1,8 +1,8 @@
 import type { MyWorkData, MyWorkFilters, MyWorkItem } from '../src/my-work-types.ts'
 import { decryptText } from './crypto.ts'
-import { query } from './db.ts'
+import { pool } from './db.ts'
 import { managedOrganizationReadScopeSql } from './organization-scope.ts'
-import { workBucket, workItemKey } from './my-work-policy.ts'
+import { createMyWorkPagination, workItemKey } from './my-work-policy.ts'
 import type { OrganizationContext } from '../shared/organization-context.ts'
 import { formatTestSpaceReference } from '../shared/test-space-reference.ts'
 
@@ -55,8 +55,16 @@ export async function getMyWork(
   organizationId: OrganizationContext,
   filters: MyWorkFilters,
 ): Promise<MyWorkData> {
-  const result = await query<MyWorkRow>(
-    `
+  const today = localDate(new Date())
+  const pagination = createMyWorkPagination(filters, today, weekEnd(today))
+  const client = await pool.connect()
+  let discardClient = false
+  try {
+    // A read-only cursor keeps one consistent result snapshot without loading
+    // every encrypted record into Node memory or truncating search at 500 rows.
+    await client.query('BEGIN READ ONLY')
+    await client.query(
+      `declare my_work_rows no scroll cursor for
     select * from (
       select 'todo'::text as kind, t.id as source_id, t.project_id, p.organization_id,
         p.name as project_name, subproject.name as context_name, null::text as context_version_label,
@@ -167,62 +175,60 @@ export async function getMyWork(
     order by case when work.due_at is null then 1 else 0 end,
       case when $4::text = 'due_desc' then work.due_at end desc nulls last,
       case when $4::text = 'due_asc' then work.due_at end asc nulls last,
-      work.updated_at desc, work.source_id desc
-    limit 500
-    `,
-    [
-      userId,
-      filters.status ?? 'open',
-      filters.projectId ?? null,
-      filters.sort ?? 'due_desc',
-      filters.creator ?? null,
-      organizationId,
-    ],
-  )
+      work.updated_at desc, work.source_id desc, work.kind
+      `,
+      [
+        userId,
+        filters.status ?? 'open',
+        filters.projectId ?? null,
+        filters.sort ?? 'due_desc',
+        filters.creator ?? null,
+        organizationId,
+      ],
+    )
 
-  const items = result.rows.map((row): MyWorkItem => ({
-    id: workItemKey(row.kind, Number(row.source_id)),
-    kind: row.kind,
-    sourceId: Number(row.source_id),
-    projectId: row.project_id ? Number(row.project_id) : undefined,
-    projectName: row.project_name ? decryptText(row.project_name) : undefined,
-    contextName: row.context_name
-      ? (row.kind === 'bug'
-        ? formatTestSpaceReference(
-          decryptText(row.context_name),
-          row.context_version_label ? decryptText(row.context_version_label) : undefined,
-        )
-        : decryptText(row.context_name))
-      : undefined,
-    creatorName: row.creator_name ?? undefined,
-    canComplete: row.can_complete ?? undefined,
-    title: decryptText(row.title),
-    status: row.status,
-    priority: row.priority ?? undefined,
-    offboardingTransferredFromName: row.offboarding_transferred_from_name ?? undefined,
-    dueAt: row.due_at ?? undefined,
-    updatedAt: row.updated_at.toISOString(),
-    relation: row.relation,
-  })).filter((item) => item.kind === (filters.kind ?? item.kind) && searchable(item, filters.q))
-
-  const today = localDate(new Date())
-  const end = weekEnd(today)
-  const summary = items.reduce<MyWorkData['summary']>((result, item) => {
-    result.all += 1
-    const bucket = workBucket(item.dueAt, today, end)
-    if (bucket === 'overdue') result.overdue += 1
-    if (bucket === 'today') result.today += 1
-    if (bucket === 'today' || bucket === 'this_week') result.thisWeek += 1
-    return result
-  }, { all: 0, overdue: 0, today: 0, thisWeek: 0 })
-
-  const offset = Number(filters.cursor ?? 0)
-  const limit = filters.limit ?? 50
-  const page = items.slice(offset, offset + limit)
-  return {
-    organizationId,
-    items: page,
-    summary,
-    nextCursor: offset + limit < items.length ? String(offset + limit) : undefined,
+    while (true) {
+      const batch = await client.query<MyWorkRow>('FETCH FORWARD 200 FROM my_work_rows')
+      if (!batch.rows.length) break
+      for (const row of batch.rows) {
+        if (filters.kind && row.kind !== filters.kind) continue
+        const item: MyWorkItem = {
+          id: workItemKey(row.kind, Number(row.source_id)),
+          kind: row.kind,
+          sourceId: Number(row.source_id),
+          projectId: row.project_id ? Number(row.project_id) : undefined,
+          projectName: row.project_name ? decryptText(row.project_name) : undefined,
+          contextName: row.context_name
+            ? (row.kind === 'bug'
+              ? formatTestSpaceReference(
+                decryptText(row.context_name),
+                row.context_version_label ? decryptText(row.context_version_label) : undefined,
+              )
+              : decryptText(row.context_name))
+            : undefined,
+          creatorName: row.creator_name ?? undefined,
+          canComplete: row.can_complete ?? undefined,
+          title: decryptText(row.title),
+          status: row.status,
+          priority: row.priority ?? undefined,
+          offboardingTransferredFromName: row.offboarding_transferred_from_name ?? undefined,
+          dueAt: row.due_at ?? undefined,
+          updatedAt: row.updated_at.toISOString(),
+          relation: row.relation,
+        }
+        if (searchable(item, filters.q)) pagination.add(item)
+      }
+    }
+    await client.query('COMMIT')
+    return { organizationId, ...pagination.result() }
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {
+      discardClient = true
+    }
+    throw error
+  } finally {
+    client.release(discardClient)
   }
 }

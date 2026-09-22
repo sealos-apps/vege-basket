@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Bug, CalendarBlank, Check, CheckCircle, Clock, FolderSimple, FunnelSimple, ListChecks, MagnifyingGlass, Flag, SortAscending, SortDescending } from '@phosphor-icons/react'
 import { fetchMyWork } from '../api'
 import type { Project } from '../types'
-import type { MyWorkData, MyWorkItem, MyWorkKind } from '../my-work-types'
+import type { MyWorkData, MyWorkItem, MyWorkKind, MyWorkFilters, MyWorkViewState } from '../my-work-types'
 import type { OrganizationContext } from '../../shared/organization-context'
 import { startVisibleRefreshSchedule, workspaceRefreshIntervalMs } from '../refresh-schedule'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu'
+import { ListPagination } from './list-pagination'
 import './my-work-workbench.css'
 
 const kindLabels: Record<MyWorkKind, string> = {
@@ -46,19 +47,6 @@ function formatDueDate(value?: string) {
   return value.replaceAll('-', '/')
 }
 
-function dateBucket(item: MyWorkItem) {
-  if (!item.dueAt) return '未排期'
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
-  const due = item.dueAt.slice(0, 10)
-  if (due < today) return '已逾期'
-  if (due === today) return '今天'
-  const current = new Date(`${today}T00:00:00Z`)
-  const day = current.getUTCDay() || 7
-  current.setUTCDate(current.getUTCDate() + (7 - day))
-  const end = current.toISOString().slice(0, 10)
-  return due <= end ? '本周' : '更晚'
-}
-
 function TableFilterMenu({
   label,
   value,
@@ -93,6 +81,9 @@ function TableFilterMenu({
 }
 
 export function MyWorkWorkbench({
+  scope,
+  savedView,
+  onViewChange,
   organizationId,
   projects,
   onTodoClick,
@@ -100,6 +91,9 @@ export function MyWorkWorkbench({
   onBugClick,
   onMilestoneClick,
 }: {
+  scope: string
+  savedView?: MyWorkViewState
+  onViewChange: (view: MyWorkViewState) => void
   organizationId: OrganizationContext
   projects: Project[]
   onTodoClick: (projectId: number, todoId: number) => void
@@ -107,23 +101,22 @@ export function MyWorkWorkbench({
   onBugClick: (bugId: number) => void
   onMilestoneClick: (projectId: number) => void
 }) {
-  const [data, setData] = useState<MyWorkData>({
-    organizationId,
-    items: [],
-    summary: { all: 0, overdue: 0, today: 0, thisWeek: 0 },
+  const [view, setView] = useState<MyWorkViewState>(() => savedView?.scope === scope ? savedView : {
+    scope, filters: { status: 'open', sort: 'due_desc' }, page: 0, pageSize: 20, scrollTop: 0,
   })
-  const [kind, setKind] = useState<'all' | MyWorkKind>('all')
-  const [projectId, setProjectId] = useState('all')
-  const [creator, setCreator] = useState('all')
-  const [query, setQuery] = useState('')
-  const [status, setStatus] = useState('open')
-  const [sort, setSort] = useState<'due_asc' | 'due_desc'>('due_desc')
-  const [dueFilter, setDueFilter] = useState<'all' | '已逾期' | '今天' | '本周' | '更晚' | '未排期'>('all')
-  const [cursor, setCursor] = useState('')
+  const [result, setResult] = useState<{ data: MyWorkData; view: MyWorkViewState }>()
   const [loading, setLoading] = useState(true)
-  const hasLoadedRef = useRef(false)
   const [backgroundRefreshVersion, setBackgroundRefreshVersion] = useState(0)
   const [error, setError] = useState('')
+  const tableRef = useRef<HTMLDivElement>(null)
+  const onViewChangeRef = useRef(onViewChange)
+  useEffect(() => { onViewChangeRef.current = onViewChange }, [onViewChange])
+  const data = result?.data
+  const { kind = 'all', projectId: selectedProjectId, creator = 'all', q: query = '', status = 'open', sort = 'due_desc', due: dueFilter = 'all' } = view.filters
+  const projectId = selectedProjectId == null ? 'all' : String(selectedProjectId)
+  function changeFilters(patch: Partial<MyWorkFilters>) {
+    setView((current) => ({ ...current, filters: { ...current.filters, ...patch }, page: 0, scrollTop: 0 }))
+  }
 
   useEffect(() => startVisibleRefreshSchedule({
     clearInterval: (handle) => window.clearInterval(handle),
@@ -144,70 +137,64 @@ export function MyWorkWorkbench({
 
   useEffect(() => {
     let active = true
-    // Keep the current table mounted during workspace polling. Replacing it with
-    // the initial loading state makes the document height collapse and resets scroll.
-    if (!hasLoadedRef.current) setLoading(true)
+    setLoading(true)
     setError('')
     void fetchMyWork(organizationId, {
-      kind: kind === 'all' ? undefined : kind,
-      cursor: cursor || undefined,
-      projectId: projectId === 'all' ? undefined : Number(projectId),
-      creator: creator === 'all' ? undefined : creator,
-      q: query.trim() || undefined,
-      status,
-      sort,
-      limit: 50,
+      ...view.filters,
+      q: view.filters.q?.trim() || undefined,
+      cursor: String(view.page * view.pageSize),
+      limit: view.pageSize,
     }).then((next) => {
-      if (active) {
-        hasLoadedRef.current = true
-        setData(next)
-        setLoading(false)
-      }
+      if (!active) return
+      const canonicalView = { ...view, page: Math.floor(next.offset / view.pageSize) }
+      setResult({ data: next, view: canonicalView })
+      if (canonicalView.page !== view.page) setView(canonicalView)
     }).catch((loadError) => {
-      if (active) {
-        if (!hasLoadedRef.current) setError(loadError instanceof Error ? loadError.message : '我的待办加载失败。')
-        setLoading(false)
-      }
+      if (active) setError(loadError instanceof Error ? loadError.message : '我的待办加载失败。')
     }).finally(() => {
-      if (active && !hasLoadedRef.current) setLoading(false)
+      if (active) setLoading(false)
     })
     return () => { active = false }
-  }, [backgroundRefreshVersion, creator, cursor, kind, organizationId, projectId, query, sort, status])
+  }, [backgroundRefreshVersion, organizationId, view])
 
-  useEffect(() => {
-    setCursor('')
-  }, [creator, kind, projectId, query, sort, status])
+  // Revalidation preserves the viewport. Explicit navigation and remounts restore
+  // their own position only after the corresponding records are committed.
+  const committedViewRef = useRef<MyWorkViewState | null>(null)
+  useLayoutEffect(() => {
+    if (!result) return
+    const previous = committedViewRef.current
+    const next = result.view
+    if (tableRef.current && (!previous || previous.page !== next.page || previous.pageSize !== next.pageSize || previous.filters !== next.filters)) {
+      tableRef.current.scrollTop = next.scrollTop
+    }
+    committedViewRef.current = next
+    onViewChangeRef.current({ ...next, scrollTop: tableRef.current?.scrollTop ?? 0 })
+  }, [result])
 
-  const visibleItems = useMemo(
-    () => dueFilter === 'all'
-      ? data.items
-      : data.items.filter((item) => dateBucket(item) === dueFilter),
-    [data.items, dueFilter],
-  )
-
+  const visibleItems = data?.items ?? []
   const statusOptions = useMemo(() => {
-    const concreteStatuses = [...new Map(data.items.map((item) => {
-      const value = `${item.kind}:${item.status}`
-      return [value, { label: `${kindLabels[item.kind]}-${statusLabels[item.status] ?? item.status}`, value }]
-    })).values()]
-      .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'))
+    const concreteStatuses = (data?.filterOptions.statuses ?? []).map((value) => {
+      const [kind, status] = value.split(':')
+      return { value, label: `${kindLabels[kind as MyWorkKind]}-${statusLabels[status] ?? status}` }
+    }).sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'))
     return [
       { label: '未完成', value: 'open' },
       { label: '全部状态', value: 'all' },
       ...concreteStatuses.filter((option) => option.value !== 'open' && option.value !== 'all'),
     ]
-  }, [data.items])
+  }, [data?.filterOptions.statuses])
 
   const creatorOptions = useMemo(() => {
-    const creators = [...new Set(data.items.map((item) => item.creatorName ?? '__unrecorded__'))]
+    const creators = [...(data?.filterOptions.creators ?? [])]
       .sort((left, right) => (left === '__unrecorded__' ? '未记录' : left).localeCompare(right === '__unrecorded__' ? '未记录' : right, 'zh-CN'))
     return [
       { label: '全部创建人', value: 'all' },
       ...creators.map((value) => ({ label: value === '__unrecorded__' ? '未记录' : value, value })),
     ]
-  }, [data.items])
+  }, [data?.filterOptions.creators])
 
   function openItem(item: MyWorkItem) {
+    if (result) onViewChange({ ...result.view, scrollTop: tableRef.current?.scrollTop ?? 0 })
     if (item.kind === 'todo' && item.projectId) onTodoClick(item.projectId, item.sourceId)
     if (item.kind === 'delivery' && item.projectId) onDeliveryClick(item.projectId, item.sourceId)
     if (item.kind === 'bug') onBugClick(item.sourceId)
@@ -219,33 +206,35 @@ export function MyWorkWorkbench({
       <div className="my-work-toolbar">
         <label className="my-work-search">
           <MagnifyingGlass size={17} />
-          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索事项、项目或状态" />
+          <Input value={query} onChange={(event) => changeFilters({ q: event.target.value })} placeholder="搜索事项、项目或状态" />
         </label>
       </div>
 
-      {loading ? <div className="my-work-empty"><Clock className="spin" size={24} />正在加载我的待办...</div> : null}
-      {!loading && error ? <div className="my-work-empty is-error">{error}</div> : null}
-      {!loading && !error ? (
-        <div className="my-work-table" role="table" aria-label="我的待办列表">
+      {loading && !result ? <div className="my-work-empty"><Clock className="spin" size={24} />正在加载我的待办...</div> : null}
+      {error ? <div className="my-work-load-error" role="alert">{error}{result ? ' 列表仍显示上次加载的结果。' : ''}<Button type="button" variant="ghost" disabled={loading} onClick={() => setBackgroundRefreshVersion((version) => version + 1)}>重试</Button></div> : null}
+      {result ? (
+        <div className="my-work-table" role="table" aria-label="我的待办列表" aria-busy={loading} ref={tableRef} onScroll={(event) => {
+          onViewChange({ ...result.view, scrollTop: event.currentTarget.scrollTop })
+        }}>
           <div className="my-work-table-header-group" role="rowgroup">
             <div className="my-work-table-header" role="row">
               <span role="columnheader">事项</span>
-              <div role="columnheader"><TableFilterMenu label="项目" value={projectId} onChange={setProjectId} options={[{ label: '全部项目', value: 'all' }, ...projects.map((project) => ({ label: project.name, value: String(project.id) }))]} /></div>
-              <div role="columnheader"><TableFilterMenu label="类型" value={kind} onChange={(value) => setKind(value as 'all' | MyWorkKind)} options={[{ label: '全部类型', value: 'all' }, ...Object.entries(kindLabels).map(([value, label]) => ({ label, value }))]} /></div>
-              <div role="columnheader"><TableFilterMenu label="状态" value={status} onChange={setStatus} options={statusOptions} /></div>
+              <div role="columnheader"><TableFilterMenu label="项目" value={projectId} onChange={(value) => changeFilters({ projectId: value === 'all' ? undefined : Number(value) })} options={[{ label: '全部项目', value: 'all' }, ...projects.map((project) => ({ label: project.name, value: String(project.id) }))]} /></div>
+              <div role="columnheader"><TableFilterMenu label="类型" value={kind} onChange={(value) => changeFilters({ kind: value === 'all' ? undefined : value as MyWorkKind })} options={[{ label: '全部类型', value: 'all' }, ...Object.entries(kindLabels).map(([value, label]) => ({ label, value }))]} /></div>
+              <div role="columnheader"><TableFilterMenu label="状态" value={status} onChange={(value) => changeFilters({ status: value })} options={statusOptions} /></div>
               <div className="my-work-date-heading" role="columnheader">
-                <TableFilterMenu label="截止日期" value={dueFilter} onChange={(value) => setDueFilter(value as typeof dueFilter)} options={[{ label: '全部日期', value: 'all' }, ...(['已逾期', '今天', '本周', '更晚', '未排期'] as const).map((value) => ({ label: value, value }))]} />
+                <TableFilterMenu label="截止日期" value={dueFilter} onChange={(value) => changeFilters({ due: value === 'all' ? undefined : value as MyWorkFilters['due'] })} options={[{ label: '全部日期', value: 'all' }, { label: '已逾期', value: 'overdue' }, { label: '今天', value: 'today' }, { label: '本周', value: 'this_week' }, { label: '更晚', value: 'later' }, { label: '未排期', value: 'unscheduled' }]} />
                 <button
                   aria-label={sort === 'due_desc' ? '当前按截止日期倒序排列，点击切换为正序' : '当前按截止日期正序排列，点击切换为倒序'}
                   className={`my-work-sort-icon${sort === 'due_desc' ? ' is-active' : ''}`}
                   title={sort === 'due_desc' ? '切换为截止日期正序' : '切换为截止日期倒序'}
                   type="button"
-                  onClick={() => setSort((current) => current === 'due_desc' ? 'due_asc' : 'due_desc')}
+                  onClick={() => changeFilters({ sort: sort === 'due_desc' ? 'due_asc' : 'due_desc' })}
                 >
                   {sort === 'due_desc' ? <SortDescending size={15} /> : <SortAscending size={15} />}
                 </button>
               </div>
-              <div role="columnheader"><TableFilterMenu label="创建人" value={creator} onChange={setCreator} options={creatorOptions} /></div>
+              <div role="columnheader"><TableFilterMenu label="创建人" value={creator} onChange={(value) => changeFilters({ creator: value === 'all' ? undefined : value })} options={creatorOptions} /></div>
             </div>
           </div>
           <div className="my-work-table-body" role="rowgroup">
@@ -253,7 +242,7 @@ export function MyWorkWorkbench({
             {visibleItems.map((item) => (
               <div className="my-work-table-row" key={item.id} role="row">
                 <div className="my-work-table-cell my-work-main-cell" role="cell">
-                  <button className="my-work-row-main" type="button" onClick={() => openItem(item)}>
+                  <button className="my-work-row-main" type="button" disabled={loading} onClick={() => openItem(item)}>
                     <span className={`my-work-kind-icon is-${item.kind}`}>
                       {item.kind === 'bug' ? <Bug size={17} /> : item.kind === 'milestone' ? <Flag size={17} /> : item.kind === 'delivery' ? <FolderSimple size={17} /> : <ListChecks size={17} />}
                     </span>
@@ -275,10 +264,10 @@ export function MyWorkWorkbench({
           </div>
         </div>
       ) : null}
-      {!loading && !error && data.nextCursor ? (
-        <div className="my-work-pagination">
-          <Button type="button" variant="outline" onClick={() => setCursor(data.nextCursor ?? '')}>下一页</Button>
-        </div>
+      {result ? (
+        <ListPagination label="我的待办分页" page={result.view.page} pageSize={result.view.pageSize} total={result.data.total} disabled={loading || Boolean(error)}
+          onPageChange={(page) => setView({ ...result.view, page, scrollTop: 0 })}
+          onPageSizeChange={(pageSize) => setView({ ...result.view, pageSize, page: 0, scrollTop: 0 })} />
       ) : null}
     </section>
   )

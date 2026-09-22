@@ -210,6 +210,36 @@ New selections and AI confirmation reject unavailable modules with 409 `PROJECT_
 updates may retain the locked todo's unchanged historical module or clear it. Personal module
 create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANAGED_BY_ORGANIZATION`.
 
+### Workbench pagination
+
+`GET /api/my-work` accepts `cursor` (non-negative offset), `limit` (1–50),
+`kind`, `projectId`, `creator`, `q`, `status`, `sort`, and `due`.
+`due` is one of `overdue`, `today`, `this_week`, `later`, or `unscheduled`;
+`this_week` is the remaining days after today through Sunday, matching the date
+filter's mutually exclusive buckets. Omit it for all dates.
+
+The response includes `items`, `total` (all matching date-filtered records),
+`offset` (the effective offset, clamped after removals), optional `nextCursor`,
+`summary` (before the date filter), and `filterOptions.creators/statuses` from
+all matching records before date filtering and pagination. No 500-row truncation
+is applied. The existing authorized query runs in a read-only cursor transaction,
+fetching 200 rows at a time; encrypted keyword matching still scans the authorized
+result, so the bounded batch size does not imply constant-time queries.
+Only the requested page, trailing fallback page, counts, and distinct filter values
+are retained. Read failures roll back; rollback failures discard the connection.
+
+The project basket shows eight projects per page and displays pagination only when
+the filtered result exceeds eight. Search, status, tag, user, and organization changes
+reset its page; opening a project and returning preserves its page and scroll position.
+Bug lists and My Work default to 20 rows with a 50-row option. Project todo cards
+retain their adaptive page size and share the range/previous/next controls.
+My Work remembers filters, page size, page, and list scroll position in App memory,
+scoped to the user and organization and cleared on logout. Failed page requests
+keep the last successful records and disable pagination until retry or a new filter
+succeeds. Bug detail links reveal their selected page; removing the last record on
+a page falls back to the preceding valid page. Existing chat/history loading and
+case/weekly-report pagination remain unchanged.
+
 ## Data And Status Contracts
 
 - Project status: `active`, `paused`, `completed`, `archived`.

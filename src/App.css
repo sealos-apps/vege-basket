@@ -14322,3 +14322,6 @@ textarea:focus {
 
 .project-module-select-footer { padding: 8px 10px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted-foreground); }
 .project-module-availability-hint { display: block; width: 100%; font-size: 11px; line-height: 1.6; color: var(--muted-foreground); }
+
+/* Ordinary task lists keep filters and navigation outside the scrolling rows. */
+.paginated-todo-list { max-height: max(240px, calc(100dvh - 340px)); overflow: auto; overscroll-behavior: contain; }
