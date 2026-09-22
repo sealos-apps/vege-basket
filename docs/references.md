@@ -228,6 +228,9 @@ result, so the bounded batch size does not imply constant-time queries.
 Only the requested page, trailing fallback page, counts, and distinct filter values
 are retained. Read failures roll back; rollback failures discard the connection.
 
+The project basket shows eight projects per page and displays pagination only when
+the filtered result exceeds eight. Search, status, tag, user, and organization changes
+reset its page; opening a project and returning preserves its page and scroll position.
 Bug lists and My Work default to 20 rows with a 50-row option. Project todo cards
 retain their adaptive page size and share the range/previous/next controls.
 My Work remembers filters, page size, page, and list scroll position in App memory,
