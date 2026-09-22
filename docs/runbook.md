@@ -573,3 +573,29 @@ constraint, migration or HTTP integration behavior.
 
 `npm test` supplies an inert loopback database URL only when the caller has not configured one.
 Pure tests import database-aware modules but do not start the API or issue queries.
+
+## Project delivery permissions rollout
+
+`server/migrations/20260922_project_delivery_permissions.sql` adds project delivery grants, completion
+attribution, and revocation triggers. `server/schema.ts` carries the same idempotent DDL and the startup
+migration receipt advances to `20260922_schema_v9`. No text backfill or new secret is required; reassignment
+reasons and audit details use the existing encryption key ring.
+
+Before an explicitly approved deployment, retain the database snapshot and complete encryption key ring.
+All existing organization-project rosters start empty. Plan a configuration window: organization managers
+must explicitly assign planning/execution duties before those projects can publish or complete deliveries.
+Existing assignees are historical responsibility, not an automatic permission grant. Projects moved to a
+new organization also require a new roster. Personal projects continue using direct membership authorization.
+
+Run `npm run build`, `npm run lint`, `npm test`, and `git diff --check` first. Only with explicit authorization
+for an isolated development PostgreSQL database, run `npm run test:resource-management` using the existing
+`VEGES_INTEGRATION_DATABASE_URL` opt-in. It includes manager-only configuration, multi-person and dual duties,
+unassigned drafts, assignment eligibility, old endpoint restrictions, transfer, actor attribution,
+feedback authorship, wrong-event IDs, stale roster rejection, and permanent revocation on re-admission.
+Also exercise configuration/offboarding and transfer/completion concurrency before production rollout.
+Browser checks with simulated HTTP responses verify interaction only, not database behavior.
+
+The schema additions preserve historical events. Application rollback can leave additive tables/columns
+in place, but an old image restores broad delivery write permissions and is not a safe permission rollback.
+Prefer a forward fix or maintenance window; restoring a snapshot loses subsequent writes. Do not start the
+API merely to verify these changes against a configured database: startup applies the schema.

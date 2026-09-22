@@ -735,3 +735,25 @@ canonical header order above, emit the organization module name in `所属模块
 complete reversible path in `用例目录`. Canonical exports intentionally omit custom tags. The case list can
 export either every case in the active directory/search/type/priority filter or the explicitly
 selected cases across pages.
+
+## Project delivery personnel and permissions
+
+Organization managers use `GET/PUT /api/organizations/:organizationId/projects/:projectId/delivery-members`.
+PUT accepts `{ members, expectedMembers }`, each entry `{ userId, canPlan, canExecute }`. Multiple people
+and dual duties are supported; every entry needs at least one duty. GET returns current members and active
+organization candidates with `projectMember` eligibility. Stale configurations, locked accounts, or removing
+an executor with unfinished assigned work return 409. No implicit project membership is granted.
+
+`POST /api/projects/:projectId/package-timeline/events/:eventId/reassign` accepts
+`{ assigneeUserId, previousAssigneeUserId, reason }`. Planning permission and a published unfinished event
+are required; reason is 1–1000 characters. The previous assignee is checked atomically and the target must
+retain execution permission. Completion uses the existing `/complete` route and records the actual actor.
+
+Timeline DTOs include `canPlanDelivery`, `deliveryMembers`, and event `capabilities` (`canEditPlan`,
+`canPublish`, `canReassign`, `canExecute`, `canComplete`, `canComment`). Creator, publisher and executor names
+are distinct; completion adds `completedByUserId`, `completedByName`, and `completedAt`. Draft aggregate
+requests accept `assigneeUserId: null`; publication requires an active executor. Owners/admins do not bypass
+organization-project grants. Feedback writes require planning permission or the assigned executor's
+permission; edits/deletion additionally require authorship. Published content stays immutable; execution
+links/notes require the current executor. Todo completion retains its own authorization. Ordinary todo-note
+PATCH also checks delivery permission when `source_operation_id` is present.

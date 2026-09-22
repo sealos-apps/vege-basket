@@ -102,8 +102,26 @@ The production image builds `src/` into `dist/`, copies `server/`, and starts
   aggregate draft saves, one-way publication/completion transitions, encrypted timeline
   fields, document-level todo links, and Markdown export. Publication atomically replaces
   the draft's packages, documents, and document todo links, changes the event to `delivering`,
-  and makes document content and package structure read-only. Project members may continue
-  managing document todo links, their notes, and todo completion after publication.
+  and makes document content and package structure read-only. For organization projects,
+  only the assigned executor may manage execution links/notes and complete the event;
+  ordinary todo completion retains its separate authorization. Only unpublished plans may
+  be deleted through the timeline.
+- `shared/project-delivery.ts`, `server/project-delivery.ts`: independent project planning and
+  execution grants, per-event capabilities, transactional authorization, and reassignment audit.
+  `project_delivery_members` binds grants to project and organization. Configuration requires
+  the organization Owner/Admin membership and assigned `organization_admin` role; selected
+  active organization accounts must already own/belong to the project. Empty initial rosters
+  deny organization-project delivery writes. Drafts may be unassigned; publication requires an
+  eligible executor. Reassignment checks the expected previous executor and requires an encrypted
+  reason. Completion stores the actual actor and timestamp separately from creator and publisher.
+  Mutations lock organization catalog, project, then resources and recheck access. Participant
+  locks use NOWAIT to return 409 rather than invert the account-offboarding lock order.
+  Database triggers revoke grants on project/organization membership removal, account disabling,
+  and project organization changes; later re-admission never resurrects grants.
+- `src/components/project-delivery-members-panel.tsx`: inline organization-project roster editor,
+  searchable multiple-person selection and independent duty checkboxes. An expected roster rejects
+  stale replacements. Explicit read recovery preserves local edits and unrelated concurrent
+  changes; uncertain writes stay blocked until a read confirms the saved roster.
 - `server/package-market.ts`: OSS configuration, package rules, object-key allowlisting,
   object access, and signed download URLs.
 - `server/organization-package-market.ts`, `shared/organization-package-market.ts`:

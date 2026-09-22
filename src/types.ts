@@ -1,3 +1,4 @@
+import type { DeliveryCapabilities, ProjectDeliveryMember } from '../shared/project-delivery'
 export type ProjectStatus = 'active' | 'paused' | 'completed' | 'archived'
 export type Priority = 'high' | 'medium' | 'low'
 export type TodoConfirmationStatus = 'confirmed' | 'pending_review' | 'rejected' | 'acceptance_failed'
@@ -396,6 +397,12 @@ export type ProjectPackageEventComment = {
 }
 
 export type ProjectPackageEvent = {
+  capabilities: DeliveryCapabilities
+  createdByName?: string
+  publishedByName?: string
+  completedByName?: string
+  completedByUserId?: number
+  completedAt?: string
   assignedAt?: string
   assignedByName?: string
   assignedByUserId?: number
@@ -427,7 +434,7 @@ export type ProjectPackageEventDocumentInput = {
 
 export type ProjectPackageEventSavePayload = {
   action: 'publish' | 'save_draft'
-  assigneeUserId: number
+  assigneeUserId: number | null
   deliveryDate: string
   deliveryEndAt: string
   deliveryStartAt: string
@@ -449,6 +456,8 @@ export type ProjectPackageEventSavePayload = {
 }
 
 export type ProjectPackageTimeline = {
+  canPlanDelivery: boolean
+  deliveryMembers: ProjectDeliveryMember[]
   departedUserIds: number[]
   projectId: number
   events: ProjectPackageEvent[]

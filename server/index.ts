@@ -1,3 +1,5 @@
+import { authorizeDelivery, lockDeliveryProject, ProjectDeliveryError } from './project-delivery.ts'
+import { reassignProjectPackageEvent } from './project-package-timeline.ts'
 import 'dotenv/config'
 import { canCompleteProjectTransfer, lockTransferProject } from './project-transfer.ts'
 import { lockOrganizationResourceManager, lockResourceManager, type ManagedResource } from './resource-management.ts'
@@ -11955,9 +11957,10 @@ app.patch('/api/todos/:todoId/notes/:noteId', asyncHandler(async (request, respo
   const noteResult = await query<{
     author_user_id: string | null
     project_id: string
+    source_operation_id: string | null
   }>(
     `
-    select n.author_user_id, t.project_id
+    select n.author_user_id, n.source_operation_id, t.project_id
     from todo_notes n
     join todos t on t.id = n.todo_id
     where n.id = $1
@@ -11984,9 +11987,14 @@ app.patch('/api/todos/:todoId/notes/:noteId', asyncHandler(async (request, respo
   const client = await pool.connect()
   try {
     await client.query('begin')
-    const lockedNote = await client.query<{ id: string }>(
+    if (noteResult.rows[0].source_operation_id) {
+      await lockDeliveryProject(client, projectId)
+      const event = await client.query<{ published_at: Date | null }>(`select e.published_at from project_package_operations o join project_package_events e on e.id = o.project_package_event_id where o.id = $1 and e.project_id = $2`, [noteResult.rows[0].source_operation_id, projectId])
+      await authorizeDelivery(client, projectId, userId, event.rows[0]?.published_at ? 'canExecute' : 'plan', { operationId: Number(noteResult.rows[0].source_operation_id) })
+    }
+    const lockedNote = await client.query<{ id: string; author_user_id: string | null }>(
       `
-      select id
+      select id, author_user_id
       from todo_notes
       where id = $1 and todo_id = $2
       for update
@@ -11998,6 +12006,7 @@ app.patch('/api/todos/:todoId/notes/:noteId', asyncHandler(async (request, respo
       response.status(404).json({ error: 'Todo note not found' })
       return
     }
+    if (access.role !== 'owner' && Number(lockedNote.rows[0].author_user_id) !== userId) throw new ProjectDeliveryError('备注作者已变化，请刷新后重试')
     await client.query(
       `
       update todo_notes
@@ -12237,7 +12246,7 @@ async function runProjectPackageEventMutation<T>(
   try {
     return { ok: true, value: await mutation() }
   } catch (error) {
-    if (error instanceof ProjectPackageEventError) {
+    if (error instanceof ProjectPackageEventError || error instanceof ProjectDeliveryError) {
       response.status(error.status).json({ error: error.message })
       return { ok: false }
     }
@@ -12254,7 +12263,7 @@ app.get('/api/projects/:projectId/package-timeline', asyncHandler(async (request
     response.status(404).json({ error: 'Project not found' })
     return
   }
-  response.json(await getProjectPackageTimeline(projectId))
+  response.json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.post('/api/projects/:projectId/package-timeline/events', asyncHandler(async (request, response) => {
@@ -12266,15 +12275,7 @@ app.post('/api/projects/:projectId/package-timeline/events', asyncHandler(async 
     response.status(404).json({ error: 'Project not found' })
     return
   }
-  const assigneeUserId = await ensureProjectMemberUserId(
-    request.body.assigneeUserId,
-    projectId,
-    access.ownerUserId,
-  )
-  if (!assigneeUserId) {
-    response.status(400).json({ error: 'Package event assignee must be a project member' })
-    return
-  }
+  const assigneeUserId = request.body.assigneeUserId == null ? null : Number(request.body.assigneeUserId)
   const aggregate = parseProjectPackageEventAggregateBody(request.body)
   const rejectedItem = aggregate.items.find((item) => !isSafePackageMarketObjectKey(item.objectKey))
   if (rejectedItem) {
@@ -12305,7 +12306,7 @@ app.post('/api/projects/:projectId/package-timeline/events', asyncHandler(async 
   if (!saved.ok) return
   const result = saved.value
   if (result.published) enqueueLatestAssignedPackageEventDelivery(result.eventId)
-  response.status(201).json(await getProjectPackageTimeline(projectId))
+  response.status(201).json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.put('/api/projects/:projectId/package-timeline/events/:eventId', asyncHandler(async (request, response) => {
@@ -12317,15 +12318,7 @@ app.put('/api/projects/:projectId/package-timeline/events/:eventId', asyncHandle
     response.status(404).json({ error: 'Project not found' })
     return
   }
-  const assigneeUserId = await ensureProjectMemberUserId(
-    request.body.assigneeUserId,
-    projectId,
-    access.ownerUserId,
-  )
-  if (!assigneeUserId) {
-    response.status(400).json({ error: 'Package event assignee must be a project member' })
-    return
-  }
+  const assigneeUserId = request.body.assigneeUserId == null ? null : Number(request.body.assigneeUserId)
   const aggregate = parseProjectPackageEventAggregateBody(request.body)
   if (aggregate.items.some((item) => !isSafePackageMarketObjectKey(item.objectKey))) {
     response.status(400).json({ error: '安装包对象路径不在允许范围内' })
@@ -12356,7 +12349,25 @@ app.put('/api/projects/:projectId/package-timeline/events/:eventId', asyncHandle
   if (!saved.ok) return
   const result = saved.value
   if (result.published) enqueueLatestAssignedPackageEventDelivery(result.eventId)
-  response.json(await getProjectPackageTimeline(projectId))
+  response.json(await getProjectPackageTimeline(projectId, userId))
+}))
+
+app.post('/api/projects/:projectId/package-timeline/events/:eventId/reassign', asyncHandler(async (request, response) => {
+  const userId = await ensureUserId(request, response)
+  if (!userId) return
+  const projectId = Number(request.params.projectId)
+  if (!(await getProjectAccess(projectId, userId))) {
+    response.status(404).json({ error: 'Project not found' })
+    return
+  }
+  const eventId = Number(request.params.eventId)
+  await reassignProjectPackageEvent({ projectId, eventId, userId,
+    assigneeUserId: Number(request.body.assigneeUserId),
+    previousAssigneeUserId: request.body.previousAssigneeUserId == null ? null : Number(request.body.previousAssigneeUserId),
+    reason: typeof request.body.reason === 'string' ? request.body.reason : '',
+  })
+  enqueueLatestAssignedPackageEventDelivery(eventId)
+  response.json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.post('/api/projects/:projectId/package-timeline/events/:eventId/complete', asyncHandler(async (request, response) => {
@@ -12369,11 +12380,12 @@ app.post('/api/projects/:projectId/package-timeline/events/:eventId/complete', a
     return
   }
   const completed = await runProjectPackageEventMutation(response, () => completeProjectPackageEvent({
+    userId,
     eventId: Number(request.params.eventId),
     projectId,
   }))
   if (!completed.ok) return
-  response.json(await getProjectPackageTimeline(projectId))
+  response.json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.post('/api/projects/:projectId/package-timeline/events/:eventId/comments', asyncHandler(async (request, response) => {
@@ -12408,7 +12420,7 @@ app.post('/api/projects/:projectId/package-timeline/events/:eventId/comments', a
       mentionedUserIds,
     })
   }
-  response.json(await getProjectPackageTimeline(projectId))
+  response.json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.patch('/api/projects/:projectId/package-timeline/events/:eventId/comments/:commentId', asyncHandler(async (request, response) => {
@@ -12426,13 +12438,14 @@ app.patch('/api/projects/:projectId/package-timeline/events/:eventId/comments/:c
     return
   }
   const updated = await runProjectPackageEventMutation(response, () => updateProjectPackageEventComment({
+    eventId: Number(request.params.eventId),
     commentId: Number(request.params.commentId),
     content,
     projectId,
     userId,
   }))
   if (!updated.ok) return
-  response.json(await getProjectPackageTimeline(projectId))
+  response.json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.delete('/api/projects/:projectId/package-timeline/events/:eventId/comments/:commentId', asyncHandler(async (request, response) => {
@@ -12445,12 +12458,13 @@ app.delete('/api/projects/:projectId/package-timeline/events/:eventId/comments/:
     return
   }
   const deleted = await runProjectPackageEventMutation(response, () => deleteProjectPackageEventComment({
+    eventId: Number(request.params.eventId),
     commentId: Number(request.params.commentId),
     projectId,
     userId,
   }))
   if (!deleted.ok) return
-  response.json(await getProjectPackageTimeline(projectId))
+  response.json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.patch('/api/projects/:projectId/package-timeline/events/:eventId', asyncHandler(async (request, response) => {
@@ -12479,7 +12493,12 @@ app.patch('/api/projects/:projectId/package-timeline/events/:eventId', asyncHand
     return
   }
   const eventId = Number(request.params.eventId)
+  if ('status' in request.body && request.body.status !== 'draft') {
+    response.status(400).json({ error: '请通过发布或完成接口变更交付状态' })
+    return
+  }
   await updateProjectPackageEvent({
+    assignedByUserId: userId,
     projectId,
     eventId,
     ...('assigneeUserId' in request.body
@@ -12494,7 +12513,7 @@ app.patch('/api/projects/:projectId/package-timeline/events/:eventId', asyncHand
     title: 'title' in request.body ? String(request.body.title ?? '') : undefined,
     type: 'type' in request.body ? ensureProjectPackageEventType(request.body.type) : undefined,
   })
-  response.json(await getProjectPackageTimeline(projectId))
+  response.json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.delete('/api/projects/:projectId/package-timeline/events/:eventId', asyncHandler(async (request, response) => {
@@ -12507,10 +12526,11 @@ app.delete('/api/projects/:projectId/package-timeline/events/:eventId', asyncHan
     return
   }
   await deleteProjectPackageEvent({
+    userId,
     projectId,
     eventId: Number(request.params.eventId),
   })
-  response.json(await getProjectPackageTimeline(projectId))
+  response.json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.post('/api/projects/:projectId/package-timeline/events/:eventId/packages', asyncHandler(async (request, response) => {
@@ -12578,6 +12598,10 @@ app.post('/api/projects/:projectId/package-timeline/events/:eventId/packages', a
       },
     })
   } catch (error) {
+    if (error instanceof ProjectDeliveryError || error instanceof ProjectPackageEventError) {
+      response.status(error.status).json({ error: error.message })
+      return
+    }
     if (error instanceof OrganizationPackageMarketPolicyError) {
       response.status(error.status).json({
         error: error.message,
@@ -12608,7 +12632,7 @@ app.post('/api/projects/:projectId/package-timeline/events/:eventId/packages', a
   }
 
   try {
-    response.status(201).json(await getProjectPackageTimeline(projectId))
+    response.status(201).json(await getProjectPackageTimeline(projectId, userId))
   } catch (error) {
     const diagnostic = createPackageItemFailureDiagnostic(error, {
       projectId,
@@ -12642,10 +12666,11 @@ app.delete('/api/projects/:projectId/package-timeline/package-groups/:groupId', 
     return
   }
   await deleteProjectPackageGroup({
+    userId,
     projectId,
     groupId: Number(request.params.groupId),
   })
-  response.json(await getProjectPackageTimeline(projectId))
+  response.json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.post('/api/projects/:projectId/package-timeline/operations', asyncHandler(async (request, response) => {
@@ -12677,7 +12702,7 @@ app.post('/api/projects/:projectId/package-timeline/operations', asyncHandler(as
         ? request.body.relatedTodoNotes
         : undefined,
   })
-  response.status(201).json(await getProjectPackageTimeline(projectId))
+  response.status(201).json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.patch('/api/projects/:projectId/package-timeline/operations/:operationId', asyncHandler(async (request, response) => {
@@ -12707,7 +12732,7 @@ app.patch('/api/projects/:projectId/package-timeline/operations/:operationId', a
         ? request.body.relatedTodoNotes
         : undefined,
   })
-  response.json(await getProjectPackageTimeline(projectId))
+  response.json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.delete('/api/projects/:projectId/package-timeline/operations/:operationId', asyncHandler(async (request, response) => {
@@ -12720,10 +12745,11 @@ app.delete('/api/projects/:projectId/package-timeline/operations/:operationId', 
     return
   }
   await deleteProjectPackageOperation({
+    userId,
     projectId,
     operationId: Number(request.params.operationId),
   })
-  response.json(await getProjectPackageTimeline(projectId))
+  response.json(await getProjectPackageTimeline(projectId, userId))
 }))
 
 app.get('/api/projects/:projectId/package-timeline/export', asyncHandler(async (request, response) => {
@@ -14034,6 +14060,10 @@ app.get(/^(?!\/api).*/, (_request, response) => {
 
 app.use((error: unknown, _request: express.Request, response: express.Response, next: express.NextFunction) => {
   void next
+  if (error instanceof ProjectDeliveryError || error instanceof ProjectPackageEventError) {
+    response.status(error.status).json({ error: error.message })
+    return
+  }
   if (error instanceof ProjectModuleError) {
     response.status(error.status).json({ error: error.message, code: error.code })
     return

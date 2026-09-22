@@ -121,6 +121,63 @@ try {
   }
   assert.ok(ready, 'API must start within 20 seconds')
   const project = await createProject()
+  // Project delivery: isolated project, real HTTP boundaries and canonical database assertions.
+  {
+    const deliveryProject = await createProject()
+    const configPath = `/organizations/1/projects/${deliveryProject}/delivery-members`
+    const eventsPath = `/projects/${deliveryProject}/package-timeline/events`
+    for (const userId of [3, 7]) await call(2, `/organizations/1/projects/${deliveryProject}/members`, 'POST', { userId }, 201)
+    type DeliveryMember = { userId: number; canPlan: boolean; canExecute: boolean }
+    type DeliveryConfig = { members: DeliveryMember[] }
+    type Timeline = { canPlanDelivery: boolean; events: Array<{ id: number; assigneeUserId?: number; completedByUserId?: number; capabilities: { canComplete: boolean; canComment: boolean }; operations: Array<{ id: number }>; comments: Array<{ id: number }> }> }
+    const roster: DeliveryMember[] = [
+      { userId: 1, canPlan: true, canExecute: false },
+      { userId: 3, canPlan: false, canExecute: true },
+      { userId: 7, canPlan: true, canExecute: true },
+    ]
+    await call(1, configPath, 'PUT', { members: roster, expectedMembers: [] }, 403)
+    await call(4, configPath, 'PUT', { members: roster, expectedMembers: [] }, 403)
+    await call(5, configPath, 'PUT', { members: roster, expectedMembers: [] }, 403)
+    await call(2, configPath, 'PUT', { members: [{ userId: 6, canPlan: true, canExecute: false }], expectedMembers: [] }, 400)
+    await call(2, configPath, 'PUT', { members: [{ userId: 4, canPlan: true, canExecute: false }], expectedMembers: [] }, 400)
+    let config = await call<DeliveryConfig>(2, configPath, 'PUT', { members: roster, expectedMembers: [] })
+    await call(2, configPath, 'PUT', { members: [], expectedMembers: [] }, 409)
+    const payload = { action: 'save_draft', assigneeUserId: null, title: '分工交付验收', type: 'upgrade', deliveryDate: '2026-09-25', items: [], documents: [{ title: '操作文档', content: '按步骤执行', scope: 'event', relatedTodoIds: [] }] }
+    await call(3, eventsPath, 'POST', payload, 403)
+    const saved = await call<Timeline>(1, eventsPath, 'POST', payload, 201)
+    const eventId = saved.events[0].id
+    await call(1, `${eventsPath}/${eventId}`, 'PUT', { ...payload, action: 'publish' }, 400)
+    const published = await call<Timeline>(1, `${eventsPath}/${eventId}`, 'PUT', { ...payload, action: 'publish', assigneeUserId: 3 })
+    const operationId = published.events[0].operations[0].id
+    await call(1, `${eventsPath}/${eventId}/complete`, 'POST', undefined, 403)
+    await call(7, `${eventsPath}/${eventId}/complete`, 'POST', undefined, 403)
+    await call(3, `/projects/${deliveryProject}/package-timeline/operations/${operationId}`, 'PATCH', { content: '禁止改正文' }, 409)
+    await call(1, `/projects/${deliveryProject}/package-timeline/operations/${operationId}`, 'PATCH', { relatedTodoIds: [] }, 403)
+    await call(3, `/projects/${deliveryProject}/package-timeline/operations/${operationId}`, 'PATCH', { relatedTodoIds: [] })
+    const commented = await call<Timeline>(3, `${eventsPath}/${eventId}/comments`, 'POST', { content: '执行反馈' })
+    const commentId = commented.events[0].comments[0].id
+    await call(1, `${eventsPath}/${eventId}/comments/${commentId}`, 'PATCH', { content: '不能改别人的反馈' }, 403)
+    await call(3, `${eventsPath}/${eventId + 1000}/comments/${commentId}`, 'PATCH', { content: '不能跨事件修改' }, 404)
+    await call(2, configPath, 'PUT', { members: roster.filter(member => member.userId !== 3), expectedMembers: config.members }, 409)
+    await call(1, `${eventsPath}/${eventId}/reassign`, 'POST', { assigneeUserId: 7, previousAssigneeUserId: 3, reason: '轮值交接' })
+    await call(1, `${eventsPath}/${eventId}/reassign`, 'POST', { assigneeUserId: 3, previousAssigneeUserId: 3, reason: '旧页面请求' }, 409)
+    await call(3, `${eventsPath}/${eventId}/complete`, 'POST', undefined, 403)
+    await call(3, `${eventsPath}/${eventId}/comments`, 'POST', { content: '旧执行人不能写入' }, 403)
+    const completed = await call<Timeline>(7, `${eventsPath}/${eventId}/complete`, 'POST')
+    assert.equal(completed.events[0].completedByUserId, 7)
+    assert.equal((await db.query('select completed_by_user_id, completed_at from project_package_events where id=$1', [eventId])).rows[0].completed_by_user_id, '7')
+    await call(7, `${eventsPath}/${eventId}/complete`, 'POST', undefined, 403)
+    config = await call<DeliveryConfig>(2, configPath, 'PUT', { members: roster.filter(member => member.userId !== 3), expectedMembers: config.members })
+    const reader = await call<Timeline>(3, `/projects/${deliveryProject}/package-timeline`)
+    assert.equal(reader.canPlanDelivery, false)
+    assert.equal(reader.events[0].capabilities.canComment, false)
+    // Grant revocation must not resurrect on re-admission.
+    await db.query("update organization_memberships set status='removed' where organization_id=1 and user_id=7")
+    await db.query("update organization_memberships set status='active' where organization_id=1 and user_id=7")
+    assert.equal((await db.query('select 1 from project_delivery_members where project_id=$1 and user_id=7', [deliveryProject])).rowCount, 0)
+    assert.ok(config.members.length)
+    await call(2, `/projects/${deliveryProject}`, 'DELETE', { confirmationName: '权限验收项目' })
+  }
   const personal = await createProject(1,null)
   const space = await createSpace('v1')
   const workspace = await call<{ projects: Array<{ id: number; ownerUserId: number; accessRole: string; canManageSettings: boolean; readOnly: boolean }> }>(2,'/workspace')

@@ -46,7 +46,7 @@ test('draft event documents remain openable for editing', () => {
 })
 
 test('published operation documents keep todo management without restoring document mutations', () => {
-  const todoActionPattern = /\{canManageProject \? \(\s*<div className="operation-entry-actions">[\s\S]*?aria-label="关联待办"[\s\S]*?\{canManageTimeline \? \(\s*<DeleteConfirmDialog/gu
+  const todoActionPattern = /\{canManageLinks \? \(\s*<div className="operation-entry-actions">[\s\S]*?aria-label="关联待办"[\s\S]*?\{canManageTimeline \? \(\s*<DeleteConfirmDialog/gu
   assert.equal([...workbenchSource.matchAll(todoActionPattern)].length, 2)
   assert.match(
     timelineSource,
@@ -173,7 +173,7 @@ test('aggregate event save validates and persists document todo links transactio
   assert.match(indexSource, /relatedTodoIds: Array\.isArray\(value\.relatedTodoIds\)/u)
   assert.match(
     timelineSource,
-    /return withTransaction\(async \(client\) => \{\s*await lockProjectMutation\(client, params\.projectId\)\s*await ensureProjectTodoIds\([\s\S]*?let eventId = params\.eventId/u,
+    /return withTransaction\(async \(client\) => \{\s*await authorizeDelivery\(client, params\.projectId, params\.createdByUserId,[\s\S]*?await requireDeliveryAssignee\([\s\S]*?await ensureProjectTodoIds\([\s\S]*?let eventId = params\.eventId/u,
   )
   assert.match(
     timelineSource,

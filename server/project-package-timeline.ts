@@ -1,3 +1,5 @@
+import { authorizeDelivery, deliveryAccess, listDeliveryMembers, requireDeliveryAssignee, auditDelivery, lockDeliveryProject, ProjectDeliveryError } from './project-delivery.ts'
+import { deliveryCapabilities, type DeliveryCapabilities, type ProjectDeliveryMember } from '../shared/project-delivery.ts'
 import type { PoolClient, QueryResultRow } from 'pg'
 import { decryptText, encryptText } from './crypto.ts'
 import { pool, query } from './db.ts'
@@ -7,7 +9,6 @@ import {
   type PackageMarketRule,
 } from './package-market.ts'
 import { getDepartedUserIds } from './user-lifecycle.ts'
-import { lockProjectMutation } from './project-lock.ts'
 import { getPlatformConfigSnapshot } from './platform-config-runtime.ts'
 import { getPackageMarketRulesForConfigRevision } from './platform-package-rules.ts'
 
@@ -105,6 +106,12 @@ export type ProjectPackageMentionableMember = {
 }
 
 export type ProjectPackageEvent = {
+  capabilities: DeliveryCapabilities
+  createdByName?: string
+  publishedByName?: string
+  completedByName?: string
+  completedByUserId?: number
+  completedAt?: string
   assignedAt?: string
   assignedByName?: string
   assignedByUserId?: number
@@ -127,6 +134,8 @@ export type ProjectPackageEvent = {
 }
 
 export type ProjectPackageTimeline = {
+  canPlanDelivery: boolean
+  deliveryMembers: ProjectDeliveryMember[]
   departedUserIds: number[]
   events: ProjectPackageEvent[]
   mentionableMembers: ProjectPackageMentionableMember[]
@@ -134,6 +143,11 @@ export type ProjectPackageTimeline = {
 }
 
 type EventRow = {
+  creator_name: string | null
+  publisher_name: string | null
+  completer_name: string | null
+  completed_by_user_id: string | null
+  completed_at: Date | null
   assigned_at: Date | null
   assigned_by_user_id: string | null
   assignee_display_name: string | null
@@ -1272,7 +1286,7 @@ function buildProjectPackageEventMarkdown(
   return lines
 }
 
-export async function getProjectPackageTimeline(projectId: number) {
+export async function getProjectPackageTimeline(projectId: number, userId = 0) {
   const [
     eventsResult,
     groupsResult,
@@ -1285,6 +1299,10 @@ export async function getProjectPackageTimeline(projectId: number) {
     query<EventRow>(
       `
       select e.id,
+             coalesce(nullif(creator.display_name, ''), creator.email) as creator_name,
+             coalesce(nullif(publisher.display_name, ''), publisher.email) as publisher_name,
+             coalesce(nullif(completer.display_name, ''), completer.email) as completer_name,
+             e.completed_by_user_id, e.completed_at,
              e.type,
              e.status,
              e.title,
@@ -1303,6 +1321,9 @@ export async function getProjectPackageTimeline(projectId: number) {
              assigner.email as assigner_email,
              assigner.display_name as assigner_display_name
       from project_package_events e
+      left join users creator on creator.id = e.created_by_user_id
+      left join users publisher on publisher.id = e.published_by_user_id
+      left join users completer on completer.id = e.completed_by_user_id
       left join users assignee on assignee.id = e.assignee_user_id
       left join users assigner on assigner.id = e.assigned_by_user_id
       where e.project_id = $1
@@ -1537,10 +1558,20 @@ export async function getProjectPackageTimeline(projectId: number) {
     }
   }
 
+  const access = await deliveryAccess(projectId, userId)
+  const deliveryMembers = await listDeliveryMembers(projectId)
   return {
+    canPlanDelivery: access.canPlan,
+    deliveryMembers,
     departedUserIds: await getDepartedUserIds(),
     projectId,
     events: eventsResult.rows.map((row) => ({
+      capabilities: deliveryCapabilities(access, { published: Boolean(row.published_at), delivered: row.status === 'delivered', assigneeUserId: row.assignee_user_id ? Number(row.assignee_user_id) : null }, userId),
+      createdByName: row.creator_name ?? undefined,
+      publishedByName: row.publisher_name ?? undefined,
+      completedByName: row.completer_name ?? undefined,
+      completedByUserId: row.completed_by_user_id ? Number(row.completed_by_user_id) : undefined,
+      completedAt: row.completed_at ? formatDateTime(row.completed_at) : undefined,
       assignedAt: row.assigned_at ? formatDateTime(row.assigned_at) : undefined,
       assignedByName: row.assigned_by_user_id
         ? displayUserName({
@@ -1578,7 +1609,7 @@ export async function getProjectPackageTimeline(projectId: number) {
 export async function saveProjectPackageEvent(params: {
   action: ProjectPackageEventSaveAction
   assignedByUserId: number
-  assigneeUserId: number
+  assigneeUserId: number | null
   createdByUserId: number
   deliveryDate?: string
   deliveryEndAt?: string
@@ -1616,7 +1647,8 @@ export async function saveProjectPackageEvent(params: {
   const sourceConfigRevision = getPlatformConfigSnapshot().revision
 
   return withTransaction(async (client) => {
-    await lockProjectMutation(client, params.projectId)
+    await authorizeDelivery(client, params.projectId, params.createdByUserId, 'plan', params.eventId == null ? undefined : { eventId: params.eventId })
+    await requireDeliveryAssignee(client, params.projectId, params.assigneeUserId, params.action === 'publish')
     await ensureProjectTodoIds(
       params.projectId,
       documents.flatMap((document) => document.relatedTodoIds),
@@ -1804,75 +1836,44 @@ export async function saveProjectPackageEvent(params: {
   })
 }
 
-export async function completeProjectPackageEvent(params: {
-  eventId: number
-  projectId: number
-}) {
-  const result = await query(
-    `
-    update project_package_events
-    set status = 'delivered', updated_at = now()
-    where id = $1
-      and project_id = $2
+export async function completeProjectPackageEvent(params: { eventId: number; projectId: number; userId: number }) {
+  await withTransaction(async (client) => {
+    await authorizeDelivery(client, params.projectId, params.userId, 'canComplete', { eventId: params.eventId })
+    const result = await client.query(`update project_package_events set status = 'delivered', completed_by_user_id = $1,
+      completed_at = now(), updated_at = now() where id = $2 and project_id = $3
       and published_at is not null
-      and status = 'delivering'
-    `,
-    [params.eventId, params.projectId],
-  )
-  if (result.rowCount !== 1) {
-    throw new ProjectPackageEventError('Only active published events can be completed', 409)
-  }
+      and status = 'delivering'`,
+    [params.userId, params.eventId, params.projectId])
+    if (result.rowCount !== 1) throw new ProjectDeliveryError('任务状态已变化，请刷新后重试', 409)
+  })
 }
 
-export async function createProjectPackageEvent(params: {
-  assignedByUserId?: number | null
-  assigneeUserId?: number | null
-  createdByUserId: number
-  deliveryDate?: string
-  deliveryEndAt?: string
-  deliveryStartAt?: string
-  projectId: number
-  title: string
-  type: ProjectPackageEventType
+export async function reassignProjectPackageEvent(params: {
+  projectId: number; eventId: number; userId: number; assigneeUserId: number; previousAssigneeUserId: number | null; reason: string
 }) {
-  const title = normalizeText(params.title, 120)
-  if (!title) throw new Error('Event title is required')
-  const deliveryWindow = normalizeDeliveryWindow(params)
-
-  const result = await query<{ id: string }>(
-    `
-    insert into project_package_events (
-      project_id,
-      type,
-      title,
-      created_by_user_id,
-      assignee_user_id,
-      assigned_by_user_id,
-      assigned_at,
-      delivery_date,
-      delivery_start_at,
-      delivery_end_at
-    )
-    values ($1, $2, $3, $4, $5, $6, case when $5::bigint is null then null else now() end, $7::date, $8::timestamptz, $9::timestamptz)
-    returning id
-    `,
-    [
-      params.projectId,
-      params.type,
-      encryptText(title),
-      params.createdByUserId,
-      params.assigneeUserId ?? null,
-      params.assigneeUserId ? (params.assignedByUserId ?? params.createdByUserId) : null,
-      deliveryWindow.deliveryDate,
-      deliveryWindow.deliveryStartAt,
-      deliveryWindow.deliveryEndAt,
-    ],
-  )
-  return Number(result.rows[0].id)
+  const reason = params.reason.trim()
+  if (!reason || reason.length > 1000) throw new ProjectDeliveryError('请填写 1–1000 字的交接原因', 400)
+  await withTransaction(async (client) => {
+    const event = await authorizeDelivery(client, params.projectId, params.userId, 'canReassign', { eventId: params.eventId })
+    if ((event?.assignee_user_id ? Number(event.assignee_user_id) : null) !== params.previousAssigneeUserId) {
+      throw new ProjectDeliveryError('执行负责人已变化，请刷新后重新确认', 409)
+    }
+    await requireDeliveryAssignee(client, params.projectId, params.assigneeUserId, true)
+    if (Number(event?.assignee_user_id) === params.assigneeUserId) throw new ProjectDeliveryError('请选择另一位执行负责人', 400)
+    const organizationId = await lockDeliveryProject(client, params.projectId)
+    await client.query(`update project_package_events set assignee_user_id = $1, assigned_by_user_id = $2,
+      assigned_at = now(), updated_at = now() where id = $3 and project_id = $4`,
+    [params.assigneeUserId, params.userId, params.eventId, params.projectId])
+    if (organizationId) await auditDelivery(client, organizationId, params.projectId, params.userId, 'delivery.reassigned', {
+      eventId: params.eventId, previousAssigneeUserId: params.previousAssigneeUserId, assigneeUserId: params.assigneeUserId, reason,
+    })
+    await client.query(`insert into project_package_event_comments (project_package_event_id, author_user_id, content)
+      values ($1, $2, $3)`, [params.eventId, params.userId, encryptText(`转交执行负责人：${reason}`)])
+  })
 }
 
 export async function updateProjectPackageEvent(params: {
-  assignedByUserId?: number
+  assignedByUserId: number
   assigneeUserId?: number | null
   client?: PoolClient
   eventId: number
@@ -1924,7 +1925,8 @@ export async function updateProjectPackageEvent(params: {
   }
   values.push(params.eventId, params.projectId)
   const update = async (client: PoolClient) => {
-    await lockProjectMutation(client, params.projectId)
+    await authorizeDelivery(client, params.projectId, params.assignedByUserId, 'plan', { eventId: params.eventId })
+    if ('assigneeUserId' in params) await requireDeliveryAssignee(client, params.projectId, params.assigneeUserId ?? null, false)
     const result = await client.query(
       `
       update project_package_events
@@ -1941,14 +1943,11 @@ export async function updateProjectPackageEvent(params: {
   else await withTransaction(update)
 }
 
-export async function deleteProjectPackageEvent(params: { eventId: number; projectId: number }) {
-  await query(
-    `
-    delete from project_package_events
-    where id = $1 and project_id = $2
-    `,
-    [params.eventId, params.projectId],
-  )
+export async function deleteProjectPackageEvent(params: { eventId: number; projectId: number; userId: number }) {
+  await withTransaction(async (client) => {
+    await authorizeDelivery(client, params.projectId, params.userId, 'plan', { eventId: params.eventId })
+    await client.query('delete from project_package_events where id = $1 and project_id = $2', [params.eventId, params.projectId])
+  })
 }
 
 export async function addProjectPackageItems(params: {
@@ -1965,6 +1964,7 @@ export async function addProjectPackageItems(params: {
   const sourceConfigRevision = getPlatformConfigSnapshot().revision
 
   await withTransaction(async (client) => {
+    await authorizeDelivery(client, params.projectId, params.createdByUserId, 'plan', { eventId: params.eventId })
     await params.validatePackageItems?.(client, items)
     const event = ensureUnpublishedEvent(
       await findEventMeta(params.eventId, params.projectId, client),
@@ -2019,10 +2019,12 @@ export async function addProjectPackageItems(params: {
 }
 
 export async function deleteProjectPackageGroup(params: {
+  userId: number
   groupId: number
   projectId: number
 }) {
   await withTransaction(async (client) => {
+    await authorizeDelivery(client, params.projectId, params.userId, 'plan', { groupId: params.groupId })
     const meta = ensureUnpublishedEvent(
       await findGroupMeta(params.groupId, params.projectId, client),
     )
@@ -2056,6 +2058,7 @@ export async function createProjectPackageOperation(params: {
   if (kind === 'document' && !content) throw new Error('Operation content is required')
 
   await withTransaction(async (client) => {
+    await authorizeDelivery(client, params.projectId, params.createdByUserId, 'plan', { eventId: params.eventId })
     const event = ensureUnpublishedEvent(
       await findEventMeta(params.eventId, params.projectId, client),
     )
@@ -2176,8 +2179,10 @@ export async function updateProjectPackageOperation(params: {
   }
 
   await withTransaction(async (client) => {
+    await lockDeliveryProject(client, params.projectId)
     const operation = await findOperationMeta(params.operationId, params.projectId, client)
     if (!operation) throw new ProjectPackageEventError('Event not found', 404)
+    await authorizeDelivery(client, params.projectId, params.updatedByUserId, operation.published_at ? 'canExecute' : 'plan', { operationId: params.operationId })
     if (operation.published_at && updates.length > 0) {
       throw new ProjectPackageEventError('Published events are read-only', 409)
     }
@@ -2227,10 +2232,12 @@ export async function updateProjectPackageOperation(params: {
 }
 
 export async function deleteProjectPackageOperation(params: {
+  userId: number
   operationId: number
   projectId: number
 }) {
   await withTransaction(async (client) => {
+    await authorizeDelivery(client, params.projectId, params.userId, 'plan', { operationId: params.operationId })
     const operation = ensureUnpublishedEvent(
       await findOperationMeta(params.operationId, params.projectId, client),
     )
@@ -2431,6 +2438,7 @@ export async function createProjectPackageEventComment(params: {
   projectId: number
 }) {
   return withTransaction(async (client) => {
+    await authorizeDelivery(client, params.projectId, params.authorUserId, 'canComment', { eventId: params.eventId })
     const event = await client.query(
       'select id from project_package_events where id = $1 and project_id = $2',
       [params.eventId, params.projectId],
@@ -2502,12 +2510,14 @@ async function lockPackageEventComment(
 }
 
 export async function updateProjectPackageEventComment(params: {
+  eventId: number
   commentId: number
   content: string
   projectId: number
   userId: number
 }) {
   await withTransaction(async (client) => {
+    await authorizeDelivery(client, params.projectId, params.userId, 'canComment', { commentId: params.commentId, eventId: params.eventId })
     await lockPackageEventComment(params.commentId, params.projectId, params.userId, client)
     await client.query(
       `update project_package_event_comments
@@ -2519,11 +2529,13 @@ export async function updateProjectPackageEventComment(params: {
 }
 
 export async function deleteProjectPackageEventComment(params: {
+  eventId: number
   commentId: number
   projectId: number
   userId: number
 }) {
   await withTransaction(async (client) => {
+    await authorizeDelivery(client, params.projectId, params.userId, 'canComment', { commentId: params.commentId, eventId: params.eventId })
     await lockPackageEventComment(params.commentId, params.projectId, params.userId, client)
     await client.query(
       `delete from notification_states

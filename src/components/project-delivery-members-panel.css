@@ -1,0 +1,18 @@
+.delivery-members-panel { border-top: 1px solid var(--border); padding: 16px 0; min-width: 0; }
+.delivery-members-heading, .delivery-members-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.delivery-members-heading strong { font-size: 14px; }
+.delivery-members-summary { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 10px; margin: 14px 0 0; font-size: 13px; }
+.delivery-members-summary dd { margin: 0; overflow-wrap: anywhere; }
+.delivery-members-summary small { margin-left: 12px; color: var(--muted-foreground); white-space: nowrap; }
+.delivery-members-table-scroll { overflow-x: auto; margin-top: 12px; }
+.delivery-members-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.delivery-members-table th, .delivery-members-table td { padding: 8px; text-align: left; border-bottom: 1px solid var(--border); }
+.delivery-members-table th:not(:first-child), .delivery-members-table td:not(:first-child) { text-align: center; white-space: nowrap; }
+.delivery-members-table input, .delivery-member-candidates input { width: 16px; height: 16px; accent-color: var(--primary); }
+.delivery-members-help, .delivery-members-panel > p { font-size: 13px; line-height: 1.65; margin: 12px 0; }
+.delivery-members-help { color: var(--muted-foreground); }
+.delivery-members-actions { justify-content: flex-end; margin-top: 14px; }
+.delivery-member-picker { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 6px; }
+.delivery-member-candidates { max-height: 240px; overflow-y: auto; margin: 8px 0; }
+.delivery-member-candidates label { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 13px; }
+.delivery-member-candidates small { display: block; color: var(--muted-foreground); overflow-wrap: anywhere; }

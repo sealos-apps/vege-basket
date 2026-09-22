@@ -1,3 +1,4 @@
+import { reassignProjectPackageEvent } from './api'
 import { addOrganizationProjectMember } from './api'
 import {
   Component,
@@ -4158,6 +4159,19 @@ function App() {
     }
   }
 
+  async function reassignInstallEvent(eventId: number, payload: { assigneeUserId: number; previousAssigneeUserId: number | null; reason: string }) {
+    if (!selectedProject) return false
+    const timeline = await reconcileAction(
+      () => reassignProjectPackageEvent(selectedProject.id, eventId, payload),
+      () => fetchProjectPackageTimeline(selectedProject.id),
+      data => data.events.some(event => event.id === eventId && event.assigneeUserId === payload.assigneeUserId),
+    )
+    if (confirmationScopeRef.current !== confirmationScope) return false
+    setProjectPackageTimelines(current => ({ ...current, [selectedProject.id]: timeline }))
+    void refreshNotifications()
+    return true
+  }
+
   async function completeInstallEvent(eventId: number) {
     if (!selectedProject) return false
     setWorkspaceError('')
@@ -5801,6 +5815,7 @@ ${packageTimelineText}`
             projectDetailTab={projectDetailTab}
             onAddTodo={addTodo}
             onAddInstallEventComment={addInstallEventComment}
+            onReassignInstallEvent={reassignInstallEvent}
             onCompleteInstallEvent={completeInstallEvent}
             onCreateInstallOperation={createInstallOperation}
             onDeleteInstallEvent={deleteInstallEvent}
@@ -6653,6 +6668,7 @@ function ProjectDetail({
   projectDetailTab,
   onAddTodo,
   onAddInstallEventComment,
+  onReassignInstallEvent,
   onCompleteInstallEvent,
   onCreateInstallOperation,
   onDeleteInstallEvent,
@@ -6718,6 +6734,7 @@ function ProjectDetail({
   projectDetailTab: ProjectDetailTab
   onAddTodo: (projectId: number) => void | Promise<void>
   onAddInstallEventComment: (eventId: number, content: string) => Promise<boolean>
+  onReassignInstallEvent: (eventId: number, payload: { assigneeUserId: number; previousAssigneeUserId: number | null; reason: string }) => Promise<boolean>
   onCompleteInstallEvent: (eventId: number) => Promise<boolean>
   onCreateInstallOperation: (payload: {
     eventId: number
@@ -6966,6 +6983,7 @@ function ProjectDetail({
           <ProjectPackageWorkbench
             ref={packageWorkbenchRef}
             onAddEventComment={onAddInstallEventComment}
+            onReassignEvent={onReassignInstallEvent}
             onCompleteEvent={onCompleteInstallEvent}
             onCreateOperation={onCreateInstallOperation}
             onDeleteEvent={onDeleteInstallEvent}

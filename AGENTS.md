@@ -57,6 +57,18 @@ historical product context; current code and these operational docs take precede
 
 ## Security And Data Invariants
 
+- Organization-project delivery grants are project-scoped, with independent planning and
+  execution duties configured only by an active organization Owner/Admin with the assigned
+  `organization_admin` role. Only active organization accounts with direct project access
+  may be configured. Publication requires an eligible executor; drafts may be unassigned.
+  Planning never implies execution: only the current assigned executor may maintain execution
+  links/notes or complete a published task. Recheck in every mutation transaction, including
+  legacy routes and ordinary todo-note edits linked to delivery. Published plans stay immutable.
+  Reassignment preserves creator/publisher identity and audits previous/new executors and an
+  encrypted reason. Removal, disabling and organization changes revoke grants permanently;
+  rejoining never restores them automatically. Lock organization before project; participant
+  row locks use NOWAIT with a 409 response to avoid inversion with account offboarding.
+
 - Never commit or log database URLs, session tokens, encryption keys, AI keys, Feishu
   secrets, OSS credentials, or signed URLs.
 - Sensitive project text must use `encryptText` on write and `decryptText` on read. New

@@ -1,3 +1,5 @@
+import { auditDelivery, listDeliveryMembers, lockDeliveryProject, rethrowDeliveryLockError, ProjectDeliveryError } from './project-delivery.ts'
+import { parseDeliveryMembers } from '../shared/project-delivery.ts'
 import { weeklyReportProfiles, type WeeklyReportProfile } from '../shared/weekly-report-profile.ts'
 import { shareOrganizationTestEnvironments } from './test-environment-sharing.ts'
 import { lockTransferProject, canCompleteProjectTransfer } from './project-transfer.ts'
@@ -285,6 +287,7 @@ async function lockGovernedProject(
   organizationId: number,
   projectId: number,
   userId: number,
+  nowait = false,
 ) {
   const result = await client.query<{
     health_note_encrypted: string | null
@@ -304,7 +307,7 @@ async function lockGovernedProject(
       on role.user_id = $3 and role.role = 'organization_admin'
     where p.organization_id = $1 and p.id = $2
       and membership.access_role in ('owner', 'admin')
-    for update of p, membership, role
+    for update of p, membership, role${nowait ? ' nowait' : ''}
     `,
     [organizationId, projectId, userId],
   )
@@ -414,6 +417,17 @@ function weeklyReportAssigneeIds(value: unknown) {
   if (!Array.isArray(value) || value.length > 1_000) return null
   const ids = Array.from(new Set(value.map(positiveId)))
   return ids.every((id): id is number => id !== null) ? ids : null
+}
+
+async function getDeliveryConfiguration(organizationId: number, projectId: number) {
+  const members = await listDeliveryMembers(projectId)
+  const result = await query<{ id: string; name: string; username: string; project_member: boolean }>(`
+    select u.id, coalesce(nullif(u.display_name, ''), u.email) as name, u.email as username,
+      (p.user_id = u.id or exists(select 1 from project_memberships pm where pm.project_id = p.id and pm.invited_user_id = u.id and pm.status = 'active')) as project_member
+    from organization_memberships om join users u on u.id = om.user_id and u.account_status = 'active'
+    join projects p on p.id = $2 and p.organization_id = om.organization_id
+    where om.organization_id = $1 and om.status = 'active' order by u.id`, [organizationId, projectId])
+  return { members, candidates: result.rows.map(row => ({ id: Number(row.id), name: row.name, username: row.username, projectMember: row.project_member })) }
 }
 
 async function writeMilestoneEvent(
@@ -2313,6 +2327,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         throw new ProjectOrganizationTransferError(blockers)
       }
 
+      await client.query('delete from project_delivery_members where project_id = $1', [projectId])
       await detachOrganizationProjectModules(client, sourceOrganizationId!, projectId)
       await client.query(
         `update projects set organization_id = $1::bigint, updated_at = now()
@@ -2375,6 +2390,55 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       client.release()
     }
     response.json(await getOrganizationDetail(targetOrganizationId, session.userId))
+  }))
+
+  router.get('/organizations/:organizationId/projects/:projectId/delivery-members', asyncRoute(async (request, response) => {
+    const session = await requireSession(request, response)
+    if (!session) return
+    const organizationId = positiveId(request.params.organizationId)
+    const projectId = positiveId(request.params.projectId)
+    if (!projectId) throw new ProjectDeliveryError('项目 ID 无效', 400)
+    if (!(await requireOrganizationProjectManager(response, organizationId, session.userId))) return
+    const project = await query('select id from projects where id = $1 and organization_id = $2', [projectId, organizationId])
+    if (!project.rows[0]) throw new ProjectDeliveryError('组织项目不存在', 404)
+    response.json(await getDeliveryConfiguration(organizationId!, projectId))
+  }))
+
+  router.put('/organizations/:organizationId/projects/:projectId/delivery-members', asyncRoute(async (request, response) => {
+    const session = await requireSession(request, response)
+    if (!session) return
+    const organizationId = positiveId(request.params.organizationId)
+    const projectId = positiveId(request.params.projectId)
+    if (!projectId) throw new ProjectDeliveryError('项目 ID 无效', 400)
+    if (!(await requireOrganizationProjectManager(response, organizationId, session.userId))) return
+    const members = parseDeliveryMembers(request.body?.members)
+    const expected = parseDeliveryMembers(request.body?.expectedMembers)
+    if (!members || !expected) throw new ProjectDeliveryError('成员配置无效，每人须至少选择一项职责', 400)
+    await transaction(async (client) => {
+      if (await lockDeliveryProject(client, projectId) !== organizationId) throw new ProjectDeliveryError('项目所属组织已变化', 409)
+      if (!(await lockGovernedProject(client, organizationId!, projectId, session.userId, true))) throw new ProjectDeliveryError('组织项目管理权限已变化')
+      const before = await listDeliveryMembers(projectId, client)
+      if (JSON.stringify(parseDeliveryMembers(before)) !== JSON.stringify(expected)) throw new ProjectDeliveryError('交付人员已被其他管理员修改，请重新加载配置', 409)
+      // Lock every selected account and organization membership before validating the complete replacement.
+      const selected = await client.query<{ user_id: string }>(`
+        select om.user_id from organization_memberships om join users u on u.id = om.user_id
+        join projects p on p.id = $2 and p.organization_id = om.organization_id
+        where om.organization_id = $1 and om.status = 'active' and u.account_status = 'active'
+          and om.user_id = any($3::bigint[])
+          and (p.user_id = u.id or exists(select 1 from project_memberships pm where pm.project_id = p.id and pm.invited_user_id = u.id and pm.status = 'active'))
+        order by om.user_id for share of om, u nowait`, [organizationId, projectId, members.map(member => member.userId)])
+      if (selected.rows.length !== members.length) throw new ProjectDeliveryError('只能配置当前组织内已加入项目的有效成员', 400)
+      const revoked = before.filter(member => member.canExecute && !members.some(next => next.userId === member.userId && next.canExecute))
+      const blockers = await client.query<{ count: string }>(`select count(*) as count from project_package_events
+        where project_id = $1 and status <> 'delivered' and assignee_user_id = any($2::bigint[])`, [projectId, revoked.map(member => member.userId)])
+      if (Number(blockers.rows[0].count)) throw new ProjectDeliveryError('人员仍有未完成的交付任务，请先完成或交接后再取消执行资格', 409)
+      await client.query('delete from project_delivery_members where project_id = $1', [projectId])
+      for (const member of members) await client.query(`insert into project_delivery_members
+        (project_id, organization_id, user_id, can_plan, can_execute, configured_by_user_id)
+        values ($1, $2, $3, $4, $5, $6)`, [projectId, organizationId, member.userId, member.canPlan, member.canExecute, session.userId])
+      await auditDelivery(client, organizationId!, projectId, session.userId, 'delivery.members_updated', { before, after: members })
+    }).catch(rethrowDeliveryLockError)
+    response.json(await getDeliveryConfiguration(organizationId!, projectId))
   }))
 
   router.post('/organizations/:organizationId/projects/:projectId/members', asyncRoute(async (request, response) => {

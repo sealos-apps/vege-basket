@@ -1,3 +1,4 @@
+import { ProjectDeliveryMembersPanel } from './project-delivery-members-panel'
 import { WeeklyReportProgress, WeeklyReportReading } from './weekly-report-form'
 import { combineWeeklyReportProgress, formatWeeklyReportPercent } from '../../shared/weekly-report-document'
 import { weeklyReportProfiles, type WeeklyReportProfile } from '../../shared/weekly-report-profile'
@@ -1811,7 +1812,7 @@ function OrganizationProjectRow({
                 <i aria-hidden="true" /> {projectHealthLabel[project.healthStatus]}
               </span>
             </span>
-            <small>执行负责人：{project.ownerName}</small>
+            <small>项目负责人：{project.ownerName}</small>
           </span>
           <span className="organization-project-next-milestone">
             <small>下一里程碑</small>
@@ -1894,6 +1895,7 @@ function OrganizationProjectRow({
       <div className={`organization-project-reveal${expanded ? ' open' : ''}`}>
         <div>
           <div className="organization-project-detail">
+            {expanded && canManage && <ProjectDeliveryMembersPanel key={`delivery:${detail.id}:${project.id}`} organizationId={detail.id} projectId={project.id} />}
             {expanded && <ProjectSubprojectsPanel key={project.id} projectId={project.id} canManage={canManageSubprojects} onChange={onSubprojectsChanged} />}
             <div className="organization-project-detail-heading">
               <div>

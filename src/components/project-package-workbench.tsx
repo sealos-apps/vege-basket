@@ -1,3 +1,4 @@
+import { ConfirmActionDialog } from './confirm-action-dialog'
 import { createResumableAction } from '../confirmed-action'
 import { ConfirmActionDialog as DeleteConfirmDialog } from './confirm-action-dialog'
 import { useConfirmAction } from '../hooks/use-confirm-action'
@@ -114,6 +115,7 @@ import {
 
 type PackageWorkbenchProps = {
   onAddEventComment: (eventId: number, content: string) => Promise<boolean>
+  onReassignEvent: (eventId: number, payload: { assigneeUserId: number; previousAssigneeUserId: number | null; reason: string }) => Promise<boolean>
   onCompleteEvent: (eventId: number) => Promise<boolean>
   onCreateOperation: (payload: {
     eventId: number
@@ -1546,6 +1548,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
   memberships,
   onAddEventComment,
   onCompleteEvent,
+  onReassignEvent,
   onCreateOperation,
   onDeleteEvent,
   onDeleteEventComment,
@@ -1585,6 +1588,9 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
   const [documentTodoFilterConditions, setDocumentTodoFilterConditions] = useState<TodoFilterCondition[]>([])
   const [, setEventEditorReady] = useState(false)
   const [eventAssigneeUserId, setEventAssigneeUserId] = useState('')
+  const [reassignEventId, setReassignEventId] = useState<number | null>(null)
+  const [nextAssignee, setNextAssignee] = useState('')
+  const [reassignReason, setReassignReason] = useState('')
   const [eventDeliveryStartAt, setEventDeliveryStartAt] = useState(() => `${getShanghaiDateStamp()}T00:00`)
   const [eventDeliveryEndAt, setEventDeliveryEndAt] = useState(() => `${getShanghaiDateStamp()}T23:59`)
   const [eventTitle, setEventTitle] = useState('')
@@ -1708,6 +1714,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
 
   const events = useMemo(() => timeline?.events ?? [], [timeline])
   const memberOptions = useMemo(() => {
+    if (project.organizationId) return (timeline?.deliveryMembers ?? []).filter(member => member.canExecute).map(member => ({ id: member.userId, name: member.name }))
     const options = new Map<number, string>()
     options.set(project.ownerUserId, project.ownerName || '项目 Owner')
     memberships
@@ -1719,7 +1726,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
         )
       })
     return [...options.entries()].map(([id, name]) => ({ id, name }))
-  }, [memberships, project.id, project.ownerName, project.ownerUserId])
+  }, [memberships, project.id, project.ownerName, project.ownerUserId, project.organizationId, timeline?.deliveryMembers])
   const [assignedOnly, setAssignedOnly] = useState(false)
   const activeEventFilterCount = eventFilterConditions.length
   const visibleEvents = useMemo(() => {
@@ -1764,9 +1771,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
     () => new Map(selectableTodos.map((todo) => [todo.id, todo])),
     [selectableTodos],
   )
-  const canManageProject = !project.readOnly && (
-    project.accessRole === 'owner' || project.accessRole === 'member'
-  )
+  const canManageProject = timeline?.canPlanDelivery === true
   const todoDialogOperation = useMemo(
     () =>
       todoDialogOperationId == null
@@ -1863,7 +1868,8 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
 
   const selectedEvent =
     visibleEvents.find((event) => event.id === selectedEventId) ?? visibleEvents[0] ?? null
-  const canManageTimeline = canManageProject && Boolean(selectedEvent && !selectedEvent.publishedAt)
+  const canManageTimeline = selectedEvent?.capabilities?.canEditPlan === true
+  const canManageLinks = selectedEvent?.capabilities?.canExecute === true || canManageTimeline
   const existingOperationInteraction = resolveExistingOperationInteraction(canManageTimeline)
   const operationDialogReadOnly = Boolean(
     pendingOperationTarget?.operation && existingOperationInteraction.readOnly,
@@ -1952,8 +1958,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
     eventTitle.trim() &&
       eventDeliveryStartAt &&
       eventDeliveryEndAt &&
-      dateTimeLocalToUtcTimestamp(eventDeliveryEndAt) > dateTimeLocalToUtcTimestamp(eventDeliveryStartAt) &&
-      Number(eventAssigneeUserId) > 0,
+      dateTimeLocalToUtcTimestamp(eventDeliveryEndAt) > dateTimeLocalToUtcTimestamp(eventDeliveryStartAt),
   )
 
   function updatePackageDocument(
@@ -2513,7 +2518,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
     setEventType(event.type)
     setEventDeliveryStartAt(`${dateTimeLocalDateStamp(getEventDeliveryStartAt(event))}T00:00`)
     setEventDeliveryEndAt(`${dateTimeLocalDateStamp(getEventDeliveryEndAt(event))}T23:59`)
-    setEventAssigneeUserId(String(event.assigneeUserId ?? memberOptions[0]?.id ?? ''))
+    setEventAssigneeUserId(String(event.assigneeUserId ?? ''))
     setCartItems(event.groups.flatMap((group) => group.items.map((item) => ({
       arch: item.arch,
       channel: item.channel,
@@ -2644,6 +2649,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
   }
 
   async function saveOperationTodoDialog() {
+    if (!canManageLinks) return
     setOperationTodoSaveError('')
     if (!todoDialogOperation) return
     const operationId = todoDialogOperation.id
@@ -2693,7 +2699,8 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
 
   async function saveEvent(action: 'publish' | 'save_draft') {
     const assigneeUserId = Number(eventAssigneeUserId)
-    if (!eventBasicInformationValid || !Number.isInteger(assigneeUserId) || assigneeUserId <= 0) return
+    if (!canManageProject || !eventBasicInformationValid) return
+    if (action === 'publish' && (!Number.isInteger(assigneeUserId) || assigneeUserId <= 0)) { setEventEditorStep(1); return }
     if (action === 'publish' && (!eventDocumentTitle.trim() || !eventDocumentContent.trim())) {
       setEventEditorStep(3)
       return
@@ -2714,7 +2721,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
       })
       const savedEvent = await onSaveEvent(eventEditorEventId, {
         action,
-        assigneeUserId,
+        assigneeUserId: assigneeUserId || null,
         deliveryDate: dateTimeLocalDateStamp(eventDeliveryEndAt),
         deliveryEndAt: eventDeliveryEndAt,
         deliveryStartAt: eventDeliveryStartAt,
@@ -3061,16 +3068,17 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
                 </Label>
               </div>
               <Label>
-                交付人
+                执行负责人
                 <Select
-                  value={eventAssigneeUserId}
+                  value={eventAssigneeUserId || 'unassigned'}
                   onValueChange={(value) => {
-                    setEventAssigneeUserId(value)
+                    setEventAssigneeUserId(value === 'unassigned' ? '' : value)
                     setEventEditorDirty(true)
                   }}
                 >
-                  <SelectTrigger><SelectValue placeholder="选择交付人" /></SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="选择执行负责人" /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="unassigned">暂不指派（发布前必选）</SelectItem>
                     {memberOptions.map((member) => (
                       <SelectItem key={member.id} value={String(member.id)}>{member.name}</SelectItem>
                     ))}
@@ -3305,7 +3313,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
             </div>
             <div className="event-wizard-save-actions">
               <Button
-                disabled={!eventBasicInformationValid || busyAction === 'event'}
+                disabled={!canManageProject || !eventBasicInformationValid || busyAction === 'event'}
                 onClick={() => void saveEvent('save_draft')}
                 type="button"
                 variant="outline"
@@ -3314,11 +3322,11 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
               </Button>
               <Button
                 className="solid-button"
-                disabled={!eventBasicInformationValid || busyAction === 'event'}
+                disabled={!canManageProject || !eventBasicInformationValid || !memberOptions.some(member => member.id === Number(eventAssigneeUserId)) || busyAction === 'event'}
                 onClick={() => void saveEvent('publish')}
                 type="button"
               >
-                发布
+                发布并指派
               </Button>
             </div>
           </div>
@@ -3438,14 +3446,14 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
                     <span>{eventTypeLabel(event.type)} · {formatEventDeliveryWindow(event)}</span>
                     <span className="project-event-badges">
                       <span className="project-event-assignee">
-                        交付人：<UserName departedUserIds={timeline?.departedUserIds} name={event.assigneeName || '未指派'} userId={event.assigneeUserId} />
+                        执行负责人：<UserName departedUserIds={timeline?.departedUserIds} name={event.assigneeName || '未指派'} userId={event.assigneeUserId} />
                       </span>
                       <span className={`project-event-status-badge ${eventDisplayStatus(event)}`}>
                         {eventStatusLabel(eventDisplayStatus(event))}
                       </span>
                     </span>
                   </button>
-                  {canManageProject ? (
+                  {event.capabilities?.canEditPlan ? (
                     <div className="project-event-item-actions">
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -3524,7 +3532,9 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
                         </span>
                       </p>
                       <p className="package-workbench-readonly">
-                        事件发布后，基本信息、安装包和文档保持只读。
+                        制定：{selectedEvent.createdByName || '未知'} · 发布：{selectedEvent.publishedByName || '未知'} · 执行负责人：{selectedEvent.assigneeName || '未指派'}
+                        {selectedEvent.completedAt ? ` · 完成：${selectedEvent.completedByName || '未知'}（${selectedEvent.completedAt}）` : ''}
+                        <br />事件发布后，基本信息、安装包和文档保持只读。
                       </p>
                     </div>
                     <div className="operation-actions">
@@ -3536,7 +3546,8 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
                       >
                         <ChatCircleDots size={15} /> 交付反馈
                       </Button>
-                      {canManageProject && selectedEvent.status !== 'delivered' ? (
+                      {selectedEvent.capabilities?.canReassign && <Button variant="outline" type="button" onClick={() => { setReassignEventId(reassignEventId === selectedEvent.id ? null : selectedEvent.id); setNextAssignee(''); setReassignReason('') }}>转交执行人</Button>}
+                      {selectedEvent.capabilities?.canComplete ? (
                         <Button
                           className="solid-button"
                           type="button"
@@ -3554,6 +3565,23 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
                       ) : null}
                     </div>
                   </div>
+
+                  {reassignEventId === selectedEvent.id && selectedEvent.capabilities?.canReassign && <div className="delivery-member-picker">
+                    <Label>新执行负责人<Select value={nextAssignee} onValueChange={setNextAssignee}>
+                      <SelectTrigger aria-label="新执行负责人"><SelectValue placeholder="选择交接人员" /></SelectTrigger>
+                      <SelectContent>{memberOptions.filter(member => member.id !== selectedEvent.assigneeUserId).map(member => <SelectItem key={member.id} value={String(member.id)}>{member.name}</SelectItem>)}</SelectContent>
+                    </Select></Label>
+                    <Label>交接原因<Textarea aria-label="交接原因" maxLength={1000} value={reassignReason} onChange={event => setReassignReason(event.target.value)} /></Label>
+                    <div className="delivery-members-actions">
+                      <Button variant="outline" onClick={() => setReassignEventId(null)}>取消</Button>
+                      <ConfirmActionDialog actionKey={`delivery-reassign:${project.id}:${selectedEvent.id}`} title={`确认转交“${selectedEvent.title}”的执行负责人？`} description={`任务将由${selectedEvent.assigneeName || '未指派'}转交给${memberOptions.find(member => member.id === Number(nextAssignee))?.name || '新负责人'}，原负责人将失去执行权限。`} confirmLabel="确认转交" variant="default" confirmDisabled={!nextAssignee || !reassignReason.trim()}
+                        onConfirm={async () => {
+                          const saved = await onReassignEvent(selectedEvent.id, { assigneeUserId: Number(nextAssignee), previousAssigneeUserId: selectedEvent.assigneeUserId ?? null, reason: reassignReason })
+                          if (saved) setReassignEventId(null)
+                          return saved
+                        }} trigger={<Button disabled={!nextAssignee || !reassignReason.trim()}>转交执行人</Button>} />
+                    </div>
+                  </div>}
 
                   {selectedEvent.operations.length === 0 ? (
                     canManageTimeline ? (
@@ -3594,7 +3622,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
                             </div>
                           </button>
                           {renderOperationTodoChips(operation, todosById)}
-                          {canManageProject ? (
+                          {canManageLinks ? (
                             <div className="operation-entry-actions">
                               <button
                                 className="icon-button operation-action-button"
@@ -3806,7 +3834,7 @@ export const ProjectPackageWorkbench = forwardRef<ProjectPackageWorkbenchHandle,
                                   </div>
                                 </button>
                                 {renderOperationTodoChips(operation, todosById)}
-                                {canManageProject ? (
+                                {canManageLinks ? (
                                   <div className="operation-entry-actions">
                                     <button
                                       className="icon-button operation-action-button"
@@ -4680,9 +4708,9 @@ function PackageEventCommentItem({
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(comment.content)
-  const canManage = comment.canEdit || (
+  const canManage = !disabled && (comment.canEdit || (
     currentUserId != null && comment.authorUserId === currentUserId
-  )
+  ))
   const edited = comment.updatedAt !== comment.createdAt
 
   useEffect(() => {
@@ -4731,7 +4759,7 @@ function PackageEventCommentItem({
           </div>
         ) : null}
       </div>
-      {editing ? (
+      {editing && canManage ? (
         <form
           className="package-event-comment-editor"
           onSubmit={async (formEvent) => {
@@ -4804,7 +4832,7 @@ function PackageEventCommentsDrawer({
         <div className="package-event-comments-body">
           {(event?.comments ?? []).length === 0 ? (
             <div className="package-event-comments-empty">
-              还没有反馈，写下这次交付的情况或 @ 相关成员吧。
+              {event?.capabilities?.canComment ? '还没有反馈，写下这次交付的情况或 @ 相关成员吧。' : '暂无交付反馈。'}
             </div>
           ) : (
             (event?.comments ?? []).map((comment) => (
@@ -4812,7 +4840,7 @@ function PackageEventCommentsDrawer({
                 comment={comment}
                 currentUserId={currentUserId}
                 departedUserIds={departedUserIds}
-                disabled={submitting}
+                disabled={submitting || !event?.capabilities?.canComment}
                 key={comment.id}
                 mentionMembers={mentionMembers}
                 onDelete={onDeleteComment}
@@ -4821,11 +4849,11 @@ function PackageEventCommentsDrawer({
             ))
           )}
         </div>
-        <form
+        {event?.capabilities?.canComment ? <form
           className="package-event-comments-composer"
           onSubmit={async (formEvent) => {
             formEvent.preventDefault()
-            if (!event || !draft.trim() || submitting) return
+            if (!event?.capabilities?.canComment || !draft.trim() || submitting) return
             setSubmitting(true)
             const saved = await onAddComment(event.id, draft)
             setSubmitting(false)
@@ -4846,7 +4874,7 @@ function PackageEventCommentsDrawer({
               {submitting ? '发送中...' : '发送反馈'}
             </Button>
           </div>
-        </form>
+        </form> : <p className="package-workbench-readonly">当前交付反馈为只读。</p>}
       </DialogContent>
     </Dialog>
   )

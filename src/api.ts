@@ -1,3 +1,4 @@
+import type { ProjectDeliveryMember } from '../shared/project-delivery'
 import type { WeeklyReportItemSources, WeeklyReportSourceResult } from '../shared/weekly-report-profile'
 import type {
   InboxItem,
@@ -2191,4 +2192,24 @@ export function fetchPackageMarketCiVersions(payload: {
   return request<{ versions: PackageMarketVersion[] }>(
     `/api/package-market/packages/${encodeURIComponent(payload.packageId)}/ci-versions?${params.toString()}`,
   )
+}
+
+export type ProjectDeliveryConfiguration = {
+  members: ProjectDeliveryMember[]
+  candidates: Array<{ id: number; name: string; username: string; projectMember: boolean }>
+}
+export function fetchProjectDeliveryConfiguration(organizationId: number, projectId: number) {
+  return request<ProjectDeliveryConfiguration>(`/api/organizations/${organizationId}/projects/${projectId}/delivery-members`)
+}
+export function saveProjectDeliveryConfiguration(organizationId: number, projectId: number, members: ProjectDeliveryMember[], expectedMembers: ProjectDeliveryMember[]) {
+  return request<ProjectDeliveryConfiguration>(`/api/organizations/${organizationId}/projects/${projectId}/delivery-members`, {
+    method: 'PUT', body: JSON.stringify({ members, expectedMembers }),
+  })
+}
+export function reassignProjectPackageEvent(projectId: number, eventId: number, payload: {
+  assigneeUserId: number; previousAssigneeUserId: number | null; reason: string
+}) {
+  return request<ProjectPackageTimeline>(`/api/projects/${projectId}/package-timeline/events/${eventId}/reassign`, {
+    method: 'POST', body: JSON.stringify(payload),
+  })
 }
