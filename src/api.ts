@@ -541,6 +541,7 @@ export function markAllNotificationsRead() {
 export function fetchMyWork(organizationId: OrganizationContext, filters: MyWorkFilters = {}) {
   const params = new URLSearchParams()
   params.set('organizationId', serializeOrganizationContext(organizationId))
+  if (filters.due) params.set('due', filters.due)
   if (filters.cursor) params.set('cursor', filters.cursor)
   if (filters.kind) params.set('kind', filters.kind)
   if (filters.projectId) params.set('projectId', String(filters.projectId))

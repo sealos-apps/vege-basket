@@ -1,4 +1,6 @@
 import { reassignProjectPackageEvent } from './api'
+import type { MyWorkViewState } from './my-work-types'
+import { ListPagination } from './components/list-pagination'
 import { addOrganizationProjectMember } from './api'
 import {
   Component,
@@ -1777,8 +1779,10 @@ function todoDetailWorkspace(todo: Todo): WorkspaceData {
 }
 
 function App() {
+  const [myWorkViewState, setMyWorkViewState] = useState<MyWorkViewState>()
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme)
   const [loggedIn, setLoggedIn] = useState(Boolean(getAuthToken()))
+  useEffect(() => { if (!loggedIn) setMyWorkViewState(undefined) }, [loggedIn])
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [platformStatus, setPlatformStatus] = useState<PlatformStatus>()
   const authUserId = authUser?.id
@@ -5902,7 +5906,10 @@ ${packageTimelineText}`
 
         {view === 'my_work' && (
           <MyWorkWorkbench
-            key={selectedOrganizationId ?? 'personal'}
+            key={`${authUserId}:${selectedOrganizationId}`}
+            scope={`${authUserId}:${selectedOrganizationId}`}
+            savedView={myWorkViewState}
+            onViewChange={setMyWorkViewState}
             organizationId={selectedOrganizationId}
             projects={scopedProjects}
             onTodoClick={selectMyWorkTodo}
@@ -12308,6 +12315,9 @@ function TodoList({
     ? null
     : todos.find((todo) => todo.id === initialTodoId) ?? null
   const [page, setPage] = useState(0)
+  const [listPageSize, setListPageSize] = useState(20)
+  const todoListRef = useRef<HTMLDivElement>(null)
+  const todoListScrollRef = useRef(0)
   const [todoSearchQuery, setTodoSearchQuery] = useState('')
   const [subprojectFilter, setSubprojectFilter] = useState('all')
 	  const [todoFilterDialogOpen, setTodoFilterDialogOpen] = useState(false)
@@ -12437,11 +12447,10 @@ function TodoList({
       )
     })
   }, [sortedTodos, todoFilterConditions, todoFilterJoin, todoFilterPersistenceEnabled, todoSearchQuery, subprojectFilter])
-  const totalPages = Math.max(1, Math.ceil(filteredTodos.length / itemsPerPage))
+  const pageSize = compact ? itemsPerPage : listPageSize
+  const totalPages = Math.max(1, Math.ceil(filteredTodos.length / pageSize))
   const safePage = Math.min(page, totalPages - 1)
-  const visibleTodos = compact
-    ? filteredTodos.slice(safePage * itemsPerPage, safePage * itemsPerPage + itemsPerPage)
-    : filteredTodos
+  const visibleTodos = filteredTodos.slice(safePage * pageSize, (safePage + 1) * pageSize)
   const activeFilterCount = todoFilterConditions.length
   const filterSummary = activeFilterCount > 0
     ? `已筛选 ${activeFilterCount} 条件`
@@ -12547,7 +12556,7 @@ function TodoList({
 
   useEffect(() => {
     setPage(0)
-  }, [todoFilterConditions, todoFilterJoin, todoSearchQuery])
+  }, [todoFilterConditions, todoFilterJoin, todoFilterPersistenceEnabled, todoSearchQuery, subprojectFilter, listPageSize])
 
   useEffect(() => {
     setPage((current) => Math.min(current, totalPages - 1))
@@ -12559,6 +12568,15 @@ function TodoList({
       onDetailModeChange?.(false)
     }
   }, [editingTodoId, onDetailModeChange])
+
+  useLayoutEffect(() => {
+    if (!editingTodoId && todoListRef.current) todoListRef.current.scrollTop = todoListScrollRef.current
+  }, [editingTodoId])
+
+  useLayoutEffect(() => {
+    todoListScrollRef.current = 0
+    if (todoListRef.current) todoListRef.current.scrollTop = 0
+  }, [safePage, pageSize, todoSearchQuery, todoFilterConditions, todoFilterJoin, subprojectFilter])
 
   function handleTodoCheckboxClick(todo: Todo) {
     if (canToggleTodoDone(todo)) {
@@ -12612,6 +12630,7 @@ function TodoList({
   }
 
   function openTodoEditDialog(todo: Todo) {
+    todoListScrollRef.current = todoListRef.current?.scrollTop ?? 0
     setEditingTodoId(todo.id)
     if (todo.detailsLoaded === false) {
       setLoadingTodoDetailId(todo.id)
@@ -12868,7 +12887,7 @@ function TodoList({
       ) : filteredTodos.length === 0 ? (
         <p className="empty-state">没有符合筛选条件的待办。</p>
       ) : (
-        <div className={compact ? 'todo-list compact' : 'todo-list'}>
+        <div className={compact ? 'todo-list compact' : 'todo-list paginated-todo-list'} ref={todoListRef}>
           {visibleTodos.map((todo) => {
             const project = projects.find((item) => item.id === todo.projectId)
             const rowCanManageTodo = canManageTodo(todo)
@@ -13020,15 +13039,7 @@ function TodoList({
           })}
         </div>
       )}
-      {compact && totalPages > 1 && (
-        <SidePager
-          label="待办翻页"
-          page={safePage}
-          totalPages={totalPages}
-          onPrevious={() => setPage((current) => Math.max(0, current - 1))}
-          onNext={() => setPage((current) => Math.min(totalPages - 1, current + 1))}
-        />
-      )}
+      <ListPagination label="待办分页" page={safePage} pageSize={pageSize} total={filteredTodos.length} onPageChange={setPage} onPageSizeChange={compact ? undefined : setListPageSize} />
     </div>
   )
 }

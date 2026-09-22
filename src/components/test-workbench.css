@@ -5554,3 +5554,8 @@
   .test-plan-execution-history header { align-items: flex-start; flex-direction: column; }
   .test-plan-execution-form footer { align-items: flex-start; flex-direction: column; }
 }
+
+.paginated-bug-list { overflow: hidden; }
+.paginated-bug-list .test-record-list { overscroll-behavior: contain; }
+.test-bugs-module-view { grid-template-rows: auto minmax(0, 1fr); }
+.test-bugs-module-view:has(> .test-bug-filter-summary) { grid-template-rows: auto auto minmax(0, 1fr); }

@@ -31,9 +31,15 @@ export type MyWorkData = {
   items: MyWorkItem[]
   summary: MyWorkSummary
   nextCursor?: string
+  filterOptions: { creators: string[]; statuses: string[] }
+  total: number
+  offset: number
 }
 
+export type MyWorkDueFilter = 'overdue' | 'today' | 'this_week' | 'later' | 'unscheduled'
+
 export type MyWorkFilters = {
+  due?: MyWorkDueFilter
   cursor?: string
   kind?: MyWorkKind
   projectId?: number
@@ -43,4 +49,13 @@ export type MyWorkFilters = {
   status?: string
   sort?: 'due_asc' | 'due_desc'
   limit?: number
+}
+
+// Kept by App only for the current login. No work content is written to storage.
+export type MyWorkViewState = {
+  scope: string
+  filters: MyWorkFilters
+  pageSize: number
+  page: number
+  scrollTop: number
 }

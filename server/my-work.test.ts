@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { parseMyWorkFilters, workBucket, workItemKey } from './my-work-policy.ts'
+import { paginateMyWork, parseMyWorkFilters, workBucket, workItemKey } from './my-work-policy.ts'
 
 const myWorkSource = readFileSync(new URL('./my-work.ts', import.meta.url), 'utf8')
 const myWorkWorkbenchSource = readFileSync(new URL('../src/components/my-work-workbench.tsx', import.meta.url), 'utf8')
@@ -12,6 +12,7 @@ const serverSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8'
 test('parses bounded my work filters', () => {
   assert.deepEqual(parseMyWorkFilters({ kind: 'bug', limit: '999', cursor: '-1' }), {
     kind: 'bug',
+    due: undefined,
     limit: 50,
     status: 'open',
     sort: 'due_desc',
@@ -104,4 +105,30 @@ test('scopes my work to the requested organization context', () => {
   assert.match(apiSource, /params\.set\('organizationId', serializeOrganizationContext\(organizationId\)\)/u)
   assert.match(serverSource, /app\.get\('\/api\/my-work'/u)
   assert.match(serverSource, /parseOrganizationContext\(request\.query\.organizationId\)/u)
+})
+
+test('filters dates across all records before paging and counts the complete match', () => {
+  const items = Array.from({ length: 625 }, (_, index) => ({
+    id: `todo:${index}`, kind: 'todo' as const, sourceId: index, title: 'Work',
+    status: 'assigned', updatedAt: '', relation: 'assignee' as const,
+    dueAt: index < 600 ? '2026-09-23' : '2026-09-22',
+  }))
+  const first = paginateMyWork(items, { due: 'today', limit: 20 }, '2026-09-22', '2026-09-27')
+  assert.equal(first.total, 25)
+  assert.equal(first.items[0].sourceId, 600)
+  assert.equal(first.nextCursor, '20')
+  const second = paginateMyWork(items, { due: 'today', limit: 20, cursor: '20' }, '2026-09-22', '2026-09-27')
+  assert.equal(second.items.length, 5)
+  assert.equal(second.nextCursor, undefined)
+  const shrunk = paginateMyWork(items.slice(0, 610), { due: 'today', limit: 20, cursor: '20' }, '2026-09-22', '2026-09-27')
+  assert.equal(shrunk.offset, 0)
+  assert.equal(shrunk.items.length, 10)
+  const empty = paginateMyWork([], { limit: 20, cursor: '40' }, '2026-09-22', '2026-09-27')
+  assert.equal(empty.offset, 0)
+  assert.equal(empty.total, 0)
+})
+
+test('validates date filters before paging', () => {
+  assert.equal(parseMyWorkFilters({ due: 'today' }).due, 'today')
+  assert.equal(parseMyWorkFilters({ due: 'invalid' }).due, undefined)
 })

@@ -1,3 +1,5 @@
+import { ListPagination } from './list-pagination'
+import { usePagedSelection } from '../hooks/use-paged-selection'
 import { ConfirmActionDialog } from './confirm-action-dialog'
 import { useConfirmAction } from '../hooks/use-confirm-action'
 import { reconcileAction } from '../confirmed-action'
@@ -1110,7 +1112,6 @@ export function TestWorkbench({
     if (!activeContentLoaded) return
     if (!cases.some((item) => item.id === selectedCaseId)) setSelectedCaseId(cases[0]?.id)
     if (!plans.some((item) => item.id === selectedPlanId)) setSelectedPlanId(plans[0]?.id)
-    if (!filteredBugs.some((item) => item.id === selectedBugId)) setSelectedBugId(filteredBugs[0]?.id)
   }, [activeContentLoaded, bugs, cases, filteredBugs, plans, selectedBugId, selectedCaseId, selectedPlanId])
 
   useEffect(() => {
@@ -1584,6 +1585,7 @@ export function TestWorkbench({
               <WorkspaceError message={error} />
               <BugsView
                 bugs={filteredBugs}
+                paginationScope={JSON.stringify([spaceId, bugSearchQuery, bugFilterJoin, bugFilterConditions])}
                 bugDetailLoading={bugDetailLoading}
                 busy={busy}
                 data={data}
@@ -2686,7 +2688,8 @@ function PlanCaseDetailDialog({ children, onClose, planCase }: {
   )
 }
 
-function BugsView({ bugs, bugDetailLoading, busy, data, draftOwnerUserId, filterConditions, onAssignee, onComment, onCreate, onDelete, onDeleteComment, onEdit, onFilterClear, onFilterOpenChange, onLoadTransferCases, onSelect, onStatus, onTransferSpace, onUpdateComment, readOnly, searchQuery, onSearchQueryChange, selectedId }: {
+function BugsView({ paginationScope, bugs, bugDetailLoading, busy, data, draftOwnerUserId, filterConditions, onAssignee, onComment, onCreate, onDelete, onDeleteComment, onEdit, onFilterClear, onFilterOpenChange, onLoadTransferCases, onSelect, onStatus, onTransferSpace, onUpdateComment, readOnly, searchQuery, onSearchQueryChange, selectedId }: {
+  paginationScope: string
   bugs: TestBug[]
   bugDetailLoading: boolean
   busy: boolean
@@ -2712,6 +2715,8 @@ function BugsView({ bugs, bugDetailLoading, busy, data, draftOwnerUserId, filter
   selectedId?: number
 }) {
   const selected = bugs.find((item) => item.id === selectedId)
+  const bugListRef = useRef<HTMLDivElement>(null)
+  const pagination = usePagedSelection(bugs, selectedId, paginationScope, onSelect, bugListRef)
   return (
     <div className="test-module-view test-bugs-module-view">
       <div className="test-module-toolbar">
@@ -2748,8 +2753,11 @@ function BugsView({ bugs, bugDetailLoading, busy, data, draftOwnerUserId, filter
         </div>
       ) : null}
       <div className="test-split-view">
-          <div className="test-record-list">
-            {bugs.length ? bugs.map((bug) => <button key={bug.id} className={bug.id === selectedId ? 'active' : ''} onClick={() => onSelect(bug.id)}><div><code>BUG-{bug.id}</code><Badge className={`test-bug-status ${bug.status}`} variant="outline">{bugStatusLabel[bug.status]}</Badge></div><strong>{bug.title}</strong><small>{formatTimestamp(bug.updatedAt)} · <UserName departedUserIds={data.departedUserIds} name={bug.assigneeName || '未分配'} userId={bug.assigneeUserId} />{bug.assigneeTransferSource === 'offboarding' ? '（离职转移）' : null}</small></button>) : <div className="test-list-empty">{filterConditions.length > 0 || searchQuery.trim() ? <><FunnelSimple size={24} /><span>没有符合当前条件的 Bug。</span>{filterConditions.length > 0 ? <Button type="button" variant="outline" onClick={onFilterClear}>清除筛选</Button> : null}{searchQuery.trim() ? <Button type="button" variant="outline" onClick={() => onSearchQueryChange('')}>清除搜索</Button> : null}</> : '当前测试空间还没有 Bug。'}</div>}
+          <div className="test-record-list-panel paginated-bug-list">
+          <div className="test-record-list" ref={bugListRef} key={`${paginationScope}:${pagination.page}:${pagination.pageSize}`}>
+            {bugs.length ? pagination.items.map((bug) => <button key={bug.id} className={bug.id === selectedId ? 'active' : ''} onClick={() => onSelect(bug.id)}><div><code>BUG-{bug.id}</code><Badge className={`test-bug-status ${bug.status}`} variant="outline">{bugStatusLabel[bug.status]}</Badge></div><strong>{bug.title}</strong><small>{formatTimestamp(bug.updatedAt)} · <UserName departedUserIds={data.departedUserIds} name={bug.assigneeName || '未分配'} userId={bug.assigneeUserId} />{bug.assigneeTransferSource === 'offboarding' ? '（离职转移）' : null}</small></button>) : <div className="test-list-empty">{filterConditions.length > 0 || searchQuery.trim() ? <><FunnelSimple size={24} /><span>没有符合当前条件的 Bug。</span>{filterConditions.length > 0 ? <Button type="button" variant="outline" onClick={onFilterClear}>清除筛选</Button> : null}{searchQuery.trim() ? <Button type="button" variant="outline" onClick={() => onSearchQueryChange('')}>清除搜索</Button> : null}</> : '当前测试空间还没有 Bug。'}</div>}
+        </div>
+          <ListPagination label="Bug 列表分页" {...pagination} total={bugs.length} />
         </div>
         <div className="test-record-detail">
           {selected && selected.detailsLoaded
@@ -5951,11 +5959,6 @@ export function AssignedTestBugs({
               ? remembered
               : result.bugs[0]?.testSpaceId
           })
-          setSelectedId((current) => (
-            current && result.bugs.some((bug) => bug.id === current)
-              ? current
-              : result.bugs[0]?.id
-          ))
         })
         .catch(() => undefined)
         .then(() => {
@@ -5990,6 +5993,9 @@ export function AssignedTestBugs({
       ].filter(Boolean).some((value) => String(value).toLocaleLowerCase('zh-CN').includes(normalizedSearchQuery))
     )
   )), [filterConditions, filterJoin, normalizedSearchQuery, spaceBugs])
+  const paginationScope = JSON.stringify([organizationId, selectedSpaceId, searchQuery, filterJoin, filterConditions])
+  const bugListRef = useRef<HTMLDivElement>(null)
+  const pagination = usePagedSelection(filteredBugs, selectedId, paginationScope, setSelectedId, bugListRef)
   const selected = useMemo(
     () => filteredBugs.find((bug) => bug.id === selectedId),
     [filteredBugs, selectedId],
@@ -6013,14 +6019,6 @@ export function AssignedTestBugs({
   }), [spaceBugs])
 
   useEffect(() => {
-    setSelectedId((current) => (
-      current && filteredBugs.some((bug) => bug.id === current)
-        ? current
-        : filteredBugs[0]?.id
-    ))
-  }, [filteredBugs])
-
-  useEffect(() => {
     if (selected) onBugSeen?.(selected)
   }, [onBugSeen, selected])
 
@@ -6039,11 +6037,6 @@ export function AssignedTestBugs({
       const result = confirmed ? await reconcileAction(operation, () => fetchAssignedTestBugs(organizationId), matches) : await operation()
       if (actionScopeRef.current !== actionScope) return false
       setBugs(result.bugs)
-      setSelectedId((current) => (
-        current && result.bugs.some((bug) => bug.id === current)
-          ? current
-          : result.bugs[0]?.id
-      ))
       onBugsChangeRef.current?.(result.bugs)
       return true
     } catch (mutationError) {
@@ -6120,14 +6113,17 @@ export function AssignedTestBugs({
         </div>
       ) : (
         <div className="test-split-view">
-                <div className="test-record-list">
-            {filteredBugs.map((bug) => (
+          <div className="test-record-list-panel paginated-bug-list">
+          <div className="test-record-list" ref={bugListRef} key={`${paginationScope}:${pagination.page}:${pagination.pageSize}`}>
+            {pagination.items.map((bug) => (
               <button key={bug.id} className={bug.id === selectedId ? 'active' : ''} onClick={() => setSelectedId(bug.id)}>
                 <div><code>BUG-{bug.id}</code><Badge className={`test-bug-status ${bug.status}`} variant="outline">{bugStatusLabel[bug.status]}</Badge></div>
                 <strong>{bug.title}</strong>
                 <small>{bug.testSpaceName || '未知测试空间'} · 版本号 {bug.testSpaceVersionLabel || '未指定'} · {formatTimestamp(bug.updatedAt)} · {bug.assigneeName || '未分配'}{bug.assigneeTransferSource === 'offboarding' ? '（离职转移）' : null}</small>
               </button>
             ))}
+          </div>
+            <ListPagination label="我的 Bug 分页" {...pagination} total={filteredBugs.length} />
           </div>
           <div className="test-record-detail">
             {selected ? (
