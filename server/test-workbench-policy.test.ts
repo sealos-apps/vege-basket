@@ -143,7 +143,7 @@ test('Bug workbenches include their test case and space version label', () => {
   assert.match(testWorkbenchSource, /testSpaceVersionLabel: row\.test_space_version_label\s*\? decryptText\(row\.test_space_version_label\)\s*:\s*undefined/u)
   assert.match(testWorkbenchClientSource, /selected\.testCaseTitle/u)
   assert.match(testWorkbenchClientSource, /selected\.testSpaceVersionLabel \|\| '未指定'/u)
-  assert.match(testWorkbenchClientSource, /<small>\{bug\.testSpaceName \|\| '未知测试空间'\} · 版本号 \{bug\.testSpaceVersionLabel \|\| '未指定'\}/u)
+  assert.match(testWorkbenchClientSource, /<BugListItem[^>]*>\s*\{bug\.testSpaceName \|\| '未知测试空间'\} · 版本号 \{bug\.testSpaceVersionLabel \|\| '未指定'\}/u)
   assert.match(testWorkbenchClientSource, /label: `\$\{bug\.testSpaceName\}\$\{bug\.testSpaceVersionLabel \? ` · \$\{bug\.testSpaceVersionLabel\}` : ''\}`/u)
 })
 

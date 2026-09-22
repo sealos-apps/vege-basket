@@ -895,11 +895,6 @@
   align-items: center;
 }
 
-.test-record-list > button > .test-bug-list-meta {
-  flex-wrap: wrap;
-  justify-content: flex-start;
-}
-
 .test-record-list code,
 .test-detail-heading code,
 .test-execution-copy code,
@@ -4509,70 +4504,161 @@
   width: 140px;
 }
 
+.test-record-list > button.test-bug-list-item {
+  --bug-list-muted: #667b73;
+  --bug-list-strong: #29463b;
+  min-height: 112px;
+  padding: 14px 16px;
+  gap: 8px;
+  align-content: start;
+}
+
+.dark .test-record-list > button.test-bug-list-item {
+  --bug-list-muted: #9caaa4;
+  --bug-list-strong: #d9e6df;
+}
+
+.test-record-list > button.test-bug-list-item:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.test-record-list > button.test-bug-list-item > .test-bug-list-meta {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.test-bug-list-item code {
+  color: var(--bug-list-muted);
+  letter-spacing: 0.02em;
+}
+
+.test-record-list > button.test-bug-list-item > strong {
+  font-size: 13px;
+  line-height: 1.55;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.test-record-list > button.test-bug-list-item > .test-bug-list-footer {
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.test-bug-list-footer small {
+  flex: 1 1 180px;
+  min-width: 0;
+  color: var(--bug-list-muted);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.test-bug-discovery-difficulty {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--bug-list-muted);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.test-bug-discovery-difficulty strong {
+  display: inline;
+  color: var(--bug-list-strong);
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: 600;
+}
+
 .test-bug-status.new,
 .test-bug-status.pending_confirmation {
-  border-color: color-mix(in oklch, #4d7bab 45%, var(--line));
-  background: color-mix(in oklch, #4d7bab 14%, var(--surface));
-  color: #2e5e89;
+  background: #edf3fa;
+  color: #486b91;
 }
 
 .test-bug-status.assigned {
-  border-color: color-mix(in oklch, #a97827 48%, var(--line));
-  background: color-mix(in oklch, #d59a36 17%, var(--surface));
-  color: #765019;
+  background: #fbf3e5;
+  color: #956b25;
 }
 
 .test-bug-status.in_progress {
-  border-color: color-mix(in oklch, #2d806d 45%, var(--line));
-  background: color-mix(in oklch, #2d806d 14%, var(--surface));
-  color: #216554;
+  background: #eaf5ef;
+  color: #297557;
 }
 
 .test-bug-status.pending_verification {
-  border-color: color-mix(in oklch, #5c72aa 45%, var(--line));
-  background: color-mix(in oklch, #5c72aa 14%, var(--surface));
-  color: #435c91;
+  background: #eef0f9;
+  color: #5d6491;
 }
 
 .test-bug-status.rejected {
-  border-color: color-mix(in oklch, #a35f38 44%, var(--line));
-  background: color-mix(in oklch, #c47a4e 16%, var(--surface));
-  color: #864a2e;
+  background: #f9eeeb;
+  color: #9a6350;
 }
 
 .test-bug-status.closed {
-  border-color: color-mix(in oklch, #707a76 38%, var(--line));
-  background: color-mix(in oklch, #707a76 13%, var(--surface));
-  color: var(--muted-text);
+  background: #f0f2f1;
+  color: #6e7b75;
 }
 
 .dark .test-bug-status.new,
 .dark .test-bug-status.pending_confirmation {
+  background: #243447;
   color: #b9d7f3;
 }
 
 .dark .test-bug-status.assigned {
+  background: #3c3424;
   color: #f2d39a;
 }
 
 .dark .test-bug-status.in_progress {
+  background: #223c32;
   color: #b2dfd2;
 }
 
 .dark .test-bug-status.pending_verification {
+  background: #2e3246;
   color: #c1cef1;
 }
 
 .dark .test-bug-status.rejected {
+  background: #422e27;
   color: #f0c2a6;
 }
 
+.dark .test-bug-status.closed {
+  background: #2d3531;
+  color: #a6b2ac;
+}
+
 .test-bug-status {
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
-  padding: 0 0.42rem;
+  gap: 6px;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 18px;
+  font-weight: 500;
   white-space: nowrap;
+}
+
+.test-bug-status::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .assigned-bugs-shell {
