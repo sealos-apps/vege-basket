@@ -15,6 +15,7 @@ export type BugFilterField =
   | 'createdAt'
   | 'status'
   | 'severity'
+  | 'discoveryDifficulty'
   | 'priority'
   | 'environment'
 export type BugFilterOperator =
@@ -49,6 +50,7 @@ export const bugFilterFieldLabels: Record<BugFilterField, string> = {
   createdAt: '创建时间',
   status: 'Bug 状态',
   severity: '严重程度',
+  discoveryDifficulty: '发现难度',
   priority: '优先级',
   environment: '运行环境',
 }
@@ -76,6 +78,7 @@ export const bugFilterFields: BugFilterField[] = [
   'createdAt',
   'status',
   'severity',
+  'discoveryDifficulty',
   'priority',
   'environment',
 ]
@@ -94,6 +97,7 @@ export const bugFilterOperatorsByField: Record<BugFilterField, BugFilterOperator
   createdAt: ['equals', 'not_equals', 'before', 'after', 'between'],
   status: ['equals', 'not_equals'],
   severity: ['equals', 'not_equals'],
+  discoveryDifficulty: ['equals', 'not_equals'],
   priority: ['equals', 'not_equals'],
   environment: ['contains', 'not_contains', 'equals', 'not_equals', 'is_empty', 'is_not_empty'],
 }
@@ -114,6 +118,7 @@ export function getDefaultBugFilterValue(
   if (field === 'createdAt') return getBugFilterTodayStamp()
   if (field === 'status') return 'new'
   if (field === 'severity') return 'major'
+  if (field === 'discoveryDifficulty') return 'medium'
   if (field === 'priority') return 'medium'
   if (field === 'caseScope') return 'all'
   if (field === 'caseLink') return 'unlinked'
@@ -182,6 +187,7 @@ function getFieldValue(bug: TestBug, field: BugFilterField) {
   if (field === 'createdAt') return bug.createdAt.slice(0, 10)
   if (field === 'status') return bug.status
   if (field === 'severity') return bug.severity
+  if (field === 'discoveryDifficulty') return bug.discoveryDifficulty
   if (field === 'priority') return bug.priority
   return bug.environment
 }

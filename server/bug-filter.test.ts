@@ -16,6 +16,8 @@ const filterDialogSource = readFileSync(new URL('../src/components/bug-filter-bu
 const testWorkbenchSource = readFileSync(new URL('../src/components/test-workbench.tsx', import.meta.url), 'utf8')
 
 const baseBug: TestBug = {
+  discoveryDifficulty: 'medium',
+  discoveryDifficultyReason: '',
   actualResult: '页面返回 500',
   assigneeName: '开发甲',
   assigneeUserId: 11,
@@ -55,6 +57,24 @@ function condition(
 ): BugFilterCondition {
   return { field, id: `${field}-${operator}`, operator, value }
 }
+
+test('discovery difficulty filters match all three levels independently of severity and priority', () => {
+  assert.ok(bugFilterFields.includes('discoveryDifficulty'))
+  assert.equal(bugFilterFieldLabels.discoveryDifficulty, '发现难度')
+  for (const difficulty of ['high', 'medium', 'low'] as const) {
+    const bug = { ...baseBug, discoveryDifficulty: difficulty }
+    for (const value of ['high', 'medium', 'low']) {
+      assert.equal(matchesBugFilterConditions(bug, [condition('discoveryDifficulty', 'equals', value)], 'and'), value === difficulty)
+      assert.equal(matchesBugFilterConditions(bug, [condition('discoveryDifficulty', 'not_equals', value)], 'and'), value !== difficulty)
+    }
+  }
+  assert.equal(matchesBugFilterConditions(baseBug, [
+    condition('discoveryDifficulty', 'equals', 'medium'), condition('priority', 'equals', 'high'),
+  ], 'and'), true)
+  assert.equal(matchesBugFilterConditions(baseBug, [
+    condition('discoveryDifficulty', 'equals', 'low'), condition('status', 'equals', 'assigned'),
+  ], 'or'), true)
+})
 
 test('linked directory and case filters are one atomic group under OR', () => {
   const scope: BugFilterCondition = { id: 'scope', field: 'caseScope', operator: 'equals', folderId: '50', value: '41' }

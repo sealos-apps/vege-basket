@@ -1,3 +1,4 @@
+import { bugDiscoveryDifficulties, bugDiscoveryDifficultyLabels, bugDiscoveryDifficultyDescriptions, bugDiscoveryDifficultyReasonMaxLength, parseBugDiscoveryAssessment, type BugDiscoveryAssessment, type BugDiscoveryDifficulty } from '../../shared/bug-discovery-difficulty'
 import { ConfirmActionDialog } from './confirm-action-dialog'
 import { useConfirmAction } from '../hooks/use-confirm-action'
 import { reconcileAction } from '../confirmed-action'
@@ -79,7 +80,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { MentionTextarea, type MentionMember } from './mention-textarea'
@@ -2749,7 +2750,7 @@ function BugsView({ bugs, bugDetailLoading, busy, data, draftOwnerUserId, filter
       ) : null}
       <div className="test-split-view">
           <div className="test-record-list">
-            {bugs.length ? bugs.map((bug) => <button key={bug.id} className={bug.id === selectedId ? 'active' : ''} onClick={() => onSelect(bug.id)}><div><code>BUG-{bug.id}</code><Badge className={`test-bug-status ${bug.status}`} variant="outline">{bugStatusLabel[bug.status]}</Badge></div><strong>{bug.title}</strong><small>{formatTimestamp(bug.updatedAt)} · <UserName departedUserIds={data.departedUserIds} name={bug.assigneeName || '未分配'} userId={bug.assigneeUserId} />{bug.assigneeTransferSource === 'offboarding' ? '（离职转移）' : null}</small></button>) : <div className="test-list-empty">{filterConditions.length > 0 || searchQuery.trim() ? <><FunnelSimple size={24} /><span>没有符合当前条件的 Bug。</span>{filterConditions.length > 0 ? <Button type="button" variant="outline" onClick={onFilterClear}>清除筛选</Button> : null}{searchQuery.trim() ? <Button type="button" variant="outline" onClick={() => onSearchQueryChange('')}>清除搜索</Button> : null}</> : '当前测试空间还没有 Bug。'}</div>}
+            {bugs.length ? bugs.map((bug) => <button key={bug.id} className={bug.id === selectedId ? 'active' : ''} onClick={() => onSelect(bug.id)}><div className="test-bug-list-meta"><code>BUG-{bug.id}</code><Badge className={`test-bug-status ${bug.status}`} variant="outline">{bugStatusLabel[bug.status]}</Badge><Badge variant="secondary">发现难度 · {bugDiscoveryDifficultyLabels[bug.discoveryDifficulty]}</Badge></div><strong>{bug.title}</strong><small>{formatTimestamp(bug.updatedAt)} · <UserName departedUserIds={data.departedUserIds} name={bug.assigneeName || '未分配'} userId={bug.assigneeUserId} />{bug.assigneeTransferSource === 'offboarding' ? '（离职转移）' : null}</small></button>) : <div className="test-list-empty">{filterConditions.length > 0 || searchQuery.trim() ? <><FunnelSimple size={24} /><span>没有符合当前条件的 Bug。</span>{filterConditions.length > 0 ? <Button type="button" variant="outline" onClick={onFilterClear}>清除筛选</Button> : null}{searchQuery.trim() ? <Button type="button" variant="outline" onClick={() => onSearchQueryChange('')}>清除搜索</Button> : null}</> : '当前测试空间还没有 Bug。'}</div>}
         </div>
         <div className="test-record-detail">
           {selected && selected.detailsLoaded
@@ -2823,6 +2824,7 @@ function BugDetail({ bug, busy, cases, departedUserIds, draftOwnerUserId, onAssi
         <span>空间版本 <span className="test-detail-meta-label"><strong>{bug.testSpaceVersionLabel || '未指定'}</strong>{bug.canTransferSpace ? <Button aria-label="迁移到其他测试空间" className="test-detail-meta-copy" disabled={busy} onClick={() => setTransferSpaceOpen(true)} size="icon-xs" title="迁移到其他测试空间" variant="ghost"><PencilSimple /></Button> : null}</span></span>
       <span>严重程度 <strong>{severityLabel[bug.severity]}</strong></span>
       <span>优先级 <strong>{priorityLabel[bug.priority]}</strong></span>
+      <span>发现难度 <strong>{bugDiscoveryDifficultyLabels[bug.discoveryDifficulty]}</strong></span>
       <span>
         <span className="test-detail-meta-label">
           环境{bug.testEnvironmentName ? ` · ${bug.testEnvironmentName}` : ''}
@@ -2832,6 +2834,7 @@ function BugDetail({ bug, busy, cases, departedUserIds, draftOwnerUserId, onAssi
       </span>
       <span>更新时间 <strong>{formatTimestamp(bug.updatedAt)}</strong></span>
     </div>
+    <BugDiscoveryReason reason={bug.discoveryDifficultyReason} />
     <DetailBlock title="复现步骤" content={bug.reproductionSteps} /><DetailBlock title="预期结果" content={bug.expectedResult} /><DetailBlock title="实际结果" content={bug.actualResult} />
     <BugVerificationSubmissions bugId={bug.id} submissions={bug.verificationSubmissions} />
     <BugCommentsSection
@@ -4943,7 +4946,12 @@ function PlanDialog({ busy, cases, folders, onOpenChange, onSubmit, open, plan, 
   </Dialog>
 }
 
-type BugDialogPayload = {
+function BugDiscoveryReason({ reason }: { reason: string }) {
+  if (!reason) return null
+  return <section className="test-detail-block"><h3>发现难度评定依据</h3><p className="whitespace-pre-wrap break-words">{reason}</p></section>
+}
+
+type BugDialogPayload = BugDiscoveryAssessment & {
   actualResult: string
   assigneeUserId?: number
   environment: string
@@ -4967,6 +4975,9 @@ function BugDialog(props: { busy: boolean; editing: boolean; environments: TestE
 function BugDialogForm({ busy, editing, environments, modules, onOpenChange, onSubmit, open, seed, subjects, cases, folders, users }: Parameters<typeof BugDialog>[0]) {
   const [title, setTitle] = useState(seed.title ?? '')
   const [severity, setSeverity] = useState<BugSeverity>(seed.severity ?? 'major')
+  const [discoveryDifficulty, setDiscoveryDifficulty] = useState<BugDiscoveryDifficulty | ''>(editing ? seed.discoveryDifficulty ?? '' : '')
+  const [discoveryDifficultyReason, setDiscoveryDifficultyReason] = useState(editing ? seed.discoveryDifficultyReason ?? '' : '')
+  const discovery = parseBugDiscoveryAssessment({ discoveryDifficulty, discoveryDifficultyReason })
   const [priority, setPriority] = useState<Priority>(seed.priority ?? 'medium')
   const [environment, setEnvironment] = useState(seed.environment ?? '')
   const [testEnvironmentId, setTestEnvironmentId] = useState(() => (
@@ -5010,7 +5021,9 @@ function BugDialogForm({ busy, editing, environments, modules, onOpenChange, onS
           className="test-dialog-form"
           onSubmit={(event) => {
             event.preventDefault()
+            if (busy || evidenceUploading || !title.trim() || !discovery.valid) return
             onSubmit({
+              ...discovery.value,
               actualResult,
               assigneeUserId: assigneeUserId === 'none' ? undefined : Number(assigneeUserId),
               environment,
@@ -5044,6 +5057,15 @@ function BugDialogForm({ busy, editing, environments, modules, onOpenChange, onS
               <Select value={priority} onValueChange={(value) => setPriority(value as Priority)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent><SelectItem value="high">高</SelectItem><SelectItem value="medium">中</SelectItem><SelectItem value="low">低</SelectItem></SelectContent>
+              </Select>
+            </Label>
+            <Label htmlFor="bug-discovery-difficulty">
+              发现难度（必填）
+              <Select required value={discoveryDifficulty} disabled={busy} onValueChange={(value) => setDiscoveryDifficulty(value as BugDiscoveryDifficulty)}>
+                <SelectTrigger id="bug-discovery-difficulty" aria-describedby="bug-discovery-difficulty-help"><SelectValue placeholder="请选择发现难度" /></SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>{bugDiscoveryDifficulties.map((value) => <SelectItem key={value} value={value}>{bugDiscoveryDifficultyLabels[value]}</SelectItem>)}</SelectGroup>
+                </SelectContent>
               </Select>
             </Label>
             <Label>
@@ -5110,6 +5132,25 @@ function BugDialogForm({ busy, editing, environments, modules, onOpenChange, onS
               ) : <Input aria-label="手工填写测试环境" placeholder="例如：https://staging.example.com" value={environment} onChange={(event) => setEnvironment(event.target.value)} />}
             </Label>
           </div>
+          <p id="bug-discovery-difficulty-help" className="text-sm text-muted-foreground">
+            {discoveryDifficulty ? bugDiscoveryDifficultyDescriptions[discoveryDifficulty] : '评估触发并识别该缺陷的难度，结合必要测试条件和观察手段判断。'}
+          </p>
+          <Label htmlFor="bug-discovery-difficulty-reason">
+            发现难度评定依据{discoveryDifficulty === 'high' ? '（必填）' : '（选填）'}
+            <Textarea
+              id="bug-discovery-difficulty-reason"
+              aria-describedby="bug-discovery-difficulty-reason-help"
+              disabled={busy}
+              maxLength={bugDiscoveryDifficultyReasonMaxLength}
+              required={discoveryDifficulty === 'high'}
+              placeholder="说明必要触发条件或观察手段，可引用复现步骤。"
+              value={discoveryDifficultyReason}
+              onChange={(event) => setDiscoveryDifficultyReason(event.target.value)}
+            />
+          </Label>
+          <p id="bug-discovery-difficulty-reason-help" className="text-sm text-muted-foreground">
+            高难度必须说明评定依据，最多 {bugDiscoveryDifficultyReasonMaxLength} 字。
+          </p>
           <BugEvidenceEditor
             label="复现步骤"
             onChange={setReproductionSteps}
@@ -5133,7 +5174,7 @@ function BugDialogForm({ busy, editing, environments, modules, onOpenChange, onS
           />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-            <Button disabled={busy || evidenceUploading || !title.trim()}>
+            <Button disabled={busy || evidenceUploading || !title.trim() || !discovery.valid}>
               {evidenceUploading ? '附件上传中...' : editing ? '保存修改' : '创建 Bug'}
             </Button>
           </DialogFooter>
@@ -6123,7 +6164,7 @@ export function AssignedTestBugs({
                 <div className="test-record-list">
             {filteredBugs.map((bug) => (
               <button key={bug.id} className={bug.id === selectedId ? 'active' : ''} onClick={() => setSelectedId(bug.id)}>
-                <div><code>BUG-{bug.id}</code><Badge className={`test-bug-status ${bug.status}`} variant="outline">{bugStatusLabel[bug.status]}</Badge></div>
+                <div className="test-bug-list-meta"><code>BUG-{bug.id}</code><Badge className={`test-bug-status ${bug.status}`} variant="outline">{bugStatusLabel[bug.status]}</Badge><Badge variant="secondary">发现难度 · {bugDiscoveryDifficultyLabels[bug.discoveryDifficulty]}</Badge></div>
                 <strong>{bug.title}</strong>
                 <small>{bug.testSpaceName || '未知测试空间'} · 版本号 {bug.testSpaceVersionLabel || '未指定'} · {formatTimestamp(bug.updatedAt)} · {bug.assigneeName || '未分配'}{bug.assigneeTransferSource === 'offboarding' ? '（离职转移）' : null}</small>
               </button>
@@ -6185,7 +6226,9 @@ export function AssignedTestBugs({
                   <span>测试空间 <strong>{selected.testSpaceName || '未记录'}</strong></span>
                   <span>版本号 <strong>{selected.testSpaceVersionLabel || '未指定'}</strong></span>
                   <span>严重程度 <strong>{severityLabel[selected.severity]}</strong></span>
+                  <span>发现难度 <strong>{bugDiscoveryDifficultyLabels[selected.discoveryDifficulty]}</strong></span>
                 </div>
+                <BugDiscoveryReason reason={selected.discoveryDifficultyReason} />
                 <DetailBlock title="复现步骤" content={selected.reproductionSteps} />
                 <DetailBlock title="预期结果" content={selected.expectedResult} />
                 <DetailBlock title="实际结果" content={selected.actualResult} />

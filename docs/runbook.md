@@ -170,6 +170,20 @@ backup and its encryption key ring; do not commit either. A failed command requi
 fresh inspection because a lost connection during commit can leave an uncertain result.
 This is an explicit operator action, never an automatic startup migration.
 
+### Bug Discovery Difficulty Migration
+
+`server/migrations/20260922_bug_discovery_difficulty.sql` and the corresponding startup
+schema (baseline `20260922_schema_v10`) add `test_bugs.discovery_difficulty` (`high`, `medium`, `low`, non-null, default
+`medium`) and `discovery_difficulty_reason`. Existing rows receive `medium` and an empty
+reason; rerunning the migration does not reset later assessments. The API requires an
+explicit level on creation despite the database compatibility default. Non-empty reasons
+are encrypted, and `npm run db:encrypt-existing` can encrypt legacy plaintext idempotently.
+
+Apply only with explicit database-write authorization, a pre-release snapshot and the complete
+key ring. App rollback can leave both additive columns in place; older code ignores them and
+its inserts receive `medium`. Retain these columns and encryption keys to preserve assessments
+for a subsequent upgrade. Do not drop the columns as part of an application rollback.
+
 ### Bug Case Association and Module Migration
 
 `server/migrations/20260914_test_workbench_modules_optional_bugs.sql` adds organization module

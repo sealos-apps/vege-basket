@@ -895,6 +895,11 @@
   align-items: center;
 }
 
+.test-record-list > button > .test-bug-list-meta {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
 .test-record-list code,
 .test-detail-heading code,
 .test-execution-copy code,

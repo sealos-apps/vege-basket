@@ -67,6 +67,7 @@ export function newPrototypeBug(data: TestWorkbenchData, payload: Partial<TestBu
   return {
     id, testSpaceId: spaceId, title: '', actualResult: '', expectedResult: '', reproductionSteps: '', environment: '',
     severity: 'major', priority: 'medium', status: 'new', comments: [], events: [],
+    discoveryDifficulty: 'medium', discoveryDifficultyReason: '',
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), canManage: true, canDelete: true, canEdit: true, canComment: true,
     reporterUserId: prototypeUserId, reporterName: '林晓', detailsLoaded: true, ...payload,
     testCaseTitle: source?.title, testSubjectId: source?.testSubjectId, moduleId: source?.moduleId,

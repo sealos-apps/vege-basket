@@ -2092,6 +2092,12 @@ create table if not exists test_bugs (
     references test_plan_cases(id, test_plan_id) on delete set null
 );
 
+-- Historical Bugs start at medium; new HTTP requests must select a level explicitly.
+alter table test_bugs
+  add column if not exists discovery_difficulty text not null default 'medium'
+    constraint test_bugs_discovery_difficulty_check check (discovery_difficulty in ('high', 'medium', 'low')),
+  add column if not exists discovery_difficulty_reason text not null default '';
+
 alter table test_bugs
   add column if not exists organization_module_id bigint
     references organization_project_modules(id) on delete set null;

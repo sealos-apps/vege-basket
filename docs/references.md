@@ -436,6 +436,18 @@ create/delete routes reject organization projects with 409 `PROJECT_MODULES_MANA
   for linked cases without a folder and `unlinked` for legacy Bugs without a case.
   Returning a Bug to `pending_confirmation` replaces the former `reopened` status, and marking a
   duplicate Bug closes it instead of using a separate `duplicate` status.
+- Bug discovery difficulty (`discoveryDifficulty`): `high`, `medium`, `low`, independent of
+  severity and priority. Creating a Bug requires an explicit value; the form starts with an
+  unselected placeholder, which is not a stored fourth level. Existing Bugs are initialized
+  to `medium` once by the column migration, not treated as individually assessed.
+  `discoveryDifficultyReason` is optional for low/medium and required for high, trimmed and
+  limited to 1,000 characters. It describes necessary trigger conditions or observation methods.
+  Non-empty reasons are encrypted at rest; `db:encrypt-existing` covers legacy plaintext.
+  Only the reporting creator with existing tester/editor access may edit these detail fields.
+  PATCH omission preserves the locked current value; explicit null/invalid values are rejected.
+  Both workbenches expose the level in lists/details and equality/inequality filters; reasons
+  are returned with Bug details, not lightweight tester list rows. See
+  [the discovery difficulty rubric](bug-discovery-difficulty.md) for assessment examples.
 - Bug deletion requires the active tester persona, direct active membership in its test
   space, and the reporting creator identity. It cascades comments, event timeline rows, and
   share links; delivery rows that do not have foreign keys are explicitly removed in the

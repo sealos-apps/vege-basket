@@ -1,3 +1,4 @@
+import type { BugDiscoveryAssessment } from '../shared/bug-discovery-difficulty'
 import type { Priority, Project } from './types'
 import type { UserRole } from './api'
 
@@ -270,7 +271,7 @@ export type TestBugVerificationSubmission = {
   submittedByUserId?: number
 }
 
-export type TestBug = {
+export type TestBug = BugDiscoveryAssessment & {
   actualResult: string
   assigneeName?: string
   assigneeUserId?: number

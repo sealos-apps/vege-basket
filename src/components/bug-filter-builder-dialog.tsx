@@ -1,3 +1,4 @@
+import { bugDiscoveryDifficulties, bugDiscoveryDifficultyLabels } from '../../shared/bug-discovery-difficulty'
 import { useEffect, useState } from 'react'
 import { Plus, Trash } from '@phosphor-icons/react'
 import { JournalDatePicker } from '@/components/journal-date-picker'
@@ -80,6 +81,7 @@ function optionsForField(field: BugFilterField, options: BugFilterOptions) {
   if (field === 'status') return statusOptions
   if (field === 'severity') return severityOptions
   if (field === 'priority') return priorityOptions
+  if (field === 'discoveryDifficulty') return bugDiscoveryDifficulties.map((value) => ({ label: bugDiscoveryDifficultyLabels[value], value }))
   return []
 }
 

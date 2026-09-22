@@ -1,3 +1,4 @@
+import type { BugDiscoveryDifficulty } from '../shared/bug-discovery-difficulty'
 import { request } from './api'
 import type {
   BugSeverity,
@@ -374,6 +375,8 @@ export function appendTestPlanExecution(spaceId: number, planCaseId: number, pay
 }
 
 export function createTestBug(spaceId: number, payload: {
+  discoveryDifficulty: BugDiscoveryDifficulty
+  discoveryDifficultyReason?: string
   actualResult: string
   assigneeUserId?: number
   environment: string
@@ -396,6 +399,8 @@ export function createTestBug(spaceId: number, payload: {
 }
 
 export function updateTestBug(spaceId: number, bugId: number, payload: {
+  discoveryDifficulty?: BugDiscoveryDifficulty
+  discoveryDifficultyReason?: string
   actualResult?: string
   assigneeUserId?: number
   environment?: string

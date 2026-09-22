@@ -180,6 +180,7 @@ async function main() {
   await encryptColumn('project_package_operations', 'title')
   await encryptColumn('project_package_operations', 'content')
   await encryptProjectPackageOperationTodoNotes()
+  await encryptColumn('test_bugs', 'discovery_difficulty_reason')
   await encryptColumn('test_cases', 'remarks')
   await encryptColumn('test_plans', 'environment_access_url')
   await encryptTestEnvironmentFields()

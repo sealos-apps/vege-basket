@@ -6,6 +6,7 @@ import {
 } from './test-space-transfer.ts'
 import { shareOrganizationTestEnvironments } from './test-environment-sharing.ts'
 import { lockResourceManager, lockOrganizationResourceManager, type ManagedResource } from './resource-management.ts'
+import { parseBugDiscoveryAssessment, type BugDiscoveryDifficulty } from '../shared/bug-discovery-difficulty.ts'
 import crypto from 'node:crypto'
 import bcrypt from 'bcryptjs'
 import express, { Router } from 'express'
@@ -1993,6 +1994,8 @@ async function getTestWorkbench(
       reporter_email: string | null
       reporter_user_id: string | null
       reproduction_steps: string
+      discovery_difficulty: BugDiscoveryDifficulty
+      discovery_difficulty_reason: string
       severity: string
       space_owner_user_id: string
       status: BugStatus
@@ -2021,10 +2024,10 @@ async function getTestWorkbench(
         b.test_plan_id, b.test_plan_case_id, b.test_environment_id,
         b.organization_module_id,
         b.reporter_user_id, b.assignee_user_id, b.title, b.environment,
-        b.severity, b.priority, b.status, b.created_at, b.updated_at,
+        b.severity, b.priority, b.discovery_difficulty, b.status, b.created_at, b.updated_at,
         ${includeBugDetails
-          ? 'b.actual_result, b.expected_result, b.reproduction_steps,'
-          : "''::text as actual_result, ''::text as expected_result, ''::text as reproduction_steps,"}
+          ? 'b.actual_result, b.expected_result, b.reproduction_steps, b.discovery_difficulty_reason,'
+          : "''::text as actual_result, ''::text as expected_result, ''::text as reproduction_steps, ''::text as discovery_difficulty_reason,"}
         space.owner_user_id as space_owner_user_id,
         m.access_level as direct_access_level,
         space.name as test_space_name,
@@ -2504,6 +2507,8 @@ async function getTestWorkbench(
       reporterName: row.reporter_display_name || row.reporter_email || undefined,
       reporterUserId: row.reporter_user_id ? Number(row.reporter_user_id) : undefined,
       reproductionSteps: decryptText(row.reproduction_steps),
+      discoveryDifficulty: row.discovery_difficulty,
+      discoveryDifficultyReason: decryptText(row.discovery_difficulty_reason),
       severity: row.severity,
       status: row.status,
       testEnvironmentAccessUrl: row.test_environment_access_url
@@ -4716,6 +4721,11 @@ router.post('/test-spaces/:spaceId/bugs', asyncRoute(async (request, response) =
     response.status(400).json({ error: 'Test environment must be valid' })
     return
   }
+  const discovery = parseBugDiscoveryAssessment(request.body)
+  if (!discovery.valid) {
+    response.status(400).json({ error: discovery.error })
+    return
+  }
   const severity = ['blocker', 'critical', 'major', 'minor', 'trivial'].includes(request.body.severity)
     ? request.body.severity
     : 'major'
@@ -4812,8 +4822,9 @@ router.post('/test-spaces/:spaceId/bugs', asyncRoute(async (request, response) =
         insert into test_bugs
           (test_space_id, test_subject_id, test_plan_id, test_plan_case_id, test_environment_id,
            title, severity, priority, status, environment, reproduction_steps, expected_result,
-           actual_result, reporter_user_id, assignee_user_id, test_case_id, organization_module_id)
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+           actual_result, reporter_user_id, assignee_user_id, test_case_id, organization_module_id,
+           discovery_difficulty, discovery_difficulty_reason)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         returning id
         `,
         [
@@ -4834,6 +4845,8 @@ router.post('/test-spaces/:spaceId/bugs', asyncRoute(async (request, response) =
           assigneeUserId,
           caseId,
           moduleId,
+          discovery.value.discoveryDifficulty,
+          discovery.value.discoveryDifficultyReason ? encryptText(discovery.value.discoveryDifficultyReason) : '',
         ],
       )
       const bugId = Number(inserted.rows[0].id)
@@ -4918,13 +4931,15 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
     priority: string
     reporter_user_id: string | null
     reproduction_steps: string
+    discovery_difficulty: BugDiscoveryDifficulty
+    discovery_difficulty_reason: string
     severity: string
     status: BugStatus
     test_case_id: string | null
     test_subject_id: string | null
     title: string
   }>(
-    `select status, assignee_user_id, reporter_user_id, title, severity, priority,
+    `select status, assignee_user_id, reporter_user_id, title, severity, priority, discovery_difficulty, discovery_difficulty_reason,
             test_case_id, test_subject_id, organization_module_id,
             environment, test_environment_id, reproduction_steps, expected_result, actual_result
        from test_bugs where id = $1 and test_space_id = $2`,
@@ -4940,6 +4955,8 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
     'moduleId',
     'title',
     'severity',
+    'discoveryDifficulty',
+    'discoveryDifficultyReason',
     'priority',
     'environment',
     'testEnvironmentId',
@@ -5002,12 +5019,14 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
         expected_result: string
         reproduction_steps: string
         reporter_user_id: string | null
+        discovery_difficulty: BugDiscoveryDifficulty
+        discovery_difficulty_reason: string
         severity: string
         status: BugStatus
         test_environment_id: string | null
         title: string
       }>(
-        `select status, assignee_user_id, reporter_user_id, title, severity, priority, test_case_id, test_subject_id, organization_module_id, test_plan_id, test_plan_case_id,
+        `select status, assignee_user_id, reporter_user_id, title, severity, priority, discovery_difficulty, discovery_difficulty_reason, test_case_id, test_subject_id, organization_module_id, test_plan_id, test_plan_case_id,
                 environment, test_environment_id, reproduction_steps, expected_result, actual_result
            from test_bugs where id = $1 and test_space_id = $2 for update`,
         [bugId, spaceId],
@@ -5018,6 +5037,14 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
       if (hasDetailEdit && !canEditTestBug(lockedReporter, session.userId)) {
         throw importFailure('Only the Bug creator can edit its details', 403)
       }
+      const discovery = parseBugDiscoveryAssessment(request.body, {
+        discoveryDifficulty: lockedBug.discovery_difficulty,
+        discoveryDifficultyReason: decryptText(lockedBug.discovery_difficulty_reason),
+      })
+      if (!discovery.valid) throw importFailure(discovery.error, 400)
+      const nextDiscoveryReason = request.body.discoveryDifficultyReason === undefined
+        ? lockedBug.discovery_difficulty_reason
+        : discovery.value.discoveryDifficultyReason ? encryptText(discovery.value.discoveryDifficultyReason) : ''
       let caseBinding: { caseId: number | null; subjectId: number | null; moduleId: number | null } | undefined
       if (request.body.testCaseId !== undefined) {
         const caseId = positiveId(request.body.testCaseId)
@@ -5114,10 +5141,12 @@ router.patch('/test-spaces/:spaceId/bugs/:bugId', asyncRoute(async (request, res
       await client.query(
         `update test_bugs set title = $1, severity = $2, priority = $3, environment = $4,
                 test_environment_id = $5, reproduction_steps = $6, expected_result = $7,
-                actual_result = $8, status = $9, assignee_user_id = $10, updated_at = now()
+                actual_result = $8, status = $9, assignee_user_id = $10, updated_at = now(),
+                discovery_difficulty = $13, discovery_difficulty_reason = $14
            where id = $11 and test_space_id = $12`,
         [nextTitle, severity, priority, nextEnvironment, nextEnvironmentId, nextReproduction,
-          nextExpected, nextActual, lockedStatus, normalizedAssigneeUserId, bugId, spaceId],
+          nextExpected, nextActual, lockedStatus, normalizedAssigneeUserId, bugId, spaceId,
+          discovery.value.discoveryDifficulty, nextDiscoveryReason],
       )
       if (normalizedAssigneeUserId && normalizedAssigneeUserId !== lockedPreviousAssignee) {
         await recordTestBugEvent({
@@ -5339,6 +5368,8 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
     reporter_email: string | null
     reporter_user_id: string | null
     reproduction_steps: string
+    discovery_difficulty: BugDiscoveryDifficulty
+    discovery_difficulty_reason: string
     severity: string
     status: BugStatus
     test_plan_id: string | null
@@ -5360,6 +5391,7 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
       linked_case.folder_id as test_case_folder_id,
       case_directory.path as test_case_directory_path,
       b.reporter_user_id, b.assignee_user_id, b.title, b.severity, b.priority,
+      b.discovery_difficulty, b.discovery_difficulty_reason,
       b.status, b.environment, b.reproduction_steps, b.expected_result, b.actual_result,
       b.created_at, b.updated_at,
       space.organization_id as organization_id,
@@ -5643,6 +5675,8 @@ async function getAssignedBugs(userId: number, organizationId: OrganizationConte
       reporterName: row.reporter_display_name || row.reporter_email || undefined,
       reporterUserId: row.reporter_user_id ? Number(row.reporter_user_id) : undefined,
       reproductionSteps: decryptText(row.reproduction_steps),
+      discoveryDifficulty: row.discovery_difficulty,
+      discoveryDifficultyReason: decryptText(row.discovery_difficulty_reason),
       severity: row.severity,
       status: row.status,
       testPlanId: row.test_plan_id ? Number(row.test_plan_id) : undefined,
