@@ -6,7 +6,11 @@ import bcrypt from 'bcryptjs'
 import { parse as parseDotenv } from 'dotenv'
 import { validatePackageRulesYaml } from './package-rules-validator.ts'
 import { parseLegacyPlatformConfig } from './platform-legacy-config.ts'
-import { createDefaultPlatformConfig, platformConfigSchemaVersion } from './platform-config-schema.ts'
+import {
+  createDefaultPlatformConfig,
+  migrateStoredPlatformConfig,
+  platformConfigSchemaVersion,
+} from './platform-config-schema.ts'
 import { normalizePlatformPublicOrigin } from '../shared/platform-callback-urls.ts'
 
 const serverDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -115,14 +119,24 @@ async function verify() {
   applyStartupEnvironment(env)
   const rules = loadRules(env, filename)
   const imported = parseLegacyPlatformConfig(env, rules.source)
-  const { pool } = await import('./db.ts')
+  const [{ pool }, { decryptText, getEncryptionKeyStatus }] = await Promise.all([
+    import('./db.ts'),
+    import('./crypto.ts'),
+  ])
   try {
     const client = await pool.connect()
     try {
       await client.query('begin read only')
-      const tables = await client.query<{ schema_exists: boolean; platform_exists: boolean }>(
-        `select to_regclass('public.users') is not null as schema_exists,
-                to_regclass('public.platform_config_versions') is not null as platform_exists`,
+      const tables = await client.query<{
+        database_name: string
+        schema_exists: boolean
+        schema_name: string
+        platform_exists: boolean
+      }>(
+        `select current_database() as database_name,
+                current_schema() as schema_name,
+                to_regclass(format('%I.users', current_schema())) is not null as schema_exists,
+                to_regclass(format('%I.platform_config_versions', current_schema())) is not null as platform_exists`,
       )
       if (!tables.rows[0]?.schema_exists) throw new Error('users 表不存在，请先审核并执行 db:init。')
       const admins = imported.adminUsernames.length > 0
@@ -134,12 +148,76 @@ async function verify() {
       const found = new Map(admins.rows.map((row) => [row.email.trim().toLowerCase(), row.account_status]))
       const unresolvedAdmins = imported.adminUsernames.filter((username) =>
         username !== 'admin' && found.get(username) !== 'active')
+      let platformConfiguration: {
+        activeRevision: number | null
+        effectiveSchemaVersion: number | null
+        readable: boolean
+        source: string | null
+        storedSchemaVersion: number | null
+        versionCount: number
+      } = {
+        activeRevision: null,
+        effectiveSchemaVersion: null,
+        readable: false,
+        source: null,
+        storedSchemaVersion: null,
+        versionCount: 0,
+      }
+      let unreadableActiveConfiguration = false
+      if (tables.rows[0].platform_exists) {
+        const state = await client.query<{
+          active_revision: string | null
+          payload_encrypted: string | null
+          schema_version: number | null
+          source: string | null
+          version_count: number
+        }>(
+          `select state.active_revision, version.schema_version, version.payload_encrypted,
+                  version.source,
+                  (select count(*)::int from platform_config_versions) as version_count
+             from platform_config_state state
+             left join platform_config_versions version on version.revision = state.active_revision
+            where state.singleton = true`,
+        )
+        const row = state.rows[0]
+        platformConfiguration = {
+          activeRevision: row?.active_revision ? Number(row.active_revision) : null,
+          effectiveSchemaVersion: null,
+          readable: false,
+          source: row?.source ?? null,
+          storedSchemaVersion: row?.schema_version ?? null,
+          versionCount: Number(row?.version_count ?? 0),
+        }
+        if (row?.active_revision && row.payload_encrypted && row.schema_version) {
+          try {
+            const migrated = migrateStoredPlatformConfig(
+              JSON.parse(decryptText(row.payload_encrypted)),
+              row.schema_version,
+            )
+            platformConfiguration.readable = true
+            platformConfiguration.effectiveSchemaVersion = migrated.schemaVersion
+          } catch {
+            unreadableActiveConfiguration = true
+          }
+        }
+      }
       await client.query('rollback')
+      const encryption = getEncryptionKeyStatus()
       console.log(JSON.stringify({
+        database: {
+          name: tables.rows[0].database_name,
+          schema: tables.rows[0].schema_name,
+        },
+        encryption: {
+          activeKeyId: encryption.activeKeyId,
+          configured: encryption.configured,
+          retainedKeyIds: encryption.retainedKeyIds,
+        },
+        platformConfiguration,
         platformSchemaPresent: tables.rows[0].platform_exists,
         unresolvedAdminAccounts: unresolvedAdmins,
       }, null, 2))
-      if (unresolvedAdmins.length > 0) process.exitCode = 1
+      if (unresolvedAdmins.length > 0 || unreadableActiveConfiguration) process.exitCode = 1
     } finally {
       client.release()
     }

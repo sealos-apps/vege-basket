@@ -5,6 +5,7 @@ import {
   createDefaultPlatformConfig,
   maskPlatformConfig,
   mergePlatformConfigSection,
+  migrateStoredPlatformConfig,
   parsePlatformConfig,
   PlatformConfigValidationError,
   revealPlatformSecret,
@@ -20,6 +21,16 @@ test('platform config defaults preserve the current effective limits', () => {
   assert.equal(config.storage.uploadMaxBytes, 10 * 1024 * 1024)
   assert.equal(config.storage.objectPrefix, 'todo-images')
   assert.equal(config.packages.downloadExpireSeconds, 1_800)
+})
+
+test('stored v1 snapshots migrate in memory without changing their persisted shape', () => {
+  const current = createDefaultPlatformConfig()
+  const legacy = { ...current, schemaVersion: 1 }
+  const migrated = migrateStoredPlatformConfig(legacy, 1)
+  assert.equal(migrated.schemaVersion, 2)
+  assert.equal(migrated.general.displayName, current.general.displayName)
+  assert.throws(() => migrateStoredPlatformConfig({ ...legacy, schemaVersion: 2 }, 1), PlatformConfigValidationError)
+  assert.throws(() => migrateStoredPlatformConfig(current, 3), PlatformConfigValidationError)
 })
 
 test('platform config rejects partial credentials and unknown fields', () => {

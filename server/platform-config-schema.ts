@@ -7,7 +7,9 @@ import {
 } from '../shared/platform-config.ts'
 import { normalizeOssEndpoint } from './oss-endpoint.ts'
 
-export const platformConfigSchemaVersion = 1
+// Stored snapshots are immutable. When the shape evolves, migrate a snapshot
+// in memory before validating it and write a new revision only on the next save.
+export const platformConfigSchemaVersion = 2
 
 const maxPackageRulesBytes = 256 * 1024
 const defaultGithubRepositoryUrl = 'https://github.com/sealos-apps/sealos-pro'
@@ -61,7 +63,7 @@ export type PlatformConfig = {
     legacyMiddlewareRoots: string[]
     rulesYaml: string
   }
-  schemaVersion: 1
+  schemaVersion: 2
   storage: {
     accessKeyId: string
     accessKeySecret: string
@@ -420,6 +422,29 @@ export function parsePlatformConfig(value: unknown): PlatformConfig {
   }
   if (issues.length > 0) throw new PlatformConfigValidationError(issues)
   return config
+}
+
+export function migrateStoredPlatformConfig(value: unknown, storedSchemaVersion: number): PlatformConfig {
+  if (!Number.isSafeInteger(storedSchemaVersion) || storedSchemaVersion < 1 || storedSchemaVersion > platformConfigSchemaVersion) {
+    throw new PlatformConfigValidationError([`不支持的平台配置版本：${storedSchemaVersion}。`])
+  }
+  const root = objectValue(value, 'config', [])
+  if (root.schemaVersion !== storedSchemaVersion) {
+    throw new PlatformConfigValidationError([
+      `存储的平台配置版本 ${storedSchemaVersion} 与内容版本 ${String(root.schemaVersion ?? '')} 不一致。`,
+    ])
+  }
+  let migrated: Record<string, unknown> = { ...root }
+  let version = storedSchemaVersion
+  while (version < platformConfigSchemaVersion) {
+    if (version === 1) {
+      migrated = { ...migrated, schemaVersion: 2 }
+      version = 2
+      continue
+    }
+    throw new PlatformConfigValidationError([`无法升级的平台配置版本：${version}。`])
+  }
+  return parsePlatformConfig(migrated)
 }
 
 function secretState(value: string, revealable = true): ConfiguredSecret {

@@ -55,6 +55,10 @@ test('platform configuration history is immutable and builtin admin is protected
   assert.match(platformManagementSchemaSql, /where is_builtin_admin/u)
 })
 
+test('startup schema never drops legacy configuration tables', () => {
+  assert.doesNotMatch(schemaSql, /drop table if exists ai_settings/iu)
+})
+
 test('organization foreign-key normalization skips constraints already using restrict', () => {
   assert.match(platformManagementSchemaSql, /constraint_value\.confdeltype <> 'r'/u)
   assert.match(platformManagementSchemaSql, /before delete on organizations/u)

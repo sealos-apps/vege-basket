@@ -5,7 +5,7 @@ import { lockPlatformAdministration, requirePlatformAdminWithClient } from './pl
 import {
   createDefaultPlatformConfig,
   mergePlatformConfigSection,
-  parsePlatformConfig,
+  migrateStoredPlatformConfig,
   platformConfigSchemaVersion,
   type PlatformConfig,
 } from './platform-config-schema.ts'
@@ -77,7 +77,7 @@ export function platformMutationDigest(value: unknown) {
 }
 
 function parseStoredConfig(row: ConfigVersionRow): VersionedPlatformConfig {
-  if (row.schema_version !== platformConfigSchemaVersion) {
+  if (!Number.isSafeInteger(row.schema_version) || row.schema_version < 1 || row.schema_version > platformConfigSchemaVersion) {
     throw new PlatformConfigStoreError(
       'PLATFORM_CONFIG_SCHEMA_UNSUPPORTED',
       `不支持的平台配置版本：${row.schema_version}。`,
@@ -91,7 +91,7 @@ function parseStoredConfig(row: ConfigVersionRow): VersionedPlatformConfig {
     throw new PlatformConfigStoreError('PLATFORM_CONFIG_DECRYPT_FAILED', '平台配置无法解密。', 503)
   }
   return {
-    config: parsePlatformConfig(parsed),
+    config: migrateStoredPlatformConfig(parsed, row.schema_version),
     createdAt: row.created_at.toISOString(),
     revision: Number(row.revision),
     source: row.source,

@@ -15,7 +15,7 @@ export type SecretState = {
 }
 
 export type PlatformConfig = {
-  schemaVersion: 1
+  schemaVersion: 2
   general: { displayName: string; publicUrl: string }
   ai: {
     apiBase: string

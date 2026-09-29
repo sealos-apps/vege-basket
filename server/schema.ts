@@ -39,8 +39,6 @@ set feishu_email = feishu_user_id
 where feishu_email = ''
   and feishu_user_id like '%@%';
 
-drop table if exists ai_settings;
-
 create table if not exists sessions (
   token text primary key,
   user_id bigint not null references users(id) on delete cascade,

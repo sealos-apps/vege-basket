@@ -70,6 +70,15 @@ stored config version. Normal deployment omits this workflow: the application en
 maintenance, creates or validates the built-in admin, and waits for that administrator to save the
 first configuration in Platform Management.
 
+For every later application upgrade, PostgreSQL is authoritative. Do not run `import` again and do
+not initialize defaults. Before and after the restart, run `verify` with the retained legacy/runtime
+file and compare `database.name`, `database.schema`, `platformConfiguration.activeRevision`,
+`versionCount`, `source`, and `readable`. The command also lists active and retained encryption key
+IDs but never prints configuration values. Stop the upgrade if the database/schema differs, the
+active revision changes unexpectedly, `readable` is false, or a required old key ID is absent.
+Configuration schema v1 snapshots are migrated to v2 only in memory; startup leaves the revision,
+stored schema version, and ciphertext unchanged.
+
 Startup opens `/api/health` and `/api/platform-status` first. Both application replicas compete for
 the PostgreSQL migration advisory lock; one applies the current schema/data baseline and writes its
 checksum to `application_migrations`, while the other waits and then verifies the same receipt.
@@ -88,6 +97,18 @@ Fresh Sealos installations use two single-container application Pods and no appl
 containers. The initial admin password is mounted from a Kubernetes Secret file and used only when
 the account does not exist. No default business configuration is created. Both Feishu callback URLs
 derive from the public URL the administrator later saves.
+
+To exercise the same restart invariant against an explicitly authorized non-production PostgreSQL
+server, use:
+
+```bash
+VEGES_INTEGRATION_DATABASE_URL="$DATABASE_URL" npm run test:platform-config-restart
+```
+
+The acceptance test creates a random schema, inserts an encrypted v1 configuration and a legacy
+table sentinel, starts and stops the real API twice, verifies the configuration remains readable,
+then checks that the active revision, ciphertext, version count, and sentinel row did not change.
+It drops only its random schema. Never point this command at production even though it is isolated.
 
 ## Local Runtime
 
@@ -173,7 +194,8 @@ This is an explicit operator action, never an automatic startup migration.
 ### Bug Discovery Difficulty Migration
 
 `server/migrations/20260922_bug_discovery_difficulty.sql` and the corresponding startup
-schema (baseline `20260922_schema_v10`) add `test_bugs.discovery_difficulty` (`high`, `medium`, `low`, non-null, default
+schema first shipped in baseline `20260922_schema_v10` and remains present in the current
+`20260929_schema_v11` baseline. It adds `test_bugs.discovery_difficulty` (`high`, `medium`, `low`, non-null, default
 `medium`) and `discovery_difficulty_reason`. Existing rows receive `medium` and an empty
 reason; rerunning the migration does not reset later assessments. The API requires an
 explicit level on creation despite the database compatibility default. Non-empty reasons
@@ -370,6 +392,11 @@ Before an encryption-key change:
    re-encrypt old ciphertext.
 4. Verify representative old and new records before removing any key. Do not remove an
    old key while its key ID exists in stored envelopes.
+
+The retired `ai_settings` table is not read by the application, but ordinary startup deliberately
+leaves it untouched. `server/migrations/20260929_remove_legacy_ai_settings.sql` is a destructive,
+manual retirement step. Run it only after a separately approved backup and after `verify` proves the
+database-backed platform configuration is readable; it is never required for an application upgrade.
 
 ## Deployment
 
