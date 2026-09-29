@@ -304,7 +304,11 @@ configuration states. Restore audit events record their source revision, and res
 compare that snapshot with the current configuration. Canonically unchanged saves and restores
 commit only their idempotency receipt; they do not create a version, audit event, or reload
 notification. After a real change, the browser follows the target revision until every online API
-instance applies it or reports an explicit error, offline, or superseded state.
+instance applies it or reports an explicit error, offline, or superseded state. Stored snapshots
+remain immutable across upgrades: the reader applies an explicit in-memory migration from older
+supported configuration schemas, while the next administrator save or restore creates a snapshot
+at the current schema version. Startup never replaces the active revision with defaults or
+environment values.
 
 Veges AI conversations are private to the authenticated user and persist in PostgreSQL.
 Each conversation has an immutable `general`, `project`, or `conversation-analysis`
@@ -759,7 +763,8 @@ the idempotent `schemaSql` baseline and encrypted data initialization while othe
 time. Changing `schemaSql` without increasing the migration ID fails closed with a checksum error;
 every future table, constraint, or index change must also add a forward-only file under
 `server/migrations/`. There is no automatic down migration. Starting the API can mutate the
-database and is not a read-only smoke test.
+database and is not a read-only smoke test. The baseline schema contains no destructive cleanup for
+retired configuration tables; such cleanup remains an explicit, separately approved migration.
 
 Platform maintenance state is stored independently from configuration history. Manual maintenance,
 an incomplete or failed database migration, or a missing platform configuration blocks ordinary

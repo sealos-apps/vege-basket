@@ -11,6 +11,15 @@ test('project basket selection is restored after a browser refresh', () => {
   assert.match(appSource, /const preferredProjectId = current \?\? loadStoredSelectedProjectId\(\)/u)
 })
 
+test('project basket defaults to active projects while preserving explicit status filters', () => {
+  assert.match(appSource, /useState<ProjectStatus \| 'all'>\('active'\)/u)
+  assert.match(appSource, /const matchesStatus = statusFilter === 'all' \|\| project\.status === statusFilter/u)
+  assert.match(appSource, /<SelectItem value="all">全部<\/SelectItem>/u)
+  assert.match(appSource, /<SelectItem value="paused">暂停<\/SelectItem>/u)
+  assert.match(appSource, /<SelectItem value="completed">已结束<\/SelectItem>/u)
+  assert.match(appSource, /<SelectItem value="archived">归档<\/SelectItem>/u)
+})
+
 test('project basket hides completed todos by default while preserving explicit status filters', () => {
   const todoListStart = appSource.indexOf('function TodoList(')
   const todoListSource = appSource.slice(todoListStart)

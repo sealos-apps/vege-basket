@@ -63,6 +63,11 @@ through `LISTEN/NOTIFY` plus reconciliation; the digest worker reads the current
 delivery. Feishu event and OAuth callback URLs are read-only values derived from the configured
 public URL.
 
+Platform configuration schema version 2 reads stored version 1 snapshots through an in-memory
+compatibility migration. It does not update the immutable stored revision during startup. A later
+save or restore writes a new version 2 snapshot. Future configuration-shape changes must add the
+next explicit migration step before increasing the schema version.
+
 The built-in `admin` account has an immutable database grant. Managed platform grants are
 separate from occupational roles. New accounts are created only by successful Feishu OAuth;
 legacy password accounts may still sign in. `VEGES_ADMIN_USERNAMES` and the former business
@@ -183,7 +188,7 @@ an in-flight flow retains the exact redirect URL stored in its signed state.
 | Image sync | `POST /api/image-sync-runs`, `GET /api/image-sync-runs`, `GET /api/image-sync-runs/:runId?refresh=true`, `DELETE /api/image-sync-runs/:runId`; every route is session-protected and owner-scoped, and deletion accepts failed local records only |
 | AI | `GET /api/ai/status`, `POST /api/ai/intent-classifications`, `GET/POST /api/ai/conversations/:conversationId/turns`, `POST .../turns/:turnId/document`, `POST .../turns/:turnId/retry`, `POST .../turns/:turnId/cancel`, `POST .../turns/:turnId/reconcile`, `GET /api/ai/conversations`, `PATCH/DELETE /api/ai/conversations/:conversationId`, `POST /api/projects/:projectId/summaries`, todo-proposal read/confirm routes |
 | Feishu events | `/api/integrations/feishu/events` |
-| Platform management | `/api/admin/platform-config`, config test/history/restore/runtime routes, `/api/admin/users`, `POST /api/admin/users/:userId/feishu-name-sync`, platform grants, and platform organization create/delete routes require a platform administrator. The name-sync route accepts no caller-supplied name and rejects the built-in `admin`. |
+| Platform management | `/api/admin/platform-config`, config test/history/restore/runtime routes, `/api/admin/users`, `POST /api/admin/users/:userId/feishu-name-sync`, platform grants, and platform organization create/delete routes require a platform administrator. The name-sync route accepts no caller-supplied name and rejects the built-in `admin`. `npm run platform:config -- verify --env-file ...` is a read-only upgrade diagnostic that reports database/schema identity, active revision metadata, version count, configuration readability, and encryption key IDs without exposing configuration values. |
 | Roles | `POST /api/auth/active-role`, `GET /api/admin/users`, `PATCH /api/admin/users/:userId/roles` |
 | Organizations | `/api/organizations/*`, system-admin organization creation, owner/admin organization rename, week-start setting and confirmed deletion, direct member admission, expiring `/api/organization-invite-links/*` browser links, legacy Feishu invitations, resource attachment, organization-admin project governance, test-environment `POST/PATCH/DELETE /api/organizations/:organizationId/test-environments(/:environmentId)`, direct organization-member admission to organization projects without invite notifications, milestones including inline `PATCH .../milestones/:milestoneId/status`, task overview, weekly reports, weekly summaries, and the dedicated package-market catalog/policy settings Tab |
 | Personal weekly reports | paginated `GET /api/weekly-reports/:organizationId`, `GET /api/weekly-reports/:organizationId/:weekStart`, persona-specific item/task forms and v3 Markdown AI templates, source insertion into an item or field, versioned draft save, AI generation, and submit routes under `/api/weekly-reports/*` |

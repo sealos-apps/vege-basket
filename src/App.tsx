@@ -1905,7 +1905,7 @@ function App() {
   const [isProjectModulesDialogOpen, setIsProjectModulesDialogOpen] = useState(false)
   const [projectModuleDraft, setProjectModuleDraft] = useState('')
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'all'>('all')
+  const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'all'>('active')
   const [tagFilter, setTagFilter] = useState('全部')
   const projectBasketScope = JSON.stringify([authUserId, selectedOrganizationId, search, statusFilter, tagFilter])
   useEffect(() => {
