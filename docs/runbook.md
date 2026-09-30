@@ -404,9 +404,10 @@ database-backed platform configuration is readable; it is never required for an 
 （amd64）与 `ubuntu-24.04-arm`（arm64）原生 runner 上用普通 `docker build` 构建镜像，
 推送 `ghcr.io/<仓库>/vege-basket:main-<12位sha>-amd64` 与
 `ghcr.io/<仓库>/vege-basket:main-<12位sha>-arm64`，最后用 `docker manifest` 合并为同一个镜像
-`ghcr.io/<仓库>/vege-basket:main-<12位sha>`，随后自动发布到 Kubernetes。
+`ghcr.io/<仓库>/vege-basket:main-<12位sha>`。配置 Kubernetes 发布凭据时，随后会自动发布到
+Kubernetes；未配置凭据时只跳过发布，镜像构建和推送仍会完成。
 
-首次启用前，在 GitHub 仓库创建 `production` Environment，并配置：
+如需启用 Kubernetes 自动发布，在 GitHub 仓库创建 `production` Environment，并配置：
 
 - Secret `KUBE_CONFIG`：可访问目标集群的 kubeconfig 原文；其 current context 必须显式配置
   目标 namespace。使用仅能读取并 patch/update 目标 Deployment 和 Deployment 注解的专用身份。
@@ -416,7 +417,8 @@ database-backed platform configuration is readable; it is never required for an 
 应用容器名必须与 Deployment 名相同。自动发布使用 kubeconfig current context 的 namespace，
 不需要配置 `K8S_NAMESPACE`；它也不更新日报 CronJob，不需要配置 `K8S_CRONJOB_NAME`。如
 `production` Environment 配置了 required reviewers，push 后会停在发布审批处；需要完全
-无人值守时不要配置 required reviewers。发布 job 会：
+无人值守时不要配置 required reviewers。未配置 `KUBE_CONFIG` 时，发布 job 会输出警告并跳过
+所有 Kubernetes 操作。凭据配置完整时，发布 job 会：
 
 1. 将 Deployment 的 `originImageName` 注解和应用容器更新为同一个 `main-<12位sha>` 镜像。
 2. 等待 Deployment rollout 完成，并再次读取该工作负载确认镜像一致。

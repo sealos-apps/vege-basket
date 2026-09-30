@@ -89,6 +89,13 @@ test('main image workflow deploys the immutable image to the application Deploym
   assert.match(deployJob, /needs: merge-manifest/u)
   assert.match(deployJob, /environment: production/u)
   assert.match(deployJob, /secrets\.KUBE_CONFIG/u)
+  assert.match(deployJob, /id: deployment-gate/u)
+  assert.match(deployJob, /enabled=false/u)
+  assert.match(deployJob, /跳过 Kubernetes 发布/u)
+  assert.equal(
+    deployJob.match(/if: steps\.deployment-gate\.outputs\.enabled == 'true'/gu)?.length,
+    4,
+  )
   assert.match(deployJob, /config view --minify/u)
   assert.match(deployJob, /test -n "\$KUBE_NAMESPACE"/u)
   assert.match(deployJob, /deployment\/\$K8S_DEPLOYMENT_NAME/u)

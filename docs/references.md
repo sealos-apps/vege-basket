@@ -140,10 +140,11 @@ visible when the global dependency switch or parent component channel is disable
 由当前源码构建的不可变合并镜像标签或分架构标签/摘要；Deployment 注解、应用容器和
 待办日报 CronJob 在模板安装时共用这一个值。
 
-镜像合并成功后，同一工作流会通过 `production` GitHub Environment 自动发布到
-Kubernetes。Environment Secret `KUBE_CONFIG` 保存 kubeconfig 原文；Environment
+镜像合并成功后，如果配置了 `production` GitHub Environment 的发布凭据，同一工作流会自动
+发布到 Kubernetes。Environment Secret `KUBE_CONFIG` 保存 kubeconfig 原文；Environment
 variable `K8S_DEPLOYMENT_NAME` 指定应用 Deployment。kubeconfig 的 current context 必须显式
-配置目标 namespace，工作流不需要 `K8S_NAMESPACE`。Deployment 的容器名必须与 Deployment
+配置目标 namespace，工作流不需要 `K8S_NAMESPACE`。未配置 `KUBE_CONFIG` 时，工作流会输出
+警告并跳过 Kubernetes 发布，但镜像构建和推送仍会完成。Deployment 的容器名必须与 Deployment
 同名。自动发布不更新日报 CronJob，也不需要 `K8S_CRONJOB_NAME`；该身份仅需对目标
 Deployment 及其注解具有读取、更新和 patch 权限。
 
