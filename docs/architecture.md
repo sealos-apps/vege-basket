@@ -405,8 +405,9 @@ uses only organization-scoped sources the current user may read and never submit
 automatically. New reports fix a `developer` or `tester` profile on the first actual save,
 with one active report per organization, user, week, and profile. Dual-role members keep separate
 development and testing reports; indexes, organization collection, reminders, and summaries retain
-that identity. Historical null-profile reports are not assigned a guessed identity and stay read-only.
-Draft deletion removes the report and cascading source/revision rows. A submitted report may be
+that identity. Historical null-profile reports are not assigned a guessed identity and stay read-only,
+but their owner may delete them. Draft deletion removes the report and cascading source/revision rows.
+A submitted report, including a historical null-profile report, may be
 withdrawn only through the configured inclusive deadline; it is soft-deleted for audit, excluded
 from current collection/summaries, and marks the current organization summary stale while preserving
 that historical summary snapshot. The member may recreate the same profile/week after deletion.

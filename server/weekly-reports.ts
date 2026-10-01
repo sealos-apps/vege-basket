@@ -99,6 +99,15 @@ function requestedProfile(request: express.Request, activeRole: string) {
   return candidate
 }
 
+function requestedDeletionProfile(request: express.Request, activeRole: string): WeeklyReportProfile | null {
+  const requested = request.query.profile ?? request.body?.profile
+  if (requested !== 'legacy') return requestedProfile(request, activeRole)
+  if (!isWeeklyReportProfile(activeRole) && activeRole !== 'organization_admin') {
+    throw new WeeklyReportError(403, '请切换到开发或测试身份')
+  }
+  return null
+}
+
 function requireActiveWeeklyRole(activeRole: string) {
   if (!isWeeklyReportProfile(activeRole)) {
     throw new WeeklyReportError(403, '请切换到开发或测试身份')
@@ -699,7 +708,7 @@ async function submitWeeklyReport(params: {
 }
 
 async function deleteWeeklyReport(params: {
-  profile: WeeklyReportProfile
+  profile: WeeklyReportProfile | null
   organizationId: number
   userId: number
   weekStart: string
@@ -709,9 +718,9 @@ async function deleteWeeklyReport(params: {
     await client.query('begin')
     const weekStart = await normalizeExistingReportWeek(client, params.organizationId, params.weekStart)
     await client.query('select pg_advisory_xact_lock(hashtextextended($1::text, 0))', [
-      `weekly-report:${params.organizationId}:${params.userId}:${weekStart}:${params.profile}`,
+      `weekly-report:${params.organizationId}:${params.userId}:${weekStart}:${params.profile ?? 'legacy'}`,
     ])
-    await requireWeeklyProfile(client, params.userId, params.profile)
+    if (params.profile) await requireWeeklyProfile(client, params.userId, params.profile)
     await requireWeeklyReportAssignee(client, params.organizationId, params.userId)
     const result = await client.query<{
       id: string
@@ -720,7 +729,7 @@ async function deleteWeeklyReport(params: {
     }>(
       `select id, published_revision_id, week_start from organization_weekly_reports
        where organization_id = $1 and user_id = $2 and week_start = $3
-         and report_profile = $4::text and deleted_at is null for update`,
+         and report_profile is not distinct from $4::text and deleted_at is null for update`,
       [params.organizationId, params.userId, weekStart, params.profile],
     )
     const report = result.rows[0]
@@ -1276,7 +1285,7 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
-    const profile = requestedProfile(request, session.activeRole)
+    const profile = requestedDeletionProfile(request, session.activeRole)
     const organizationId = positiveId(request.params.organizationId)
     if (!organizationId) throw new WeeklyReportError(400, '组织参数无效')
     const weekStart = routeParam(request.params.weekStart)

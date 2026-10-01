@@ -49,6 +49,7 @@ import {
   type AiIntentClassification,
 } from '../shared/ai-input-intent'
 import { parseAiTurnRunResponse } from '../shared/ai-conversation-wire'
+import type { WeeklyReportProfile } from '../shared/weekly-report-profile'
 import type { UserAccountStatus } from '../shared/user-lifecycle'
 import type {
   OrganizationPackageMarketChannelPolicy,
@@ -1281,7 +1282,11 @@ export function submitPersonalWeeklyReport(
   )
 }
 
-export function deletePersonalWeeklyReport(organizationId: number, weekStart: string, profile: string) {
+export function deletePersonalWeeklyReport(
+  organizationId: number,
+  weekStart: string,
+  profile: WeeklyReportProfile | 'legacy',
+) {
   return request<{ deleted: true }>(
     `/api/weekly-reports/${organizationId}/${weekStart}?profile=${encodeURIComponent(profile)}`,
     { method: 'DELETE' },

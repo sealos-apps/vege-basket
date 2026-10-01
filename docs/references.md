@@ -272,7 +272,8 @@ case/weekly-report pagination remain unchanged.
   Detail returns `itemSources`, `publishedSourceSnapshots`, `organizationName`, and `authorName`;
   organization collection returns only published `sourceSnapshots`. The `profile` field explicitly
   selects the developer/tester persona. New reports use the selected persona; historical
-  null-profile rows remain read-only and are never assigned a guessed identity. The legacy
+  null-profile rows remain read-only and are never assigned a guessed identity, but their owner may
+  delete them through the same draft/submitted deletion rules. The legacy
   `PUT /api/organizations/:organizationId/weekly-reports/:weekStart` returns 410. The browser uses
   the task form for all new reports and never reopens the old free-form editor. Authorized legacy
   cleanup is an explicit operator command documented in the runbook, not a startup migration.

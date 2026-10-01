@@ -879,7 +879,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     setDeleteBusy(true)
     setError('')
     try {
-      const result = await deletePersonalWeeklyReport(organizationId, item.weekStart, item.reportProfile ?? reportProfile)
+      const result = await deletePersonalWeeklyReport(organizationId, item.weekStart, item.reportProfile ?? 'legacy')
       if (!result.deleted) return false
       setReportListRefresh(value => value + 1)
       if (item.weekStart === activeWeekStart && item.reportProfile === reportProfile) {
@@ -1066,6 +1066,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
               </div>
               {reportList.items.map((item) => {
                 const state = reportStateMeta[item.state]
+                const reportLabel = item.reportProfile ? weeklyReportProfiles[item.reportProfile].label : '历史格式周报'
                 return (
                   <article className="weekly-report-list-row" key={`${item.weekStart}:${item.reportProfile ?? 'legacy'}`} role="listitem">
                     <div className="weekly-report-list-period">
@@ -1097,10 +1098,10 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
                       actionKey={`weekly-report:${organizationId}:${item.weekStart}:${item.reportProfile ?? 'legacy'}`}
                       title={item.publishedRevision ? '撤回并删除周报' : '删除周报草稿'}
                       description={item.publishedRevision
-                        ? `将撤回并删除${weeklyReportProfiles[item.reportProfile ?? reportProfile].label}周报。组织当前汇总会标记为过期并需重新生成，历史汇总快照保留。截止时间后不能执行。`
-                        : `将删除${weeklyReportProfiles[item.reportProfile ?? reportProfile].label}周报草稿及其关联来源。`}
+                        ? `将撤回并删除${reportLabel}。组织当前汇总会标记为过期并需重新生成，历史汇总快照保留。截止时间后不能执行。`
+                        : `将删除${reportLabel}草稿及其关联来源。`}
                       confirmLabel={item.publishedRevision ? '撤回并删除' : '删除草稿'}
-                      trigger={<Button aria-label={`删除${formatWeekRange(item.weekStart)}${item.reportProfile ? weeklyReportProfiles[item.reportProfile].label : '历史'}周报`} disabled={deleteBusy || !item.reportProfile} size="icon" title={item.reportProfile ? '删除周报' : '历史周报不可删除'} type="button" variant="ghost"><Trash size={16} /></Button>}
+                      trigger={<Button aria-label={`删除${formatWeekRange(item.weekStart)}${reportLabel}`} disabled={deleteBusy} size="icon" title="删除周报" type="button" variant="ghost"><Trash size={16} /></Button>}
                       onConfirm={() => deleteReport(item)}
                     />
                     </div>
