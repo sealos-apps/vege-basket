@@ -7,6 +7,10 @@ const migrationSource = readFileSync(
   new URL('./migrations/20260908_weekly_report_assignees.sql', import.meta.url),
   'utf8',
 )
+const assignmentsMigrationSource = readFileSync(
+  new URL('./migrations/20261002_weekly_report_assignments.sql', import.meta.url),
+  'utf8',
+)
 const organizationsSource = readFileSync(new URL('./organizations.ts', import.meta.url), 'utf8')
 const platformOrganizationsSource = readFileSync(new URL('./platform-organizations.ts', import.meta.url), 'utf8')
 const weeklyReportsSource = readFileSync(new URL('./weekly-reports.ts', import.meta.url), 'utf8')
@@ -24,23 +28,17 @@ const weeklyReportWorkbenchSource = readFileSync(
   'utf8',
 )
 
-test('organization memberships default to requiring weekly reports while the reserved admin does not', () => {
-  assert.match(schemaSource, /weekly_report_required boolean not null default true/u)
-  assert.match(migrationSource, /weekly_report_required boolean not null default true/u)
+test('organization memberships require an explicit report persona assignment', () => {
+  assert.match(schemaSource, /weekly_report_required boolean not null default false/u)
+  assert.match(schemaSource, /weekly_report_profiles text\[\] not null default '\{\}'::text\[\]/u)
+  assert.match(assignmentsMigrationSource, /weekly_report_profiles text\[\] not null default '\{\}'::text\[\]/u)
   assert.match(
     schemaSource,
-    /set weekly_report_required = false[\s\S]+lower\(users\.email\) = 'admin'/u,
+    /set weekly_report_profiles = '\{\}'::text\[\],[\s\S]+weekly_report_required = false[\s\S]+lower\(users\.email\) = 'admin'/u,
   )
-  assert.match(
-    migrationSource,
-    /set weekly_report_required = false[\s\S]+lower\(users\.email\) = 'admin'/u,
-  )
-  assert.match(
-    organizationsSource,
-    /select \$1, \$2, 'member', 'active', lower\(email\) <> 'admin'/u,
-  )
-  assert.match(platformOrganizationsSource, /!ownerRow\.is_builtin_admin/u)
-  assert.match(organizationsSource, /username !== 'admin'/u)
+  assert.match(migrationSource, /organization_memberships/u)
+  assert.match(organizationsSource, /select \$1, \$2, 'member', 'active', false/u)
+  assert.match(platformOrganizationsSource, /'owner', 'active', false/u)
   assert.equal(
     organizationsSource.match(
       /weekly_report_required = excluded\.weekly_report_required/gu,
@@ -61,16 +59,16 @@ test('weekly-report rule updates validate and replace the long-lived assignee li
 
   assert.ok(routeStart >= 0)
   assert.ok(routeEnd > routeStart)
-  assert.match(routeSource, /weeklyReportAssigneeIds/u)
+  assert.match(routeSource, /weeklyReportAssignments/u)
   assert.match(routeSource, /membership\.status = 'active'/u)
   assert.match(routeSource, /lower\(users\.email\) <> 'admin'/u)
   assert.match(routeSource, /for update of membership/u)
   assert.match(
     routeSource,
-    /set weekly_report_required = \(membership\.user_id = any\(\$2::bigint\[\]\)\)/u,
+    /set weekly_report_profiles = coalesce\(assignment\.profiles, '\{\}'::text\[\]\),\s+weekly_report_required = assignment\.user_id is not null/u,
   )
   assert.match(routeSource, /await client\.query\('commit'\)/u)
-  assert.match(routeSource, /weeklyReportAssigneeUserIds: assigneeIds/u)
+  assert.match(routeSource, /weeklyReportAssignments: assignments/u)
 })
 
 test('personal weekly-report mutations require a current assignee before writing or calling AI', () => {
@@ -124,11 +122,11 @@ test('collection, reminders, and organization summaries use only current assigne
   )
   assert.match(
     organizationsSource.slice(summaryStart, summaryEnd),
-    /membership\.weekly_report_required = true/u,
+    /= any\(membership\.weekly_report_profiles\)/u,
   )
   assert.match(
     organizationsSource,
-    /report_membership\.weekly_report_required = true/u,
+    /r\.report_profile = any\(report_membership\.weekly_report_profiles\)/u,
   )
   assert.match(
     organizationWorkbenchSource,
@@ -137,11 +135,11 @@ test('collection, reminders, and organization summaries use only current assigne
 })
 
 test('the client saves assignees and keeps non-assignees on a read-only history surface', () => {
-  assert.match(apiSource, /weeklyReportAssigneeUserIds: number\[\]/u)
+  assert.match(apiSource, /weeklyReportAssignments: Array/u)
   assert.match(organizationWorkbenchSource, /填写成员/u)
-  assert.match(organizationWorkbenchSource, /weeklyReportAssigneeUserIds/u)
-  assert.match(organizationWorkbenchSource, /setWeeklyReportAssigneeUserIds\(\[\]\)/u)
-  assert.match(weeklyReportWorkbenchSource, /detail\.canWriteWeeklyReport/u)
+  assert.match(organizationWorkbenchSource, /weeklyReportAssignments/u)
+  assert.match(organizationWorkbenchSource, /setWeeklyReportAssignments\(\[\]\)/u)
+  assert.match(weeklyReportWorkbenchSource, /detail\.weeklyReportProfiles/u)
   assert.match(weeklyReportWorkbenchSource, /canEdit = Boolean\(canWriteWeeklyReport && !report\?\.readOnlyReason && structuredDocument\)/u)
   assert.match(weeklyReportWorkbenchSource, /<WeeklyReportForm\b[^>]*disabled=\{!canEdit \|\| busy\}/u)
   assert.match(weeklyReportWorkbenchSource, /当前无需填写本组织周报/u)
@@ -154,7 +152,7 @@ test('ordered assignees are stored atomically and unselected memberships lose th
   )
   assert.match(orderMigration, /add column if not exists weekly_report_sort_order integer/u)
   assert.match(organizationsSource,
-    /set weekly_report_required = \(membership\.user_id = any\(\$2::bigint\[\]\)\),\s+weekly_report_sort_order = array_position\(\$2::bigint\[\], membership\.user_id\) - 1/u)
+    /weekly_report_sort_order = assignment\.sort_order/u)
   assert.equal(organizationsSource.match(/weekly_report_sort_order = null/gu)?.length, 3)
 })
 
@@ -163,21 +161,21 @@ test('configuration and collection share saved order, name fallback, and a stabl
     /order by m\.weekly_report_sort_order asc nulls last,\s+lower\(coalesce\(nullif\(u\.display_name, ''\), u\.email\)\), m\.user_id/u)
   assert.match(weeklyReportsSource,
     /order by membership\.weekly_report_sort_order asc nulls last,\s+lower\(coalesce\(nullif\(users\.display_name, ''\), users\.email\)\), membership\.user_id/u)
-  assert.match(organizationWorkbenchSource, /setWeeklyReportAssigneeUserIds\(detail\.weeklyReportAssigneeUserIds\)/u)
+  assert.match(organizationWorkbenchSource, /setWeeklyReportAssignments\(detail\.weeklyReportAssignments\)/u)
 })
 
 test('the rule editor combines assignment and ordering in one list while search preserves selected order', () => {
-  assert.match(organizationWorkbenchSource, /const selectedWeeklyReportAssignees = weeklyReportAssigneeUserIds\.flatMap/u)
+  assert.match(organizationWorkbenchSource, /const selectedWeeklyReportAssignees = weeklyReportAssignments\.flatMap/u)
   assert.match(organizationWorkbenchSource,
-    /const visibleUnselectedWeeklyReportAssignees = visibleWeeklyReportAssigneeCandidates\.filter\(\s*\(member\) => !weeklyReportAssigneeUserIds\.includes\(member\.id\)/u)
+    /const visibleUnselectedWeeklyReportAssignees = visibleWeeklyReportAssigneeCandidates\.filter\(\s*\(member\) => !weeklyReportAssignments\.some/u)
   assert.equal(organizationWorkbenchSource.match(/className="organization-weekly-assignee-list"/gu)?.length, 1)
   assert.doesNotMatch(organizationWorkbenchSource, /organization-weekly-assignee-order/u)
   assert.match(organizationWorkbenchSource,
     /selectedWeeklyReportAssignees\.map[\s\S]+visibleUnselectedWeeklyReportAssignees\.map/u)
   assert.match(organizationWorkbenchSource, /checked\s+disabled=\{busy\}/u)
-  assert.match(organizationWorkbenchSource, /checked=\{false\}\s+disabled=\{busy\}/u)
+  assert.match(organizationWorkbenchSource, /checked=\{false\}\s+disabled=\{busy \|\| memberWeeklyReportProfiles\(member\)\.length === 0\}/u)
   assert.equal(organizationWorkbenchSource.match(/htmlFor=\{`weekly-report-assignee-\$\{member\.id\}`\}/gu)?.length, 2)
-  assert.match(organizationWorkbenchSource, /setWeeklyReportAssigneeUserIds\(\(current\) => checked\s+\? \[\.\.\.new Set\(\[\.\.\.current, userId\]\)\]/u)
+  assert.match(organizationWorkbenchSource, /function toggleWeeklyReportProfile/u)
   assert.match(organizationWorkbenchSource, /index === 0[\s\S]+index === selectedWeeklyReportAssignees\.length - 1/u)
 })
 
@@ -204,8 +202,11 @@ test('personal weekly reports are isolated by profile and deletion preserves sub
   assert.match(weeklyReportsSource, /set deleted_at = clock_timestamp\(\), deleted_by_user_id = \$1/u)
   assert.match(weeklyReportsSource, /set stale = true, stale_at = clock_timestamp\(\)/u)
   assert.match(weeklyReportsSource, /delete from organization_weekly_reports where id = \$1/u)
+  assert.match(weeklyReportsSource, /if \(params\.profile\) \{[\s\S]+requireWeeklyReportAssignee\(client, params\.organizationId, params\.userId, params\.profile\)/u)
   assert.match(weeklyReportsSource, /profile_slot\.profile as slot_profile/u)
-  assert.match(weeklyReportWorkbenchSource, /weekly-report-profile-tabs/u)
+  assert.doesNotMatch(weeklyReportWorkbenchSource, /weekly-report-profile-tabs/u)
+  assert.match(weeklyReportWorkbenchSource, /撤回并删除/u)
+  assert.match(weeklyReportWorkbenchSource, /删除草稿/u)
   assert.match(weeklyReportWorkbenchSource, /deletePersonalWeeklyReport\(organizationId, item\.weekStart/u)
   assert.match(weeklyReportWorkbenchSource, /item\.reportProfile \?\? 'legacy'/u)
   assert.doesNotMatch(weeklyReportWorkbenchSource, /历史周报不可删除/u)

@@ -25,6 +25,7 @@ export type OrganizationListItem = {
   memberCount: number
   name: string
   packageMarketEnabled: boolean
+  weeklyReportProfiles: WeeklyReportProfile[]
 }
 
 export type OrganizationPackageMarketCatalogRule = PackageMarketRule & {
@@ -43,6 +44,7 @@ export type OrganizationMember = {
   joinedAt: string
   roles: UserRole[]
   username: string
+  weeklyReportProfiles: WeeklyReportProfile[]
   weeklyReportRequired: boolean
 }
 
@@ -258,7 +260,8 @@ export type OrganizationDetail = {
   tasks: OrganizationTask[]
   testEnvironments: OrganizationTestEnvironment[]
   testSpaces: OrganizationTestSpace[]
-  weeklyReportAssigneeUserIds: number[]
+  weeklyReportAssignments: Array<{ profiles: WeeklyReportProfile[]; userId: number }>
+  weeklyReportProfiles: WeeklyReportProfile[]
   weeklyReportRules: WeeklyReportRules
   weekStartsOn: number
   loadedSections?: OrganizationDetailSection[]

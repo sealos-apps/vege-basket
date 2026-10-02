@@ -987,8 +987,8 @@ export function updateOrganizationWeeklyReportRules(
   organizationId: number,
   payload: {
     weekStartsOn: number
-    /** Ordered user IDs; new selections are appended by the client. */
-    weeklyReportAssigneeUserIds: number[]
+    /** Ordered member assignments; each member selects one or both report personas. */
+    weeklyReportAssignments: Array<{ profiles: Array<'developer' | 'tester'>; userId: number }>
     weeklyReportRules: WeeklyReportRules
   },
 ) {
@@ -1224,12 +1224,11 @@ export function fetchPersonalWeeklyReport(organizationId: number, weekStart: str
 
 export function fetchPersonalWeeklyReports(
   organizationId: number,
-  options: { limit?: number; offset?: number; profile?: string } = {},
+  options: { limit?: number; offset?: number } = {},
 ) {
   const query = new URLSearchParams({
     limit: String(options.limit ?? 10),
     offset: String(options.offset ?? 0),
-    ...(options.profile ? { profile: options.profile } : {}),
   })
   return request<PersonalWeeklyReportList>(`/api/weekly-reports/${organizationId}?${query}`)
 }

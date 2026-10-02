@@ -181,9 +181,12 @@ function mergeOrganizationDetail(current: OrganizationDetail, next: Organization
     tasks: includes('overview') ? next.tasks : current.tasks,
     testEnvironments: includes('testSpaces') ? next.testEnvironments : current.testEnvironments,
     testSpaces: includes('overview', 'testSpaces') ? next.testSpaces : current.testSpaces,
-    weeklyReportAssigneeUserIds: includes('reports', 'settings')
-      ? next.weeklyReportAssigneeUserIds
-      : current.weeklyReportAssigneeUserIds,
+    weeklyReportAssignments: includes('reports', 'settings')
+      ? next.weeklyReportAssignments
+      : current.weeklyReportAssignments,
+    weeklyReportProfiles: includes('reports', 'settings')
+      ? next.weeklyReportProfiles
+      : current.weeklyReportProfiles,
   }
 }
 
@@ -457,7 +460,7 @@ export function OrganizationWorkbench({
   const [weeklyRulesError, setWeeklyRulesError] = useState('')
   const [weeklyRulesDraft, setWeeklyRulesDraft] = useState<WeeklyReportRules>(defaultWeeklyReportRules)
   const [weeklyRulesWeekStartsOn, setWeeklyRulesWeekStartsOn] = useState(1)
-  const [weeklyReportAssigneeUserIds, setWeeklyReportAssigneeUserIds] = useState<number[]>([])
+  const [weeklyReportAssignments, setWeeklyReportAssignments] = useState<Array<{ profiles: WeeklyReportProfile[]; userId: number }>>([])
   const [weeklyReportAssigneeQuery, setWeeklyReportAssigneeQuery] = useState('')
   const packageMarketDraftOrganizationId = useRef(0)
   const loadedDetailId = useRef(0)
@@ -634,7 +637,7 @@ export function OrganizationWorkbench({
       weeklyRulesContext.current = detail.id
       setWeeklyRulesDraft(detail.weeklyReportRules)
       setWeeklyRulesWeekStartsOn(detail.weekStartsOn)
-      setWeeklyReportAssigneeUserIds(detail.weeklyReportAssigneeUserIds)
+      setWeeklyReportAssignments(detail.weeklyReportAssignments)
       setSelectedReportWeek('')
       setWeeklyReadingKey(null)
       setWeeklyAdminTab('collection')
@@ -645,7 +648,7 @@ export function OrganizationWorkbench({
     if (!detail) return
     setWeeklyRulesDraft(detail.weeklyReportRules)
     setWeeklyRulesWeekStartsOn(detail.weekStartsOn)
-    setWeeklyReportAssigneeUserIds(detail.weeklyReportAssigneeUserIds)
+    setWeeklyReportAssignments(detail.weeklyReportAssignments)
     setWeeklyReportAssigneeQuery('')
     setWeeklyRulesError('')
   }
@@ -765,6 +768,10 @@ export function OrganizationWorkbench({
       setWeeklyRulesError('截止时间必须早于下一轮开放时间，请重新设置日期和时间。')
       return
     }
+    if (weeklyReportAssignments.some((assignment) => assignment.profiles.length === 0)) {
+      setWeeklyRulesError('多角色成员需要选择至少一种周报类型。')
+      return
+    }
     setBusy(true)
     setWeeklyRulesError('')
     setError('')
@@ -772,7 +779,7 @@ export function OrganizationWorkbench({
     try {
       const nextDetail = await updateOrganizationWeeklyReportRules(detail.id, {
         weekStartsOn: weeklyRulesWeekStartsOn,
-        weeklyReportAssigneeUserIds,
+        weeklyReportAssignments,
         weeklyReportRules: rules,
       })
       if (scope !== actionScopeRef.current) return
@@ -881,9 +888,9 @@ export function OrganizationWorkbench({
   const weeklyReportAssigneeCandidates = detail?.members.filter((member) => (
     member.username.toLowerCase() !== 'admin'
   )) ?? []
-  const selectedWeeklyReportAssignees = weeklyReportAssigneeUserIds.flatMap((id) => {
-    const member = weeklyReportAssigneeCandidates.find((candidate) => candidate.id === id)
-    return member ? [member] : []
+  const selectedWeeklyReportAssignees = weeklyReportAssignments.flatMap((assignment) => {
+    const member = weeklyReportAssigneeCandidates.find((candidate) => candidate.id === assignment.userId)
+    return member ? [{ ...member, weeklyReportProfiles: assignment.profiles }] : []
   })
   const weeklyRulesExample = getWeeklyReportRulesExample({
     today: getShanghaiDateTime().slice(0, 10),
@@ -897,23 +904,41 @@ export function OrganizationWorkbench({
     || member.username.toLocaleLowerCase('zh-CN').includes(normalizedWeeklyReportAssigneeQuery)
   ))
   const visibleUnselectedWeeklyReportAssignees = visibleWeeklyReportAssigneeCandidates.filter(
-    (member) => !weeklyReportAssigneeUserIds.includes(member.id),
+    (member) => !weeklyReportAssignments.some((assignment) => assignment.userId === member.id),
   )
 
+  function memberWeeklyReportProfiles(member: OrganizationDetail['members'][number]) {
+    if (member.roles.includes('organization_admin')) return ['developer', 'tester'] as WeeklyReportProfile[]
+    return member.roles.filter((role): role is WeeklyReportProfile => role === 'developer' || role === 'tester')
+  }
+
   function toggleWeeklyReportAssignee(userId: number, checked: boolean) {
-    setWeeklyReportAssigneeUserIds((current) => checked
-      ? [...new Set([...current, userId])]
-      : current.filter((id) => id !== userId))
+    const member = weeklyReportAssigneeCandidates.find((candidate) => candidate.id === userId)
+    const roles = member ? memberWeeklyReportProfiles(member) : []
+    setWeeklyReportAssignments((current) => checked
+      ? [...current, { profiles: roles.length === 1 ? roles : [], userId }]
+      : current.filter((assignment) => assignment.userId !== userId))
+  }
+
+  function toggleWeeklyReportProfile(userId: number, profile: WeeklyReportProfile, checked: boolean) {
+    setWeeklyReportAssignments((current) => current.map((assignment) => assignment.userId === userId
+      ? {
+          ...assignment,
+          profiles: checked
+            ? [...new Set([...assignment.profiles, profile])]
+            : assignment.profiles.filter((candidate) => candidate !== profile),
+        }
+      : assignment))
   }
 
   function moveWeeklyReportAssignee(userId: number, direction: -1 | 1) {
-    setWeeklyReportAssigneeUserIds((current) => {
-      const index = current.indexOf(userId)
+    setWeeklyReportAssignments((current) => {
+      const index = current.findIndex((assignment) => assignment.userId === userId)
       const target = index + direction
       if (index < 0 || target < 0 || target >= current.length) return current
       const next = [...current]
       next[index] = current[target]
-      next[target] = userId
+      next[target] = current[index]
       return next
     })
   }
@@ -1564,7 +1589,7 @@ export function OrganizationWorkbench({
                         <fieldset className="organization-weekly-assignees">
                           <legend>
                             <span>填写成员</span>
-                            <small>已选 {weeklyReportAssigneeUserIds.length} / {weeklyReportAssigneeCandidates.length}</small>
+                            <small>已选 {weeklyReportAssignments.length} / {weeklyReportAssigneeCandidates.length}</small>
                           </legend>
                           <p id="weekly-assignee-order-hint">已选成员按列表顺序展示在组织周报中，新勾选的成员追加到末尾；保存后生效。</p>
                           <div className="organization-weekly-assignee-tools">
@@ -1584,19 +1609,25 @@ export function OrganizationWorkbench({
                                 size="sm"
                                 type="button"
                                 variant="ghost"
-                                onClick={() => setWeeklyReportAssigneeUserIds((current) => [
-                                  ...new Set([
+                                onClick={() => setWeeklyReportAssignments((current) => {
+                                  const selected = new Set(current.map((assignment) => assignment.userId))
+                                  return [
                                     ...current,
-                                    ...visibleWeeklyReportAssigneeCandidates.map((member) => member.id),
-                                  ]),
-                                ])}
+                                    ...visibleWeeklyReportAssigneeCandidates
+                                      .filter((member) => !selected.has(member.id) && memberWeeklyReportProfiles(member).length > 0)
+                                      .map((member) => {
+                                        const profiles = memberWeeklyReportProfiles(member)
+                                        return { profiles: profiles.length === 1 ? profiles : [], userId: member.id }
+                                      }),
+                                  ]
+                                })}
                               >全选</Button>
                               <Button
-                                disabled={weeklyReportAssigneeUserIds.length === 0}
+                                disabled={weeklyReportAssignments.length === 0}
                                 size="sm"
                                 type="button"
                                 variant="ghost"
-                                onClick={() => setWeeklyReportAssigneeUserIds([])}
+                                onClick={() => setWeeklyReportAssignments([])}
                               >清空</Button>
                             </div>
                           </div>
@@ -1615,6 +1646,19 @@ export function OrganizationWorkbench({
                                   <strong>{member.displayName}</strong>
                                   <small>{member.username}</small>
                                 </label>
+                                <div className="organization-weekly-assignee-profiles" aria-label={`${member.displayName}周报类型`}>
+                                  {memberWeeklyReportProfiles(member).map((profile) => (
+                                    <label key={profile}>
+                                      <Checkbox
+                                        checked={member.weeklyReportProfiles.includes(profile)}
+                                        disabled={busy}
+                                        onCheckedChange={(checked) => toggleWeeklyReportProfile(member.id, profile, checked === true)}
+                                      />
+                                      {weeklyReportProfiles[profile].label}
+                                    </label>
+                                  ))}
+                                  {memberWeeklyReportProfiles(member).length === 0 ? <small>无可用职业角色</small> : null}
+                                </div>
                                 <div className="organization-weekly-assignee-actions">
                                   <Button type="button" size="icon-sm" variant="ghost" title="上移" aria-label={`上移 ${member.displayName}`} disabled={busy || index === 0} onClick={() => moveWeeklyReportAssignee(member.id, -1)}><CaretUp aria-hidden="true" /></Button>
                                   <Button type="button" size="icon-sm" variant="ghost" title="下移" aria-label={`下移 ${member.displayName}`} disabled={busy || index === selectedWeeklyReportAssignees.length - 1} onClick={() => moveWeeklyReportAssignee(member.id, 1)}><CaretDown aria-hidden="true" /></Button>
@@ -1626,7 +1670,7 @@ export function OrganizationWorkbench({
                                 <Checkbox
                                   aria-label={`需填写周报：${member.displayName}`}
                                   checked={false}
-                                  disabled={busy}
+                                  disabled={busy || memberWeeklyReportProfiles(member).length === 0}
                                   id={`weekly-report-assignee-${member.id}`}
                                   onCheckedChange={(checked) => toggleWeeklyReportAssignee(member.id, checked === true)}
                                 />
@@ -1635,6 +1679,9 @@ export function OrganizationWorkbench({
                                   <strong>{member.displayName}</strong>
                                   <small>{member.username}</small>
                                 </label>
+                                <span className="organization-weekly-assignee-profile-hint">
+                                  {memberWeeklyReportProfiles(member).map((profile) => weeklyReportProfiles[profile].label).join(' / ') || '无可用职业角色'}
+                                </span>
                               </li>
                             ))}
                             {selectedWeeklyReportAssignees.length === 0 && visibleUnselectedWeeklyReportAssignees.length === 0 ? (

@@ -1,6 +1,6 @@
 import { auditDelivery, listDeliveryMembers, lockDeliveryProject, rethrowDeliveryLockError, ProjectDeliveryError } from './project-delivery.ts'
 import { parseDeliveryMembers } from '../shared/project-delivery.ts'
-import { weeklyReportProfiles, type WeeklyReportProfile } from '../shared/weekly-report-profile.ts'
+import { isWeeklyReportProfile, weeklyReportProfiles, type WeeklyReportProfile } from '../shared/weekly-report-profile.ts'
 import { shareOrganizationTestEnvironments } from './test-environment-sharing.ts'
 import { lockTransferProject, canCompleteProjectTransfer } from './project-transfer.ts'
 import crypto from 'node:crypto'
@@ -96,6 +96,7 @@ type OrganizationRouterDependencies = {
 type OrganizationMembership = {
   access_role: OrganizationAccessRole
   organization_id: string
+  weekly_report_profiles: WeeklyReportProfile[]
   weekly_report_required: boolean
 }
 
@@ -191,7 +192,7 @@ async function requireSession(request: express.Request, response: express.Respon
 async function getOrganizationMembership(organizationId: number, userId: number) {
   const result = await query<OrganizationMembership>(
     `
-    select organization_id, access_role, weekly_report_required
+    select organization_id, access_role, weekly_report_profiles, weekly_report_required
     from organization_memberships
     where organization_id = $1 and user_id = $2 and status = 'active'
     `,
@@ -413,10 +414,21 @@ function linkedTodoIds(value: unknown) {
   return ids.every((id): id is number => id !== null) ? ids : null
 }
 
-function weeklyReportAssigneeIds(value: unknown) {
+function weeklyReportAssignments(value: unknown) {
   if (!Array.isArray(value) || value.length > 1_000) return null
-  const ids = Array.from(new Set(value.map(positiveId)))
-  return ids.every((id): id is number => id !== null) ? ids : null
+  const assignments: Array<{ profiles: WeeklyReportProfile[]; userId: number }> = []
+  const seen = new Set<number>()
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null
+    const candidate = item as { profiles?: unknown; userId?: unknown }
+    const userId = positiveId(candidate.userId)
+    if (!userId || seen.has(userId) || !Array.isArray(candidate.profiles)) return null
+    const profiles = Array.from(new Set(candidate.profiles))
+    if (profiles.length === 0 || profiles.length > 2 || !profiles.every(isWeeklyReportProfile)) return null
+    seen.add(userId)
+    assignments.push({ profiles: profiles as WeeklyReportProfile[], userId })
+  }
+  return assignments
 }
 
 async function getDeliveryConfiguration(organizationId: number, projectId: number) {
@@ -501,7 +513,7 @@ export async function acceptOrganizationInviteTokenWithClient(
     `insert into organization_memberships
       (organization_id, user_id, access_role, status, weekly_report_required,
        invited_by_user_id, joined_at, removed_at)
-     select $1, $2, 'member', 'active', lower(email) <> 'admin', $3, now(), null
+     select $1, $2, 'member', 'active', false, $3, now(), null
      from users where id = $2
      on conflict (organization_id, user_id) do update
        set access_role = case
@@ -509,6 +521,7 @@ export async function acceptOrganizationInviteTokenWithClient(
              else 'member'
            end,
            status = 'active',
+           weekly_report_profiles = '{}'::text[],
            weekly_report_required = excluded.weekly_report_required,
            weekly_report_sort_order = null,
            invited_by_user_id = excluded.invited_by_user_id,
@@ -577,11 +590,12 @@ async function getOrganizationDetail(
       joined_at: Date
       roles: string[]
       user_id: string
+      weekly_report_profiles: WeeklyReportProfile[]
       weekly_report_required: boolean
       weekly_report_position: string
     }>(
       `
-      select m.user_id, m.access_role, m.joined_at, m.weekly_report_required,
+      select m.user_id, m.access_role, m.joined_at, m.weekly_report_profiles, m.weekly_report_required,
         row_number() over (
           order by m.weekly_report_sort_order asc nulls last,
             lower(coalesce(nullif(u.display_name, ''), u.email)), m.user_id
@@ -593,7 +607,7 @@ async function getOrganizationDetail(
       join users u on u.id = m.user_id
       left join user_roles ur on ur.user_id = u.id
       where m.organization_id = $1 and m.status = 'active'
-      group by m.user_id, m.access_role, m.joined_at, m.weekly_report_required,
+      group by m.user_id, m.access_role, m.joined_at, m.weekly_report_profiles, m.weekly_report_required,
         m.weekly_report_sort_order, u.id
       order by case m.access_role when 'owner' then 0 when 'admin' then 1 else 2 end,
         lower(coalesce(nullif(u.display_name, ''), u.email))
@@ -856,7 +870,10 @@ async function getOrganizationDetail(
           $2::boolean
           and r.status = 'submitted'
           and report_membership.status = 'active'
-          and report_membership.weekly_report_required = true
+          and (
+            r.report_profile is null
+            or r.report_profile = any(report_membership.weekly_report_profiles)
+          )
           and lower(u.email) <> 'admin'
         )
         or r.user_id = $3
@@ -1045,11 +1062,15 @@ async function getOrganizationDetail(
     projectModules,
     canManageTestEnvironments: canManageTestEnvironments(membership.access_role, assignedRoles),
     canManageWeeklyReports,
-    canWriteWeeklyReport: membership.weekly_report_required,
-    weeklyReportAssigneeUserIds: members.rows
+    canWriteWeeklyReport: membership.weekly_report_profiles.length > 0,
+    weeklyReportProfiles: membership.weekly_report_profiles,
+    weeklyReportAssignments: members.rows
       .filter((member) => member.weekly_report_required && member.email.toLowerCase() !== 'admin')
       .sort((left, right) => Number(left.weekly_report_position) - Number(right.weekly_report_position))
-      .map((member) => Number(member.user_id)),
+      .map((member) => ({
+        profiles: member.weekly_report_profiles,
+        userId: Number(member.user_id),
+      })),
     createdAt: row.created_at.toISOString(),
     id: Number(row.id),
     invitations: invitations.rows.map((invite) => ({
@@ -1067,6 +1088,7 @@ async function getOrganizationDetail(
       joinedAt: member.joined_at.toISOString(),
       roles: member.roles,
       username: member.email,
+      weeklyReportProfiles: member.weekly_report_profiles,
       weeklyReportRequired: member.weekly_report_required,
     })),
     name: decryptText(row.name),
@@ -1157,9 +1179,10 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       member_count: string
       name: string
       package_market_enabled: boolean | null
+      weekly_report_profiles: WeeklyReportProfile[]
     }>(
       `
-      select o.id, o.name, mine.access_role,
+      select o.id, o.name, mine.access_role, mine.weekly_report_profiles,
         count(m.user_id) filter (where m.status = 'active') as member_count,
         (
           coalesce(feature.enabled, true)
@@ -1221,7 +1244,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       left join organization_package_market_channel_policies ci_channel
         on ci_channel.organization_id = o.id and ci_channel.channel = 'ci'
       where mine.user_id = $1 and mine.status = 'active'
-      group by o.id, mine.access_role, feature.enabled,
+      group by o.id, mine.access_role, mine.weekly_report_profiles, feature.enabled,
         selection_policy.organization_id, selection_policy.mode,
         release_channel.enabled, release_channel.mode,
         ci_channel.enabled, ci_channel.mode
@@ -1235,6 +1258,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       memberCount: Number(organization.member_count),
       name: decryptText(organization.name),
       packageMarketEnabled: organization.package_market_enabled !== false,
+      weeklyReportProfiles: organization.weekly_report_profiles,
     })).sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
     response.json({
       canCreate: false,
@@ -1513,11 +1537,9 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     if (!(await requireOrganizationWeeklyReportManager(response, organizationId, session.userId))) return
     const weekStartsOn = normalizeOrganizationWeekStartsOn(request.body?.weekStartsOn)
     const weeklyReportRules = normalizeWeeklyReportRules(request.body?.weeklyReportRules)
-    const weeklyReportAssigneeUserIds = weeklyReportAssigneeIds(
-      request.body?.weeklyReportAssigneeUserIds,
-    )
+    const assignments = weeklyReportAssignments(request.body?.weeklyReportAssignments)
     if (!weekStartsOn || !weeklyReportRules
-      || !weeklyReportAssigneeUserIds) {
+      || !assignments) {
       response.status(400).json({
         error: '周报规则无效：请检查填写成员、日期和时间设置',
       })
@@ -1546,7 +1568,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         response.status(409).json({ error: '组织权限已变化，请刷新后重试' })
         return
       }
-      const assigneeIds = weeklyReportAssigneeUserIds
+      const assigneeIds = assignments.map((assignment) => assignment.userId)
       const assignees = await client.query<{ user_id: string }>(
         `select membership.user_id
          from organization_memberships membership
@@ -1561,6 +1583,27 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       if (assignees.rows.length !== assigneeIds.length) {
         await client.query('rollback')
         response.status(400).json({ error: '周报填写成员必须是当前组织成员' })
+        return
+      }
+      const roles = await client.query<{ role: string; user_id: string }>(
+        `select user_id, role from user_roles where user_id = any($1::bigint[])`,
+        [assigneeIds],
+      )
+      const rolesByUserId = new Map<number, string[]>()
+      for (const row of roles.rows) {
+        const current = rolesByUserId.get(Number(row.user_id)) ?? []
+        current.push(row.role)
+        rolesByUserId.set(Number(row.user_id), current)
+      }
+      const invalidAssignment = assignments.find((assignment) => {
+        const roles = rolesByUserId.get(assignment.userId) ?? []
+        return assignment.profiles.some((profile) => (
+          !roles.includes(profile) && !roles.includes('organization_admin')
+        ))
+      })
+      if (invalidAssignment) {
+        await client.query('rollback')
+        response.status(400).json({ error: '周报类型必须与成员的职业角色一致' })
         return
       }
       await client.query(
@@ -1582,15 +1625,23 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         ],
       )
       await client.query(
-        `update organization_memberships membership
-         set weekly_report_required = (membership.user_id = any($2::bigint[])),
-             weekly_report_sort_order = array_position($2::bigint[], membership.user_id) - 1
+        `with assignment as (
+           select (entry.value->>'userId')::bigint as user_id,
+             array(select jsonb_array_elements_text(entry.value->'profiles')) as profiles,
+             entry.ordinality - 1 as sort_order
+           from jsonb_array_elements($2::jsonb) with ordinality as entry(value, ordinality)
+         )
+         update organization_memberships membership
+         set weekly_report_profiles = coalesce(assignment.profiles, '{}'::text[]),
+             weekly_report_required = assignment.user_id is not null,
+             weekly_report_sort_order = assignment.sort_order
          from users
+         left join assignment on assignment.user_id = users.id
          where membership.organization_id = $1
            and membership.status = 'active'
            and users.id = membership.user_id
         `,
-        [organizationId, assigneeIds],
+        [organizationId, JSON.stringify(assignments)],
       )
       await writeAudit(
         client,
@@ -1599,7 +1650,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         'organization.weekly_report_rules_changed',
         'organization',
         String(organizationId),
-        JSON.stringify({ weekStartsOn, weeklyReportAssigneeUserIds: assigneeIds, weeklyReportRules }),
+        JSON.stringify({ weekStartsOn, weeklyReportAssignments: assignments, weeklyReportRules }),
       )
       await client.query('commit')
     } catch (error) {
@@ -1756,13 +1807,14 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
         `insert into organization_memberships
           (organization_id, user_id, access_role, status, weekly_report_required,
            invited_by_user_id, joined_at, removed_at)
-         values ($1, $2, 'member', 'active', $4, $3, now(), null)
+         values ($1, $2, 'member', 'active', false, $3, now(), null)
          on conflict (organization_id, user_id) do update
            set access_role = case
                  when organization_memberships.access_role = 'owner' then 'owner'
                  else 'member'
                end,
                status = 'active',
+               weekly_report_profiles = '{}'::text[],
                weekly_report_required = excluded.weekly_report_required,
                weekly_report_sort_order = null,
                invited_by_user_id = excluded.invited_by_user_id,
@@ -1770,7 +1822,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
                removed_at = null
          where organization_memberships.status <> 'active'
          returning user_id`,
-        [organizationId, targetUserId, session.userId, username !== 'admin'],
+        [organizationId, targetUserId, session.userId],
       )
       if (!membership.rows[0]) {
         await client.query('rollback')
@@ -3153,7 +3205,10 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
          on membership.organization_id = r.organization_id
         and membership.user_id = r.user_id
         and membership.status = 'active'
-        and membership.weekly_report_required = true
+        and (
+          coalesce(revision.report_profile, r.report_profile) is null
+          or coalesce(revision.report_profile, r.report_profile) = any(membership.weekly_report_profiles)
+        )
        where r.organization_id = $1 and r.week_start = $2 and r.status = 'submitted'
          and r.deleted_at is null
          and lower(u.email) <> 'admin'
@@ -3590,7 +3645,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
           `insert into organization_memberships
             (organization_id, user_id, access_role, status, weekly_report_required,
              invited_by_user_id, joined_at, removed_at)
-           select $1, $2, 'member', 'active', lower(users.email) <> 'admin',
+           select $1, $2, 'member', 'active', false,
              invitation.invited_by_user_id, now(), null
            from organization_invitations invitation
            join users on users.id = $2
@@ -3598,6 +3653,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
            on conflict (organization_id, user_id) do update
              set access_role = case when organization_memberships.access_role = 'owner' then 'owner' else 'member' end,
                status = 'active',
+               weekly_report_profiles = '{}'::text[],
                weekly_report_required = excluded.weekly_report_required,
                weekly_report_sort_order = null,
                removed_at = null, joined_at = now()`,

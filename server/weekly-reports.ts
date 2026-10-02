@@ -54,6 +54,7 @@ type WeeklyReportRouterDependencies = {
 type OrganizationMembership = {
   access_role: OrganizationAccessRole
   organization_id: string
+  weekly_report_profiles: WeeklyReportProfile[]
   weekly_report_required: boolean
 }
 
@@ -101,11 +102,21 @@ function requestedProfile(request: express.Request, activeRole: string) {
 
 function requestedDeletionProfile(request: express.Request, activeRole: string): WeeklyReportProfile | null {
   const requested = request.query.profile ?? request.body?.profile
-  if (requested !== 'legacy') return requestedProfile(request, activeRole)
+  if (requested !== 'legacy') {
+    if (!isWeeklyReportProfile(requested)) throw new WeeklyReportError(400, '请选择周报身份')
+    return requested
+  }
   if (!isWeeklyReportProfile(activeRole) && activeRole !== 'organization_admin') {
     throw new WeeklyReportError(403, '请切换到开发或测试身份')
   }
   return null
+}
+
+function requestedReadProfile(request: express.Request, activeRole: string) {
+  const requested = request.query.profile
+  const candidate = typeof requested === 'string' ? requested : activeRole
+  if (!isWeeklyReportProfile(candidate)) throw new WeeklyReportError(403, '请切换到开发或测试身份')
+  return candidate
 }
 
 function requireActiveWeeklyRole(activeRole: string) {
@@ -199,7 +210,7 @@ async function checkSources(client: PoolClient, params: Parameters<typeof valida
 
 async function getMembership(client: PoolClient, organizationId: number, userId: number) {
   const result = await client.query<OrganizationMembership>(
-    `select organization_id, access_role, weekly_report_required
+    `select organization_id, access_role, weekly_report_profiles, weekly_report_required
      from organization_memberships
      where organization_id = $1 and user_id = $2 and status = 'active'`,
     [organizationId, userId],
@@ -217,21 +228,23 @@ async function requireWeeklyReportAssignee(
   client: PoolClient,
   organizationId: number,
   userId: number,
+  profile: WeeklyReportProfile,
 ) {
   const result = await client.query<OrganizationMembership>(
-    `select organization_id, access_role, weekly_report_required
+    `select organization_id, access_role, weekly_report_profiles, weekly_report_required
      from organization_memberships
      where organization_id = $1
        and user_id = $2
        and status = 'active'
        and weekly_report_required = true
+       and $3::text = any(weekly_report_profiles)
      for update`,
-    [organizationId, userId],
+    [organizationId, userId, profile],
   )
   if (!result.rows[0]) {
     const membership = await getMembership(client, organizationId, userId)
     if (!membership) throw new WeeklyReportError(404, '组织不存在')
-    throw new WeeklyReportError(403, '当前无需填写周报')
+    throw new WeeklyReportError(403, '当前未配置该类型周报')
   }
   return result.rows[0]
 }
@@ -370,7 +383,7 @@ async function saveDraft(params: {
       [`weekly-report:${params.organizationId}:${params.userId}:${params.weekStart}:${params.profile}`],
     )
     await requireWeeklyProfile(client, params.userId, params.profile)
-    await requireWeeklyReportAssignee(client, params.organizationId, params.userId)
+    await requireWeeklyReportAssignee(client, params.organizationId, params.userId, params.profile)
     const weekStart = await normalizeExistingReportWeek(
       client,
       params.organizationId,
@@ -532,20 +545,17 @@ async function getWeeklyReport(organizationId: number, userId: number, weekStart
 async function listWeeklyReports(
   organizationId: number,
   userId: number,
-  activeProfile: WeeklyReportProfile,
   limit: number,
   offset: number,
 ) {
   const client = await pool.connect()
   try {
     await requireMember(client, organizationId, userId)
-    await requireWeeklyProfile(client, userId, activeProfile)
     const countResult = await client.query<{ total: string }>(
       `select count(*) as total
        from organization_weekly_reports
-       where organization_id = $1 and user_id = $2 and deleted_at is null
-         and (report_profile = $3::text or report_profile is null)`,
-      [organizationId, userId, activeProfile],
+       where organization_id = $1 and user_id = $2 and deleted_at is null`,
+      [organizationId, userId],
     )
     const reportResult = await client.query<{
       draft_version: number
@@ -570,10 +580,9 @@ async function listWeeklyReports(
        left join organization_weekly_report_revisions revision
          on revision.id = report.published_revision_id
        where report.organization_id = $1 and report.user_id = $2 and report.deleted_at is null
-         and (report.report_profile = $5::text or report.report_profile is null)
        order by report.week_start desc, report.id desc
        limit $3 offset $4`,
-      [organizationId, userId, limit, offset, activeProfile],
+      [organizationId, userId, limit, offset],
     )
     return {
       items: reportResult.rows.map((report) => ({
@@ -614,7 +623,7 @@ async function submitWeeklyReport(params: {
       [`weekly-report:${params.organizationId}:${params.userId}:${params.weekStart}:${params.profile}`],
     )
     await requireWeeklyProfile(client, params.userId, params.profile)
-    await requireWeeklyReportAssignee(client, params.organizationId, params.userId)
+    await requireWeeklyReportAssignee(client, params.organizationId, params.userId, params.profile)
     const weekStart = await normalizeExistingReportWeek(
       client,
       params.organizationId,
@@ -720,8 +729,13 @@ async function deleteWeeklyReport(params: {
     await client.query('select pg_advisory_xact_lock(hashtextextended($1::text, 0))', [
       `weekly-report:${params.organizationId}:${params.userId}:${weekStart}:${params.profile ?? 'legacy'}`,
     ])
-    if (params.profile) await requireWeeklyProfile(client, params.userId, params.profile)
-    await requireWeeklyReportAssignee(client, params.organizationId, params.userId)
+    if (params.profile) {
+      await requireWeeklyProfile(client, params.userId, params.profile)
+      await requireWeeklyReportAssignee(client, params.organizationId, params.userId, params.profile)
+    } else {
+      // Legacy rows are retained for read-only history and may be removed by their owner.
+      await requireMember(client, params.organizationId, params.userId)
+    }
     const result = await client.query<{
       id: string
       published_revision_id: string | null
@@ -986,24 +1000,8 @@ async function loadCollection(client: PoolClient, organizationId: number, weekSt
      from organization_memberships membership
      join users on users.id = membership.user_id
      left join lateral (
-       select roles.role::text as profile from user_roles roles
-        where roles.user_id = membership.user_id and roles.role in ('developer', 'tester')
-       union
-       select report.report_profile from organization_weekly_reports report
-        where report.organization_id = membership.organization_id and report.user_id = membership.user_id
-          and report.week_start = $2 and report.deleted_at is null and report.report_profile in ('developer', 'tester')
-       union
-       select available.profile from unnest(array['developer', 'tester']::text[]) as available(profile)
-        where exists (select 1 from user_roles roles where roles.user_id = membership.user_id and roles.role = 'organization_admin')
-       union
-       select null::text where membership.weekly_report_required = true
-         and not exists (
-           select 1 from user_roles roles where roles.user_id = membership.user_id and roles.role in ('developer', 'tester', 'organization_admin')
-         )
-         and not exists (
-           select 1 from organization_weekly_reports report where report.organization_id = membership.organization_id
-             and report.user_id = membership.user_id and report.week_start = $2 and report.deleted_at is null
-         )
+       select assigned.profile::text as profile
+         from unnest(membership.weekly_report_profiles) as assigned(profile)
        union
        select null::text where exists (
          select 1 from organization_weekly_reports legacy
@@ -1093,12 +1091,11 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
-    const profile = requestedProfile(request, session.activeRole)
     const organizationId = positiveId(request.params.organizationId)
     if (!organizationId) throw new WeeklyReportError(400, '组织参数无效')
     const limit = paginationParam(request.query.limit, 10, 1, 50, '分页大小')
     const offset = paginationParam(request.query.offset, 0, 0, 100_000, '分页位置')
-    response.json(await listWeeklyReports(organizationId, session.userId, profile, limit, offset))
+    response.json(await listWeeklyReports(organizationId, session.userId, limit, offset))
   }))
 
   router.get('/weekly-reports/:organizationId/:weekStart', asyncRoute(async (request, response) => {
@@ -1107,7 +1104,7 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
       response.status(401).json({ error: 'Unauthorized' })
       return
     }
-    const profile = requestedProfile(request, session.activeRole)
+    const profile = requestedReadProfile(request, session.activeRole)
     const organizationId = positiveId(request.params.organizationId)
     if (!organizationId) throw new WeeklyReportError(400, '组织参数无效')
     const weekStart = routeParam(request.params.weekStart)
@@ -1194,7 +1191,7 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
         routeParam(request.params.weekStart),
       )
       await requireWeeklyProfile(client, session.userId, profile)
-      await requireWeeklyReportAssignee(client, organizationId, session.userId)
+      await requireWeeklyReportAssignee(client, organizationId, session.userId, profile)
       const organization = await client.query<{ name: string; user_name: string }>(
         `select organization.name,
            coalesce(nullif(users.display_name, ''), users.email)::text as user_name
@@ -1385,6 +1382,7 @@ export function createWeeklyReportRouter(dependencies: WeeklyReportRouterDepende
          where membership.organization_id = $1
            and membership.status = 'active'
            and membership.weekly_report_required = true
+           and $4::text = any(membership.weekly_report_profiles)
            and lower(users.email) <> 'admin'
            and report.published_revision_id is null
            and coalesce(report.status, 'draft') <> 'submitted'

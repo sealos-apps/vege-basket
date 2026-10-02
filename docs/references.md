@@ -294,17 +294,18 @@ case/weekly-report pagination remain unchanged.
   report, while an empty set is valid. Changes take effect immediately across personal write and
   AI-generation permission, collection counts, reminder targets, and organization AI summaries;
   removed assignees retain read-only access to their own historical reports.
-- Organization detail returns `weeklyReportAssigneeUserIds` in weekly-report display order.
-  `PATCH /api/organizations/:organizationId/weekly-report-rules` interprets the same array as
-  ordered IDs, deduplicating by first occurrence. Saving atomically replaces the assignee set
-  and zero-based positions; deselected members lose their position. Existing unranked members
-  follow ranked members in name/username order with user ID as a stable tie breaker. New and
-  restored memberships remain unranked until the next rule save. The rule editor uses one
-  list: selected members remain first with their draft assignment checkbox, draft-order
-  position, and up/down controls; unselected members follow with assignment checkboxes.
-  Search filters only unselected members so the entire selected order remains available.
-  New selections append to the selected order; checkbox, bulk selection, and reorder changes
-  take effect together only on rule save.
+- Organization detail returns `weeklyReportAssignments` in weekly-report display order. Each
+  assignment contains a member ID and one or both enabled personas (`developer` and `tester`).
+  A single-role member is assigned that persona by default; a member with both roles must have
+  at least one persona selected explicitly. `PATCH /api/organizations/:organizationId/weekly-report-rules`
+  validates every persona against the member's occupational roles, then atomically replaces the
+  assignments and zero-based positions. A member can enter a weekly-report surface only while
+  the active persona is assigned; an unassigned persona remains hidden. Deselected members lose
+  their position. Existing unranked members follow ranked members in name/username order with
+  user ID as a stable tie breaker. New and restored memberships start with no assignment until
+  the next rule save. The rule editor uses one list: selected members remain first with persona
+  checkboxes and up/down controls; unselected members follow with assignment checkboxes. Search
+  filters only unselected members so the entire selected order remains available.
 - Weekly-rule configuration shows a live example for the calendar period containing today's
   Shanghai date: report range, opening, deadline (inclusive through its minute), and next
   opening. `T`/`T+1` refer to report periods; day 1 is the configured organization week start.

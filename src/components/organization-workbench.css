@@ -1507,11 +1507,31 @@
 .organization-weekly-assignee-list > li:not(.organization-weekly-assignee-empty) {
   min-width: 0;
   display: grid;
-  grid-template-columns: 20px 2ch minmax(0, 1fr) 56px;
+  grid-template-columns: 20px 2ch minmax(150px, 1fr) minmax(210px, auto) 56px;
   align-items: center;
   gap: 8px;
   padding: 9px 4px;
   border-bottom: 1px solid var(--line);
+}
+
+.organization-weekly-assignee-profiles {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.organization-weekly-assignee-profiles > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--strong);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.organization-weekly-assignee-profile-hint {
+  color: var(--muted-text);
+  font-size: 12px;
 }
 
 .organization-weekly-assignee-list > li:last-child {

@@ -328,11 +328,16 @@ participate in the idempotent `db:encrypt-existing` command for legacy plaintext
 Before rollout, retain a database snapshot and the complete encryption key ring. An application
 rollback may leave these nullable columns intact; it does not restore the database.
 
-The earlier weekly-report assignee release adds
-`organization_memberships.weekly_report_required`. Existing and future memberships default to
-requiring a report, while the reserved `admin` account is excluded. The application startup path
-applies the compatible addition idempotently; the matching forward-only migration remains the
-independent structural record and must only be run against an explicitly authorized database.
+The weekly-report assignment release adds
+`organization_memberships.weekly_report_profiles` and keeps
+`organization_memberships.weekly_report_required` as its derived compatibility flag. Existing
+members are backfilled from their occupational roles; new and restored memberships start with no
+assignment. Single-role members are selected by default in the organization rule editor, while
+dual-role members require an explicit developer/tester choice. Only assigned personas expose the
+corresponding personal weekly-report entry point. The reserved `admin` account is excluded. The
+application startup path applies the compatible addition idempotently; the matching forward-only
+migration remains the independent structural record and must only be run against an explicitly
+authorized database.
 
 Weekly-report assignee ordering adds the nullable nonnegative integer
 `organization_memberships.weekly_report_sort_order`; the forward-only record is

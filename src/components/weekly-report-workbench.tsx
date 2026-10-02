@@ -253,7 +253,7 @@ function sourceKey(source: WeeklyReportSourceRef) {
 
 export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, WeeklyReportWorkbenchProps>(function WeeklyReportWorkbench({
   activeProfile = 'developer',
-  availableProfiles = [activeProfile],
+  availableProfiles: providedAvailableProfiles = [activeProfile],
   navigationBusy = false,
   embedded = false,
   initialOrganizationId = null,
@@ -272,6 +272,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     resolvedInitialOrganizationId && initialWeekStart ? 'editor' : 'list'
   ))
   const [weekStartsOn, setWeekStartsOn] = useState(1)
+  const [availableProfiles, setAvailableProfiles] = useState<WeeklyReportProfile[]>(providedAvailableProfiles)
   const [weeklyReportRules, setWeeklyReportRules] = useState<WeeklyReportRules>(defaultWeeklyReportRules)
   const [canWriteWeeklyReport, setCanWriteWeeklyReport] = useState<boolean | null>(null)
   const [weekStart, setWeekStart] = useState('')
@@ -459,6 +460,10 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   }, [activeProfile, availableProfiles, reportProfile])
 
   useEffect(() => {
+    setAvailableProfiles(providedAvailableProfiles)
+  }, [providedAvailableProfiles])
+
+  useEffect(() => {
     if (previousOrganizationId.current === organizationId) return
     previousOrganizationId.current = organizationId
     setReportList(null)
@@ -499,7 +504,9 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
         setWeekStartsOn(detail.weekStartsOn)
         setOrganizationName(detail.name)
         setWeeklyReportRules(detail.weeklyReportRules)
-        setCanWriteWeeklyReport(detail.canWriteWeeklyReport)
+        const eligibleProfiles = detail.weeklyReportProfiles.filter((profile) => providedAvailableProfiles.includes(profile))
+        setAvailableProfiles(eligibleProfiles)
+        setCanWriteWeeklyReport(eligibleProfiles.includes(activeProfile))
         const current = currentWeekStart(detail.weekStartsOn, today)
         const preferredWeek = organizationId === initialContext.current.organizationId
           && initialContext.current.weekStart
@@ -521,7 +528,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     return () => {
       active = false
     }
-  }, [organizationId, today])
+  }, [activeProfile, organizationId, providedAvailableProfiles, today])
 
   useEffect(() => {
     if (workspaceView !== 'editor' || !organizationId || !weekStart) return
@@ -572,7 +579,6 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     fetchPersonalWeeklyReports(organizationId, {
       limit: REPORT_LIST_PAGE_SIZE,
       offset: reportListPage * REPORT_LIST_PAGE_SIZE,
-      profile: reportProfile,
     })
       .then((result) => {
         if (!active) return
@@ -589,7 +595,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     return () => {
       active = false
     }
-  }, [backgroundRefreshVersion, organizationId, reportListPage, reportListRefresh, reportProfile, workspaceView])
+  }, [backgroundRefreshVersion, organizationId, reportListPage, reportListRefresh, workspaceView])
 
   useEffect(() => {
     if (workspaceView !== 'list' || !reportList || reportListPage !== 0) return
@@ -756,31 +762,6 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     setWeekStart(targetWeekStart)
     setWorkspaceView('editor')
     setError('')
-  }
-
-  async function changeReportProfile(profile: WeeklyReportProfile) {
-    if (profile === reportProfile || busy || saveInFlight.current) return
-    setCreatingNewReport(false)
-    setRequestedInitialProfile(null)
-    if (workspaceView === 'editor') {
-      if (report?.readOnlyReason) {
-        resetEditorState()
-        setReportProfile(profile)
-        return
-      }
-      setBusy(true)
-      try {
-        await persistDraft()
-        resetEditorState()
-        setReportProfile(profile)
-      } catch (saveError) {
-        setError(errorMessage(saveError))
-      } finally {
-        setBusy(false)
-      }
-      return
-    }
-    setReportProfile(profile)
   }
 
   async function changeEditorWeek(targetWeekStart: string) {
@@ -953,16 +934,6 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     )
     : null
 
-  const profileTabs = availableProfiles.length > 1 ? (
-    <div className="weekly-report-profile-tabs" role="tablist" aria-label="周报身份">
-      {availableProfiles.map(profile => (
-        <button key={profile} type="button" role="tab" aria-selected={reportProfile === profile} onClick={() => void changeReportProfile(profile)}>
-          {weeklyReportProfiles[profile].label}
-        </button>
-      ))}
-    </div>
-  ) : null
-
   if (!organizationId) {
     return (
       <div className="weekly-report-empty">
@@ -985,8 +956,6 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   return (
     <section className={`weekly-report-workbench is-${workspaceView}`} aria-label="周报管理">
       {weeklyReportToolbar}
-      {workspaceView === 'editor' ? profileTabs : null}
-
       {error ? <div className="weekly-report-error" role="alert">{error}</div> : null}
 
       {preview !== null ? (
@@ -1048,7 +1017,6 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
               <h2>我的周报</h2>
               <span>共 {reportList?.total ?? 0} 份</span>
             </div>
-        {profileTabs}
           </header>
 
           {reportListLoading && !reportList ? (
@@ -1067,6 +1035,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
               {reportList.items.map((item) => {
                 const state = reportStateMeta[item.state]
                 const reportLabel = item.reportProfile ? weeklyReportProfiles[item.reportProfile].label : '历史格式周报'
+                const canEditItem = Boolean(canWriteWeeklyReport && item.reportProfile === activeProfile && !item.publishedRevision)
                 return (
                   <article className="weekly-report-list-row" key={`${item.weekStart}:${item.reportProfile ?? 'legacy'}`} role="listitem">
                     <div className="weekly-report-list-period">
@@ -1085,14 +1054,14 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
                     </div>
                     <div className="weekly-report-list-actions">
                     <Button
-                      aria-label={`${canWriteWeeklyReport && !item.publishedRevision ? '编辑' : '查看'} ${formatWeekRange(item.weekStart)} 周报`}
-                      title={canWriteWeeklyReport && !item.publishedRevision ? '编辑周报' : '查看周报'}
+                      aria-label={`${canEditItem ? '编辑' : '查看'} ${formatWeekRange(item.weekStart)} 周报`}
+                      title={canEditItem ? '编辑周报' : '查看周报'}
                       type="button"
                       variant="outline"
                       onClick={() => openEditor(item.weekStart, item.state === 'submitted', item.reportProfile ?? reportProfile)}
                     >
-                      {canWriteWeeklyReport ? <PencilSimple size={16} /> : <ClipboardText size={16} />}
-                      {canWriteWeeklyReport && item.state !== 'submitted' ? '继续填写' : '查看'}
+                      {canEditItem ? <PencilSimple size={16} /> : <ClipboardText size={16} />}
+                      {canEditItem ? '继续填写' : '查看'}
                     </Button>
                     <ConfirmActionDialog
                       actionKey={`weekly-report:${organizationId}:${item.weekStart}:${item.reportProfile ?? 'legacy'}`}
@@ -1101,7 +1070,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
                         ? `将撤回并删除${reportLabel}。组织当前汇总会标记为过期并需重新生成，历史汇总快照保留。截止时间后不能执行。`
                         : `将删除${reportLabel}草稿及其关联来源。`}
                       confirmLabel={item.publishedRevision ? '撤回并删除' : '删除草稿'}
-                      trigger={<Button aria-label={`删除${formatWeekRange(item.weekStart)}${reportLabel}`} disabled={deleteBusy} size="icon" title="删除周报" type="button" variant="ghost"><Trash size={16} /></Button>}
+                      trigger={<Button aria-label={`${item.publishedRevision ? '撤回并删除' : '删除'}${formatWeekRange(item.weekStart)}${reportLabel}`} disabled={deleteBusy} title={item.publishedRevision ? '撤回并删除周报' : '删除周报'} type="button" variant="destructive"><Trash size={16} />{item.publishedRevision ? '撤回并删除' : '删除'}</Button>}
                       onConfirm={() => deleteReport(item)}
                     />
                     </div>

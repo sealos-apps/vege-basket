@@ -269,7 +269,8 @@ create table if not exists organization_memberships (
     check (access_role in ('owner', 'admin', 'member')),
   status text not null default 'active'
     check (status in ('active', 'removed')),
-  weekly_report_required boolean not null default true,
+  weekly_report_required boolean not null default false,
+  weekly_report_profiles text[] not null default '{}'::text[],
   invited_by_user_id bigint references users(id) on delete set null,
   joined_at timestamptz not null default now(),
   removed_at timestamptz,
@@ -277,14 +278,54 @@ create table if not exists organization_memberships (
 );
 
 alter table organization_memberships
-  add column if not exists weekly_report_required boolean not null default true;
+  add column if not exists weekly_report_required boolean not null default false;
+
+alter table organization_memberships
+  add column if not exists weekly_report_profiles text[] not null default '{}'::text[];
+
+update organization_memberships membership
+set weekly_report_profiles = coalesce((
+  select array_agg(profile order by profile)
+  from (
+    select distinct case
+      when role.role = 'organization_admin' then profile.value
+      else role.role
+    end as profile
+    from user_roles role
+    cross join lateral unnest(
+      case when role.role = 'organization_admin'
+        then array['developer', 'tester']::text[]
+        else array[role.role]::text[]
+      end
+    ) profile(value)
+    where role.user_id = membership.user_id
+      and role.role in ('developer', 'tester', 'organization_admin')
+  ) assigned_profiles
+), '{}'::text[])
+where membership.weekly_report_required = true
+  and cardinality(membership.weekly_report_profiles) = 0;
+
+update organization_memberships
+set weekly_report_required = cardinality(weekly_report_profiles) > 0
+where weekly_report_required is distinct from (cardinality(weekly_report_profiles) > 0);
+
+alter table organization_memberships
+  drop constraint if exists organization_memberships_weekly_report_profiles_check;
+
+alter table organization_memberships
+  add constraint organization_memberships_weekly_report_profiles_check check (
+    weekly_report_profiles <@ array['developer', 'tester']::text[]
+    and cardinality(weekly_report_profiles) <= 2
+    and weekly_report_required = (cardinality(weekly_report_profiles) > 0)
+  );
 
 alter table organization_memberships
   add column if not exists weekly_report_sort_order integer
     check (weekly_report_sort_order >= 0);
 
 update organization_memberships membership
-set weekly_report_required = false
+set weekly_report_profiles = '{}'::text[],
+    weekly_report_required = false
 from users
 where users.id = membership.user_id
   and lower(users.email) = 'admin'
