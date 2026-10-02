@@ -128,9 +128,23 @@ jobs:
     env:
       K8S_DEPLOYMENT_NAME: ${{ vars.K8S_DEPLOYMENT_NAME }}
     steps:
+      - name: 检查 Kubernetes 发布配置
+        id: deployment-gate
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$KUBE_CONFIG" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::未配置 KUBE_CONFIG，跳过 Kubernetes 发布"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: 安装 kubectl
+        if: steps.deployment-gate.outputs.enabled == 'true'
         uses: azure/setup-kubectl@v4
       - name: 配置集群凭据
+        if: steps.deployment-gate.outputs.enabled == 'true'
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
         run: |
@@ -143,6 +157,7 @@ jobs:
           test -n "$KUBE_NAMESPACE"
           echo "KUBECONFIG=$KUBECONFIG_PATH" >> "$GITHUB_ENV"
       - name: 更新工作负载镜像
+        if: steps.deployment-gate.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           test -n "$K8S_DEPLOYMENT_NAME"
@@ -166,6 +181,7 @@ jobs:
             "deployment/$K8S_DEPLOYMENT_NAME" \
             --timeout=10m
       - name: 验证线上镜像
+        if: steps.deployment-gate.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
