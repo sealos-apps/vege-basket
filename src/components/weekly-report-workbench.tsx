@@ -73,6 +73,8 @@ import { weeklyReportProfiles, weeklyReportSourceIdentity, type WeeklyReportItem
 import { WeeklyReportForm, WeeklyReportReading, type WeeklyReportFormHandle } from './weekly-report-form'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog'
 import { ConfirmActionDialog } from './confirm-action-dialog'
+import { OrganizationPermissionErrorDialog } from './organization-permission-error-dialog'
+import { isOrganizationPermissionError, organizationPermissionErrorMessage } from './organization-permission-error'
 import './weekly-report-workbench.css'
 
 class WeeklyReportEditorBoundary extends Component<
@@ -243,10 +245,6 @@ function reportSignature(params: {
   return JSON.stringify({ content: params.content, sourceMode: params.sourceMode, sources, itemSources: params.itemSources ?? [] })
 }
 
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '操作失败，请稍后重试'
-}
-
 function sourceKey(source: WeeklyReportSourceRef) {
   return `${source.kind}:${source.id}`
 }
@@ -315,6 +313,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   const busy = internalBusy || navigationBusy
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
+  const [organizationPermissionError, setOrganizationPermissionError] = useState('')
   const [saveState, setSaveState] = useState<'idle' | 'saved' | 'saving'>('idle')
   const lastSavedSignature = useRef('')
   const saveInFlight = useRef(false)
@@ -324,6 +323,18 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   const loadedReportListContext = useRef('')
   const selectAllSourcesCheckbox = useRef<HTMLInputElement>(null)
   const today = now.slice(0, 10)
+
+  const showOrganizationPermissionError = useCallback((failure: unknown) => {
+    if (!isOrganizationPermissionError(failure)) return false
+    setOrganizationPermissionError(organizationPermissionErrorMessage(failure))
+    return true
+  }, [])
+
+  const setOperationError = useCallback((failure: unknown, fallback?: string) => {
+    if (showOrganizationPermissionError(failure)) return true
+    setError(failure instanceof Error ? failure.message : (fallback ?? '操作失败，请稍后重试'))
+    return false
+  }, [showOrganizationPermissionError])
 
   useEffect(() => {
     activeContext.current = `${organizationId}:${weekStart}:${reportProfile}`
@@ -521,14 +532,14 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
       })
       .catch((loadError) => {
         if (active) {
-          setError(errorMessage(loadError))
+          setOperationError(loadError)
           setLoading(false)
         }
       })
     return () => {
       active = false
     }
-  }, [activeProfile, organizationId, providedAvailableProfiles, today])
+  }, [activeProfile, organizationId, providedAvailableProfiles, setOperationError, today])
 
   useEffect(() => {
     if (workspaceView !== 'editor' || !organizationId || !weekStart) return
@@ -560,7 +571,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
         setError('')
       })
       .catch((loadError) => {
-        if (active) setError(errorMessage(loadError))
+        if (active) setOperationError(loadError)
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -568,7 +579,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     return () => {
       active = false
     }
-  }, [activeProfile, applyReport, canWriteWeeklyReport, creatingNewReport, organizationId, reportProfile, requestedInitialProfile, weekStart, workspaceView])
+  }, [activeProfile, applyReport, canWriteWeeklyReport, creatingNewReport, organizationId, reportProfile, requestedInitialProfile, setOperationError, weekStart, workspaceView])
 
   useEffect(() => {
     if (workspaceView !== 'list' || !organizationId) return
@@ -587,7 +598,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
         setError('')
       })
       .catch((loadError) => {
-        if (active) setError(errorMessage(loadError))
+        if (active) setOperationError(loadError)
       })
       .finally(() => {
         if (active && showLoading) setReportListLoading(false)
@@ -595,6 +606,8 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     return () => {
       active = false
     }
+  // setOperationError is stable and does not define this refresh scope.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backgroundRefreshVersion, organizationId, reportListPage, reportListRefresh, workspaceView])
 
   useEffect(() => {
@@ -627,7 +640,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
       const candidates = await fetchWeeklyReportSources(organizationId, weekStart, reportProfile)
       setSourceCandidates(candidates.sources)
       setSourceTruncated(Object.values(candidates.truncated).some(Boolean))
-    } catch (conversionError) { setError(errorMessage(conversionError)) } finally { setBusy(false) }
+    } catch (conversionError) { setOperationError(conversionError) } finally { setBusy(false) }
   }
 
   const persistDraft = useCallback(async () => {
@@ -662,12 +675,12 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
       return next
     } catch (saveError) {
       setSaveState('idle')
-      setError(errorMessage(saveError))
+      setOperationError(saveError)
       throw saveError
     } finally {
       saveInFlight.current = false
     }
-  }, [reportProfile, canWriteWeeklyReport, content, itemSources, organizationId, report, selectedSources, sourceMode, weekStart])
+  }, [reportProfile, canWriteWeeklyReport, content, itemSources, organizationId, report, selectedSources, setOperationError, sourceMode, weekStart])
 
   const prepareOrganizationChange = useCallback(async () => {
     if (busy || saveInFlight.current) return false
@@ -817,7 +830,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
       })
       if (activeContext.current === contextKey) applyReport(next)
     } catch (generateError) {
-      setError(errorMessage(generateError))
+      setOperationError(generateError)
     } finally {
       setGenerating(false)
       setBusy(false)
@@ -849,7 +862,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
         setReportListRefresh((value) => value + 1)
       }
     } catch (submitError) {
-      setError(errorMessage(submitError))
+      setOperationError(submitError)
     } finally {
       setBusy(false)
     }
@@ -869,7 +882,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
       }
       return true
     } catch (deleteError) {
-      setError(errorMessage(deleteError))
+      setOperationError(deleteError)
       return false
     } finally {
       setDeleteBusy(false)
@@ -955,6 +968,10 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
 
   return (
     <section className={`weekly-report-workbench is-${workspaceView}`} aria-label="周报管理">
+      <OrganizationPermissionErrorDialog
+        message={organizationPermissionError}
+        onOpenChange={(open) => { if (!open) setOrganizationPermissionError('') }}
+      />
       {weeklyReportToolbar}
       {error ? <div className="weekly-report-error" role="alert">{error}</div> : null}
 

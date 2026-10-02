@@ -204,6 +204,8 @@ import type { PackageMarketCiBranch, PackageMarketRule, PackageMarketVersion, Pr
 import './test-workbench.css'
 import { TestPlanExecutionPanel } from './test-plan-execution'
 import { testPlanExecutionBugEvidence } from '../test-plan-execution'
+import { OrganizationPermissionErrorDialog } from './organization-permission-error-dialog'
+import { isOrganizationPermissionError, organizationPermissionErrorMessage } from './organization-permission-error'
 
 type WorkbenchTab = 'cases' | 'plans' | 'bugs' | 'weekly_report' | 'notifications'
 
@@ -694,6 +696,7 @@ export function TestWorkbench({
   const [loadedScopeKeys, setLoadedScopeKeys] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [organizationPermissionError, setOrganizationPermissionError] = useState('')
   const [tab, setTab] = useState<WorkbenchTab>('cases')
   const [spaceId, setSpaceId] = useState<number>()
   const [subjectId, setSubjectId] = useState<number>()
@@ -754,6 +757,17 @@ export function TestWorkbench({
   const viewStateReadyRef = useRef(false)
   const localWeeklyReportRef = useRef<WeeklyReportWorkbenchHandle>(null)
   const weeklyReportWorkbenchRef = weeklyReportRef ?? localWeeklyReportRef
+  const showOrganizationPermissionError = useCallback((failure: unknown) => {
+    if (!isOrganizationPermissionError(failure)) return false
+    setOrganizationPermissionError(organizationPermissionErrorMessage(failure))
+    return true
+  }, [])
+
+  const setWorkbenchError = useCallback((failure: unknown, fallback = '操作失败。') => {
+    if (showOrganizationPermissionError(failure)) return true
+    setError(failure instanceof Error ? failure.message : fallback)
+    return false
+  }, [showOrganizationPermissionError])
   async function changeTab(next: WorkbenchTab) {
     if (tab === 'weekly_report' && !(await weeklyReportWorkbenchRef.current?.prepareOrganizationChange() ?? true)) return
     setTab(next)
@@ -797,18 +811,20 @@ export function TestWorkbench({
               setTab('notifications')
             }
           })
-          .catch(() => undefined)
+          .catch((settingsError) => {
+            if (!cancelled) setWorkbenchError(settingsError, '测试空间加载失败。')
+          })
       })
       .catch((loadError) => {
         if (cancelled) return
-        setError(loadError instanceof Error ? loadError.message : '测试工作台加载失败。')
+        setWorkbenchError(loadError, '测试工作台加载失败。')
         setLoading(false)
       })
     return () => {
       cancelled = true
       controller.abort()
     }
-  }, [currentUserId])
+  }, [currentUserId, setWorkbenchError])
 
   useEffect(() => {
     if (!viewStateReadyRef.current) return
@@ -909,7 +925,7 @@ export function TestWorkbench({
         })
       }
     }).catch((loadError: unknown) => {
-      if (!cancelled) setError(loadError instanceof Error ? loadError.message : '用例加载失败。')
+      if (!cancelled) setWorkbenchError(loadError, '用例加载失败。')
     }).finally(() => {
       if (!cancelled) setSectionLoading(false)
     })
@@ -917,7 +933,7 @@ export function TestWorkbench({
       cancelled = true
       controller.abort()
     }
-  }, [loadedScopeKeys, loading, spaceId, tab])
+  }, [loadedScopeKeys, loading, setWorkbenchError, spaceId, tab])
 
   useEffect(() => {
     setInvitePasswordDraft('')
@@ -1153,7 +1169,7 @@ export function TestWorkbench({
         }
       })
       .catch((loadError: unknown) => {
-        if (!cancelled) setError(loadError instanceof Error ? loadError.message : 'Bug 详情加载失败。')
+        if (!cancelled) setWorkbenchError(loadError, 'Bug 详情加载失败。')
       })
       .finally(() => {
         if (!cancelled) setBugDetailLoading(false)
@@ -1162,7 +1178,7 @@ export function TestWorkbench({
       cancelled = true
       controller.abort()
     }
-  }, [data.bugs, loading, selectedBugId, spaceId, tab])
+  }, [data.bugs, loading, selectedBugId, setWorkbenchError, spaceId, tab])
 
   useEffect(() => {
     if (subjectDeleteDialogOpen || !subjectPendingDelete) return
@@ -1198,7 +1214,7 @@ export function TestWorkbench({
       return true
     } catch (mutationError) {
       if (confirmed) throw mutationError
-      setError(mutationError instanceof Error ? mutationError.message : '保存失败，请稍后重试。')
+      setWorkbenchError(mutationError, '保存失败，请稍后重试。')
       return false
     } finally {
       setBusy(false)
@@ -1283,7 +1299,7 @@ export function TestWorkbench({
       await refreshSpaceSettings()
       return true
     } catch (creationError) {
-      setError(creationError instanceof Error ? creationError.message : '测试空间创建失败。')
+      setWorkbenchError(creationError, '测试空间创建失败。')
       return false
     } finally {
       setBusy(false)
@@ -1293,7 +1309,7 @@ export function TestWorkbench({
   async function handleOwnershipTransfer(id:number,action:'accept'|'decline'){
     setBusy(true);setError('')
     try{const result=await respondTestSpaceTransfer(id,action);setSpaceSettings(result.settings);setData(result.workbench)}
-    catch(error){setError(error instanceof Error?error.message:'转移处理失败。')}
+    catch(error){setWorkbenchError(error, '转移处理失败。')}
     finally{setBusy(false)}
   }
   async function handleAcceptInvitation(invitationSpaceId: number) {
@@ -1307,7 +1323,7 @@ export function TestWorkbench({
       setTab('cases')
       return true
     } catch (invitationError) {
-      setError(invitationError instanceof Error ? invitationError.message : '邀请处理失败。')
+      setWorkbenchError(invitationError, '邀请处理失败。')
       return false
     } finally {
       setBusy(false)
@@ -1646,6 +1662,7 @@ export function TestWorkbench({
       <TestSpaceSettingsDialog
         currentSpaceId={spaceId}
         open={spaceAdministrationOpen}
+        onPermissionError={showOrganizationPermissionError}
         onOpenChange={setSpaceAdministrationOpen}
         onCreateSpace={() => {
           setSpaceAdministrationOpen(false)
@@ -1667,6 +1684,10 @@ export function TestWorkbench({
           setBugFilterConditions(next.conditions)
           setBugFilterJoin(next.join)
         }}
+      />
+      <OrganizationPermissionErrorDialog
+        message={organizationPermissionError}
+        onOpenChange={(open) => { if (!open) setOrganizationPermissionError('') }}
       />
       <TestSpaceCreateDialog
         busy={busy}
@@ -4022,10 +4043,11 @@ function TestSpaceDataImportDialog({ busy, error, onOpenChange, onSubmit, open, 
   )
 }
 
-function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, onWorkbenchChange, open }: {
+function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, onPermissionError, onWorkbenchChange, open }: {
   currentSpaceId?: number
   onCreateSpace: () => void
   onOpenChange: (open: boolean) => void
+  onPermissionError: (error: unknown) => boolean
   onWorkbenchChange: () => Promise<void>
   open: boolean
 }) {
@@ -4070,9 +4092,11 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
           return result.spaces[0]?.id
         })
       })
-      .catch((loadError) => setError(loadError instanceof Error ? loadError.message : '测试空间加载失败。'))
+      .catch((loadError) => {
+        if (!onPermissionError(loadError)) setError(loadError instanceof Error ? loadError.message : '测试空间加载失败。')
+      })
       .finally(() => setLoading(false))
-  }, [currentSpaceId, open])
+  }, [currentSpaceId, onPermissionError, open])
 
   useEffect(() => {
     setRenameValue(selectedSpace?.name ?? '')
@@ -4101,7 +4125,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
       return true
     } catch (mutationError) {
       if (confirmed) throw mutationError
-      setError(mutationError instanceof Error ? mutationError.message : '测试空间保存失败。')
+      if (!onPermissionError(mutationError)) setError(mutationError instanceof Error ? mutationError.message : '测试空间保存失败。')
       return false
     } finally {
       setBusy(false)
@@ -4143,7 +4167,7 @@ function TestSpaceSettingsDialog({ currentSpaceId, onCreateSpace, onOpenChange, 
       await onWorkbenchChange()
       return result.result
     } catch (mutationError) {
-      setDataImportError(mutationError instanceof Error ? mutationError.message : '数据转入失败。')
+      if (!onPermissionError(mutationError)) setDataImportError(mutationError instanceof Error ? mutationError.message : '数据转入失败。')
       return null
     } finally {
       setDataImportBusy(false)
@@ -5962,8 +5986,14 @@ export function AssignedTestBugs({
   const [filterConditions, setFilterConditions] = useState<BugFilterCondition[]>(createDefaultBugFilterConditions)
   const [selectedSpaceId, setSelectedSpaceId] = useState<number>()
   const [searchQuery, setSearchQuery] = useState('')
+  const [organizationPermissionError, setOrganizationPermissionError] = useState('')
   const refreshInFlightRef = useRef(false)
   const onBugsChangeRef = useRef(onBugsChange)
+  const showOrganizationPermissionError = useCallback((failure: unknown) => {
+    if (!isOrganizationPermissionError(failure)) return false
+    setOrganizationPermissionError(organizationPermissionErrorMessage(failure))
+    return true
+  }, [])
 
   useEffect(() => {
     onBugsChangeRef.current = onBugsChange
@@ -6012,13 +6042,13 @@ export function AssignedTestBugs({
           : result.bugs[0]?.id)
       })
       .catch((loadError) => {
-        if (active) setError(loadError instanceof Error ? loadError.message : 'Bug 加载失败。')
+        if (active && !showOrganizationPermissionError(loadError)) setError(loadError instanceof Error ? loadError.message : 'Bug 加载失败。')
       })
       .finally(() => {
         if (active) setLoading(false)
       })
     return () => { active = false }
-  }, [currentUserId, initialBugId, organizationId])
+  }, [currentUserId, initialBugId, organizationId, showOrganizationPermissionError])
 
   useEffect(() => {
     let active = true
@@ -6041,7 +6071,9 @@ export function AssignedTestBugs({
               : result.bugs[0]?.testSpaceId
           })
         })
-        .catch(() => undefined)
+        .catch((refreshError) => {
+          if (active) showOrganizationPermissionError(refreshError)
+        })
         .then(() => {
           refreshInFlightRef.current = false
         })
@@ -6055,7 +6087,7 @@ export function AssignedTestBugs({
       window.removeEventListener('focus', refresh)
       document.removeEventListener('visibilitychange', refresh)
     }
-  }, [currentUserId, organizationId])
+  }, [currentUserId, organizationId, showOrganizationPermissionError])
 
   const spaceBugs = useMemo(() => bugs.filter((bug) => bug.testSpaceId === selectedSpaceId), [bugs, selectedSpaceId])
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase('zh-CN')
@@ -6101,7 +6133,7 @@ export function AssignedTestBugs({
 
   useEffect(() => {
     if (selected) onBugSeen?.(selected)
-  }, [onBugSeen, selected])
+  }, [onBugSeen, selected, showOrganizationPermissionError])
 
   useEffect(() => {
     if (transferDialogOpen || !transferBug) return
@@ -6122,7 +6154,7 @@ export function AssignedTestBugs({
       return true
     } catch (mutationError) {
       if (confirmed) throw mutationError
-      setError(mutationError instanceof Error ? mutationError.message : '操作失败。')
+      if (!showOrganizationPermissionError(mutationError)) setError(mutationError instanceof Error ? mutationError.message : '操作失败。')
       return false
     } finally {
       setBusy(false)
@@ -6330,6 +6362,10 @@ export function AssignedTestBugs({
           setFilterConditions(next.conditions)
           setFilterJoin(next.join)
         }}
+      />
+      <OrganizationPermissionErrorDialog
+        message={organizationPermissionError}
+        onOpenChange={(open) => { if (!open) setOrganizationPermissionError('') }}
       />
     </Root>
   )

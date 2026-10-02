@@ -66,6 +66,7 @@ function message(error: unknown) {
   return error instanceof Error ? error.message : '操作失败，请重试。'
 }
 type Refresh = () => Promise<void>
+type PermissionErrorHandler = (error: unknown) => boolean
 type ProjectAction = 'edit' | 'transfer' | 'delete'
 const projectTitles = {
   edit: '编辑项目',
@@ -78,11 +79,13 @@ export function OrganizationProjectActions({
   detail,
   onRefresh,
   disabled,
+  onPermissionError,
 }: {
   project: OrganizationProject
   detail: OrganizationDetail
   onRefresh: Refresh
   disabled: boolean
+  onPermissionError?: PermissionErrorHandler
 }) {
   const [action, setAction] = useState<ProjectAction | null>(null)
   return (
@@ -139,6 +142,7 @@ export function OrganizationProjectActions({
           detail={detail}
           onClose={() => setAction(null)}
           onRefresh={onRefresh}
+          onPermissionError={onPermissionError}
         />
       ) : null}
     </>
@@ -151,12 +155,14 @@ function ProjectActionDialog({
   detail,
   onClose,
   onRefresh,
+  onPermissionError,
 }: {
   action: ProjectAction
   project: OrganizationProject
   detail: OrganizationDetail
   onClose: () => void
   onRefresh: Refresh
+  onPermissionError?: PermissionErrorHandler
 }) {
   const [name, setName] = useState(project.name)
   const [description, setDescription] = useState(project.description)
@@ -196,7 +202,7 @@ function ProjectActionDialog({
       await onRefresh()
       if (action !== 'transfer') onClose()
     } catch (failure) {
-      setError(message(failure))
+      if (!onPermissionError?.(failure)) setError(message(failure))
     } finally {
       setBusy(false)
     }
@@ -425,10 +431,12 @@ export function OrganizationTestSpaces({
   heading,
   detail,
   onRefresh,
+  onPermissionError,
 }: {
   heading?: ReactNode
   detail: OrganizationDetail
   onRefresh: Refresh
+  onPermissionError?: PermissionErrorHandler
 }) {
   const [selection, setSelection] = useState<{
     id?: number
@@ -533,6 +541,7 @@ export function OrganizationTestSpaces({
           action={selection.action}
           onClose={() => setSelection(null)}
           onRefresh={onRefresh}
+          onPermissionError={onPermissionError}
         />
       ) : null}
     </>
@@ -545,12 +554,14 @@ function SpaceActionDialog({
   action,
   onClose,
   onRefresh,
+  onPermissionError,
 }: {
   detail: OrganizationDetail
   spaceId?: number
   action: SpaceAction
   onClose: () => void
   onRefresh: Refresh
+  onPermissionError?: PermissionErrorHandler
 }) {
   const [settings, setSettings] = useState<TestSpaceSettings | null>(null)
   const [name, setName] = useState('')
@@ -590,11 +601,13 @@ function SpaceActionDialog({
         if (current) {
           setName(current.name)
           setVersion(current.versionLabel ?? '')
-        } else if (spaceId)
-          setError('测试空间已移出当前组织，或你已失去管理权限。')
+        } else if (spaceId) {
+          const failure = new Error('测试空间已移出当前组织，或你已失去管理权限。')
+          if (!onPermissionError?.(failure)) setError(failure.message)
+        }
       })
       .catch((failure) => {
-        if (active) setError(message(failure))
+        if (active && !onPermissionError?.(failure)) setError(message(failure))
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -602,7 +615,7 @@ function SpaceActionDialog({
     return () => {
       active = false
     }
-  }, [spaceId, detail.id])
+  }, [detail.id, onPermissionError, spaceId])
   const canAct =
     action === 'create'
       ? detail.canManageTestSpaces
@@ -614,8 +627,13 @@ function SpaceActionDialog({
                 ? space.canDelete
                 : action === 'transfer'
                   ? space.canTransferOwnership
-                  : space.canManageSettings),
+                : space.canManageSettings),
         )
+  useEffect(() => {
+    if (loading || canAct || error) return
+    const failure = new Error('你已失去此操作的管理权限，请刷新后重试；如仍失败，请确认你是该组织 Owner/Admin。')
+    if (!onPermissionError?.(failure)) setError(failure.message)
+  }, [canAct, error, loading, onPermissionError])
   async function mutate(
     operation: () => Promise<unknown>,
     close = false,
@@ -632,7 +650,7 @@ function SpaceActionDialog({
       if (close) onClose()
       return true
     } catch (failure) {
-      setError(message(failure))
+      if (!onPermissionError?.(failure)) setError(message(failure))
       if (rethrowFailure) throw failure
       return false
     } finally {
@@ -888,9 +906,6 @@ function SpaceActionDialog({
             className="organization-resource-form"
             onSubmit={(event) => void submit(event)}
           >
-            {!canAct && !error ? (
-              <p role="alert">你已失去此操作的管理权限，请关闭后刷新列表。</p>
-            ) : null}
             {action === 'create' || action === 'edit' ? (
               <Label>
                 空间名称

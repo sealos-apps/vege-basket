@@ -975,7 +975,9 @@ export function OrganizationWorkbench({
     } finally {
       if (request === weeklyCollectionRequest.current.version) setWeeklyCollectionLoading(false)
     }
-  }, [canManageWeeklyReports, showOrganizationPermissionError, weekStart, weeklyOrganizationId])
+  // The permission handler is stable and deliberately not part of this refresh scope.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canManageWeeklyReports, weekStart, weeklyOrganizationId])
 
   useEffect(() => {
     const requests = weeklyCollectionRequest.current
@@ -1288,7 +1290,7 @@ export function OrganizationWorkbench({
 
         {tab === 'testSpaces' && activeDetailSectionLoaded ? <>
           {testResourceTab === 'spaces' ? <section className="organization-section organization-resource-panel">
-            <OrganizationTestSpaces key={detail.id} detail={detail} onRefresh={refreshResources} heading={<TestResourceTabs value={testResourceTab} onChange={setTestResourceTab} detail={detail} />} />
+            <OrganizationTestSpaces key={detail.id} detail={detail} onRefresh={refreshResources} onPermissionError={showOrganizationPermissionError} heading={<TestResourceTabs value={testResourceTab} onChange={setTestResourceTab} detail={detail} />} />
             {detail.attachableTestSpaces.length > 0 ? <div className="organization-attach-list">{detail.attachableTestSpaces.map(space=><Button disabled={busy} key={space.id} variant="outline" onClick={()=>void mutate(()=>attachTestSpaceToOrganization(detail.id,space.id))}><Plus size={15}/>{space.name}</Button>)}</div>:null}
           </section> : <OrganizationTestEnvironmentPanel busy={busy} detail={detail} onMutate={mutate} heading={<TestResourceTabs value={testResourceTab} onChange={setTestResourceTab} detail={detail} />} />}
         </> : null}

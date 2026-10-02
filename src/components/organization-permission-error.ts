@@ -1,4 +1,4 @@
-const organizationPermissionErrorPattern = /组织.*权限.*?(?:已变化|校验未通过)|Organization (?:access changed|management access could not be verified)|权限已变化/u
+const organizationPermissionErrorPattern = /组织.*?(?:权限|管理权限).*?(?:已变化|校验未通过|失去|required)|(?:Target )?organization (?:access changed|management access could not be verified|management access is required)|权限已变化|失去.*管理权限/iu
 
 export function isOrganizationPermissionError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? '')
