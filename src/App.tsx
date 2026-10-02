@@ -2073,7 +2073,7 @@ function App() {
     const targetOrganizationId = requestedWeeklyReport.organizationId
     if (!organizations.some((organization) => organization.id === targetOrganizationId)) {
       setWorkspaceError('周报链接已失效或你无权访问对应组织。')
-      setRequestedWeeklyReport({ organizationId: null, status: 'absent', weekStart: null })
+      setRequestedWeeklyReport({ organizationId: null, profile: null, status: 'absent', weekStart: null })
       setView('search')
       const search = removeWeeklyReportDeepLink(window.location.search)
       window.history.replaceState({}, '', `${window.location.pathname}${search}${window.location.hash}`)
@@ -2816,6 +2816,12 @@ function App() {
       (organization) => organization.id === selectedOrganizationId && organization.packageMarketEnabled,
     ) ?? null
   const packageMarketVisible = activePackageMarketOrganization !== null
+  const activeWeeklyReportProfiles = selectedOrganizationId == null
+    ? []
+    : organizations.find((organization) => organization.id === selectedOrganizationId)?.weeklyReportProfiles ?? []
+  const weeklyReportVisible = Boolean(
+    authUser && activeWeeklyReportProfiles.includes(authUser.activeRole as 'developer' | 'tester'),
+  )
 
   useEffect(() => {
     if (view === 'package_market' && !packageMarketVisible) {
@@ -2824,10 +2830,10 @@ function App() {
   }, [packageMarketVisible, view])
 
   useEffect(() => {
-    if (view === 'weekly_report' && selectedOrganizationId === null) {
+    if (view === 'weekly_report' && (!selectedOrganizationId || !weeklyReportVisible)) {
       setView('search')
     }
-  }, [selectedOrganizationId, view])
+  }, [selectedOrganizationId, view, weeklyReportVisible])
 
   useEffect(() => {
     setInvitePasswordDraft('')
@@ -5345,6 +5351,12 @@ ${packageTimelineText}`
         {changelogAnnouncementDialog}
         <TestWorkbench
           weeklyReportRef={weeklyReportWorkbenchRef}
+          weeklyReportProfiles={authUser.roles.includes('organization_admin')
+            ? [...new Set(organizations.flatMap((organization) => organization.weeklyReportProfiles))]
+            : authUser.roles.filter((role): role is 'developer' | 'tester' => role === 'developer' || role === 'tester')}
+          weeklyReportOrganizationProfiles={Object.fromEntries(
+            organizations.map((organization) => [organization.id, organization.weeklyReportProfiles]),
+          )}
           navigationBusy={roleSelectionBusy}
           accountMenu={(
             <AccountMenu
@@ -5430,7 +5442,7 @@ ${packageTimelineText}`
                       <Tray size={18} weight="duotone" /> 草稿箱
                     </NavButton>
                   ) : null}
-                  {selectedOrganizationId !== null ? (
+                  {selectedOrganizationId !== null && weeklyReportVisible ? (
                     <NavButton active={view === 'weekly_report'} onClick={() => setView('weekly_report')}>
                       <FileText size={18} weight="duotone" /> 周报管理
                     </NavButton>
@@ -6009,6 +6021,9 @@ ${packageTimelineText}`
           <WeeklyReportWorkbench
             navigationBusy={roleSelectionBusy}
             activeProfile={authUser?.activeRole === 'tester' ? 'tester' : 'developer'}
+            availableProfiles={authUser
+              ? activeWeeklyReportProfiles.filter((profile) => profile === authUser.activeRole)
+              : []}
             ref={weeklyReportWorkbenchRef}
             initialOrganizationId={requestedWeeklyReport.status === 'valid'
               ? requestedWeeklyReport.organizationId
@@ -6016,9 +6031,11 @@ ${packageTimelineText}`
             initialWeekStart={requestedWeeklyReport.status === 'valid'
               ? requestedWeeklyReport.weekStart
               : null}
+            initialProfile={requestedWeeklyReport.status === 'valid' ? requestedWeeklyReport.profile : null}
             organizationId={selectedOrganizationId}
             onInitialContextConsumed={() => setRequestedWeeklyReport({
               organizationId: null,
+              profile: null,
               status: 'absent',
               weekStart: null,
             })}

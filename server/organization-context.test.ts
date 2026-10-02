@@ -33,7 +33,7 @@ test('serializes personal and organization contexts for API requests', () => {
 })
 
 test('personal and organization navigation keep their distinct daily work entries', () => {
-  assert.match(appSource, /selectedOrganizationId !== null \? \(\s*<NavButton active=\{view === 'weekly_report'\}/u)
+  assert.match(appSource, /selectedOrganizationId !== null && weeklyReportVisible \? \(\s*<NavButton active=\{view === 'weekly_report'\}/u)
   assert.match(appSource, /selectedOrganizationId === null \? \(\s*<NavButton active=\{view === 'inbox'\}/u)
   assert.match(appSource, /selectedOrganizationId === null \? \(\s*<NavButton\s+active=\{view === 'ai'\}/u)
   assert.match(appSource, /selectedOrganizationId !== null \? \(\s*<NavGroup label="协作与交付"/u)

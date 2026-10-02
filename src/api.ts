@@ -49,6 +49,7 @@ import {
   type AiIntentClassification,
 } from '../shared/ai-input-intent'
 import { parseAiTurnRunResponse } from '../shared/ai-conversation-wire'
+import type { WeeklyReportProfile } from '../shared/weekly-report-profile'
 import type { UserAccountStatus } from '../shared/user-lifecycle'
 import type {
   OrganizationPackageMarketChannelPolicy,
@@ -986,8 +987,8 @@ export function updateOrganizationWeeklyReportRules(
   organizationId: number,
   payload: {
     weekStartsOn: number
-    /** Ordered user IDs; new selections are appended by the client. */
-    weeklyReportAssigneeUserIds: number[]
+    /** Ordered member assignments; each member selects one or both report personas. */
+    weeklyReportAssignments: Array<{ profiles: Array<'developer' | 'tester'>; userId: number }>
     weeklyReportRules: WeeklyReportRules
   },
 ) {
@@ -1216,8 +1217,9 @@ export function generateOrganizationWeeklySummary(organizationId: number, weekSt
   )
 }
 
-export function fetchPersonalWeeklyReport(organizationId: number, weekStart: string) {
-  return request<PersonalWeeklyReport>(`/api/weekly-reports/${organizationId}/${weekStart}`)
+export function fetchPersonalWeeklyReport(organizationId: number, weekStart: string, profile: string, createNew = false) {
+  const query = new URLSearchParams({ profile, ...(createNew ? { new: '1' } : {}) })
+  return request<PersonalWeeklyReport>(`/api/weekly-reports/${organizationId}/${weekStart}?${query}`)
 }
 
 export function fetchPersonalWeeklyReports(
@@ -1231,9 +1233,9 @@ export function fetchPersonalWeeklyReports(
   return request<PersonalWeeklyReportList>(`/api/weekly-reports/${organizationId}?${query}`)
 }
 
-export function fetchWeeklyReportSources(organizationId: number, weekStart: string) {
+export function fetchWeeklyReportSources(organizationId: number, weekStart: string, profile: string) {
   return request<WeeklyReportSourceResult>(
-    `/api/weekly-reports/${organizationId}/${weekStart}/sources`,
+    `/api/weekly-reports/${organizationId}/${weekStart}/sources?profile=${encodeURIComponent(profile)}`,
   )
 }
 
@@ -1241,6 +1243,7 @@ export function savePersonalWeeklyReportDraft(
   organizationId: number,
   weekStart: string,
   payload: {
+    profile: string
     content: string
     convertLegacy?: boolean
     itemSources?: WeeklyReportItemSources[]
@@ -1258,7 +1261,7 @@ export function savePersonalWeeklyReportDraft(
 export function generatePersonalWeeklyReport(
   organizationId: number,
   weekStart: string,
-  payload: { expectedVersion: number; sources: WeeklyReportSourceRef[] },
+  payload: { expectedVersion: number; profile: string; sources: WeeklyReportSourceRef[] },
 ) {
   return request<PersonalWeeklyReport>(
     `/api/weekly-reports/${organizationId}/${weekStart}/generate`,
@@ -1270,10 +1273,22 @@ export function submitPersonalWeeklyReport(
   organizationId: number,
   weekStart: string,
   expectedVersion: number,
+  profile: string,
 ) {
   return request<PersonalWeeklyReport>(
     `/api/weekly-reports/${organizationId}/${weekStart}/submit`,
-    { body: JSON.stringify({ expectedVersion }), method: 'POST' },
+    { body: JSON.stringify({ expectedVersion, profile }), method: 'POST' },
+  )
+}
+
+export function deletePersonalWeeklyReport(
+  organizationId: number,
+  weekStart: string,
+  profile: WeeklyReportProfile | 'legacy',
+) {
+  return request<{ deleted: true }>(
+    `/api/weekly-reports/${organizationId}/${weekStart}?profile=${encodeURIComponent(profile)}`,
+    { method: 'DELETE' },
   )
 }
 
@@ -1287,10 +1302,11 @@ export function remindWeeklyReportMembers(
   organizationId: number,
   weekStart: string,
   userIds: number[],
+  profile: string,
 ) {
   return request<{ failed: number; sent: number; skipped: number }>(
     `/api/organizations/${organizationId}/weekly-report-reminders/${weekStart}`,
-    { body: JSON.stringify({ userIds }), method: 'POST' },
+    { body: JSON.stringify({ userIds, profile }), method: 'POST' },
   )
 }
 

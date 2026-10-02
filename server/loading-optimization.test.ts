@@ -61,7 +61,7 @@ test('background refreshes preserve workbench content and editor state', () => {
   )
   assert.match(
     weeklyReportSource,
-    /\}, \[now, reportList, reportListPage, weekStartsOn, weeklyReportRules, workspaceView\]\)/u,
+    /\}, \[now, reportList, reportListPage, reportProfile, weekStartsOn, weeklyReportRules, workspaceView\]\)/u,
   )
 })
 

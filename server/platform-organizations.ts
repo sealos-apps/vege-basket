@@ -230,8 +230,8 @@ export async function createPlatformOrganization(input: {
     await client.query(
       `insert into organization_memberships
         (organization_id, user_id, access_role, status, weekly_report_required, invited_by_user_id)
-       values ($1, $2, 'owner', 'active', $3, $4)`,
-      [organizationId, input.ownerUserId, !ownerRow.is_builtin_admin, input.actorUserId],
+       values ($1, $2, 'owner', 'active', false, $3)`,
+      [organizationId, input.ownerUserId, input.actorUserId],
     )
     await client.query(
       `insert into organization_audit_events

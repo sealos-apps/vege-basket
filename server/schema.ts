@@ -269,7 +269,8 @@ create table if not exists organization_memberships (
     check (access_role in ('owner', 'admin', 'member')),
   status text not null default 'active'
     check (status in ('active', 'removed')),
-  weekly_report_required boolean not null default true,
+  weekly_report_required boolean not null default false,
+  weekly_report_profiles text[] not null default '{}'::text[],
   invited_by_user_id bigint references users(id) on delete set null,
   joined_at timestamptz not null default now(),
   removed_at timestamptz,
@@ -277,14 +278,54 @@ create table if not exists organization_memberships (
 );
 
 alter table organization_memberships
-  add column if not exists weekly_report_required boolean not null default true;
+  add column if not exists weekly_report_required boolean not null default false;
+
+alter table organization_memberships
+  add column if not exists weekly_report_profiles text[] not null default '{}'::text[];
+
+update organization_memberships membership
+set weekly_report_profiles = coalesce((
+  select array_agg(profile order by profile)
+  from (
+    select distinct case
+      when role.role = 'organization_admin' then profile.value
+      else role.role
+    end as profile
+    from user_roles role
+    cross join lateral unnest(
+      case when role.role = 'organization_admin'
+        then array['developer', 'tester']::text[]
+        else array[role.role]::text[]
+      end
+    ) profile(value)
+    where role.user_id = membership.user_id
+      and role.role in ('developer', 'tester', 'organization_admin')
+  ) assigned_profiles
+), '{}'::text[])
+where membership.weekly_report_required = true
+  and cardinality(membership.weekly_report_profiles) = 0;
+
+update organization_memberships
+set weekly_report_required = cardinality(weekly_report_profiles) > 0
+where weekly_report_required is distinct from (cardinality(weekly_report_profiles) > 0);
+
+alter table organization_memberships
+  drop constraint if exists organization_memberships_weekly_report_profiles_check;
+
+alter table organization_memberships
+  add constraint organization_memberships_weekly_report_profiles_check check (
+    weekly_report_profiles <@ array['developer', 'tester']::text[]
+    and cardinality(weekly_report_profiles) <= 2
+    and weekly_report_required = (cardinality(weekly_report_profiles) > 0)
+  );
 
 alter table organization_memberships
   add column if not exists weekly_report_sort_order integer
     check (weekly_report_sort_order >= 0);
 
 update organization_memberships membership
-set weekly_report_required = false
+set weekly_report_profiles = '{}'::text[],
+    weekly_report_required = false
 from users
 where users.id = membership.user_id
   and lower(users.email) = 'admin'
@@ -380,13 +421,19 @@ create table if not exists organization_weekly_reports (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   submitted_at timestamptz,
-  unique (organization_id, user_id, week_start)
+  deleted_at timestamptz,
+  deleted_by_user_id bigint references users(id) on delete set null
 );
+alter table organization_weekly_reports
+  drop constraint if exists organization_weekly_reports_organization_id_user_id_week_start_key;
 
 alter table organization_weekly_reports
   add column if not exists draft_content text not null default '',
   add column if not exists draft_version integer not null default 1,
-  add column if not exists draft_source_mode text not null default 'manual';
+  add column if not exists draft_source_mode text not null default 'manual',
+  add column if not exists report_profile text check (report_profile in ('developer', 'tester')),
+  add column if not exists deleted_at timestamptz,
+  add column if not exists deleted_by_user_id bigint references users(id) on delete set null;
 
 update organization_weekly_reports
 set draft_content = content
@@ -410,12 +457,14 @@ create table if not exists organization_weekly_report_revisions (
   source_mode text not null default 'manual' check (source_mode in ('manual', 'ai')),
   submitted_by_user_id bigint references users(id) on delete set null,
   submitted_at timestamptz not null default now(),
+  report_profile text check (report_profile in ('developer', 'tester')),
   unique (report_id, revision_number),
   unique (id, report_id)
 );
 
 alter table organization_weekly_report_revisions
-  add column if not exists draft_version integer not null default 1;
+  add column if not exists draft_version integer not null default 1,
+  add column if not exists report_profile text check (report_profile in ('developer', 'tester'));
 
 alter table organization_weekly_reports
   add column if not exists published_revision_id bigint
@@ -457,6 +506,7 @@ create table if not exists organization_weekly_report_reminders (
   target_user_id bigint not null references users(id) on delete cascade,
   requested_by_user_id bigint references users(id) on delete set null,
   week_start date not null,
+  report_profile text check (report_profile in ('developer', 'tester')),
   reminder_day date not null,
   status text not null default 'pending'
     check (status in ('pending', 'sent', 'failed', 'skipped')),
@@ -474,10 +524,24 @@ create table if not exists organization_weekly_summaries (
   requested_by_user_id bigint references users(id) on delete set null,
   content text not null,
   source_report_count integer not null default 0,
+  stale boolean not null default false,
+  stale_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (organization_id, week_start)
 );
+alter table organization_weekly_summaries
+  add column if not exists stale boolean not null default false,
+  add column if not exists stale_at timestamptz;
+alter table organization_weekly_report_reminders
+  add column if not exists report_profile text check (report_profile in ('developer', 'tester'));
+alter table organization_weekly_report_reminders
+  drop constraint if exists organization_weekly_report_reminders_organization_id_target_user_id_week_start_reminder_day_key;
+drop index if exists idx_organization_weekly_report_reminders_organization_id_target_user_id_week_start_reminder_day_key;
+create unique index if not exists idx_weekly_report_reminders_profile
+  on organization_weekly_report_reminders(organization_id, target_user_id, week_start, reminder_day, report_profile);
+alter table organization_weekly_reports
+  drop constraint if exists organization_weekly_reports_organization_id_user_id_week_start_key;
 
 -- Organization owners are also organization administrators. Keep this
 -- idempotent so existing organizations receive the same capability as new ones.
@@ -2684,6 +2748,17 @@ alter table organization_weekly_reports
   add column if not exists report_profile text check (report_profile in ('developer', 'tester'));
 alter table organization_weekly_report_revisions
   add column if not exists report_profile text check (report_profile in ('developer', 'tester'));
+alter table organization_weekly_reports
+  drop constraint if exists organization_weekly_reports_organization_id_user_id_week_start_key;
+create unique index if not exists idx_organization_weekly_reports_active_profile
+  on organization_weekly_reports(organization_id, user_id, week_start, report_profile)
+  where deleted_at is null and report_profile is not null;
+create unique index if not exists idx_organization_weekly_reports_active_legacy
+  on organization_weekly_reports(organization_id, user_id, week_start)
+  where deleted_at is null and report_profile is null;
+create index if not exists idx_organization_weekly_reports_user_week
+  on organization_weekly_reports(organization_id, user_id, week_start desc)
+  where deleted_at is null;
 create table if not exists organization_weekly_report_test_sources (
   id bigserial primary key,
   report_id bigint not null references organization_weekly_reports(id) on delete cascade,

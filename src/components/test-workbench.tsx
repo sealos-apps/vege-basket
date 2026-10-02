@@ -90,6 +90,7 @@ import {
   WeeklyReportWorkbench,
   type WeeklyReportWorkbenchHandle,
 } from './weekly-report-workbench'
+import type { WeeklyReportProfile } from '../../shared/weekly-report-profile'
 import { BugShareDialog } from './bug-share-dialog'
 import { UserName } from './user-name'
 import {
@@ -667,6 +668,8 @@ type TestSpaceOrganizationGroup = {
 
 export function TestWorkbench({
   weeklyReportRef,
+  weeklyReportProfiles = ['tester'],
+  weeklyReportOrganizationProfiles = {},
   navigationBusy = false,
   accountMenu,
   currentUserId,
@@ -676,6 +679,8 @@ export function TestWorkbench({
 }: {
   navigationBusy?: boolean
   weeklyReportRef?: { current: WeeklyReportWorkbenchHandle | null }
+  weeklyReportProfiles?: WeeklyReportProfile[]
+  weeklyReportOrganizationProfiles?: Record<number, WeeklyReportProfile[]>
   accountMenu: ReactNode
   currentUserId?: number
   projects: TestWorkbenchProjectOption[]
@@ -975,6 +980,15 @@ export function TestWorkbench({
   const activeSpace = data.spaces.find((space) => space.id === spaceId)
   const activeManagedSpace = spaceSettings.spaces.find((space) => space.id === spaceId)
   const activeWeeklyReportOrganizationId = activeManagedSpace?.organizationId ?? null
+  const activeWeeklyReportProfiles = useMemo(() => activeWeeklyReportOrganizationId == null
+    ? []
+    : (weeklyReportOrganizationProfiles[activeWeeklyReportOrganizationId] ?? [])
+      .filter((profile) => profile === 'tester' && weeklyReportProfiles.includes(profile)),
+  [activeWeeklyReportOrganizationId, weeklyReportOrganizationProfiles, weeklyReportProfiles])
+
+  useEffect(() => {
+    if (tab === 'weekly_report' && !activeWeeklyReportProfiles.includes('tester')) setTab('cases')
+  }, [activeWeeklyReportProfiles, tab])
   const testSpaceOrganizationGroups = useMemo<TestSpaceOrganizationGroup[]>(() => {
     const visibleSpaceIds = new Set(data.spaces.map((space) => space.id))
     const groups = new Map<string, TestSpaceOrganizationGroup>()
@@ -1420,7 +1434,7 @@ export function TestWorkbench({
               <button className={tab === 'cases' ? 'active' : ''} onClick={() => void changeTab('cases')}><ClipboardText /><span className="test-nav-label">用例管理</span><span className="test-nav-count">{activeSpace?.caseCount ?? 0}</span></button>
               <button className={tab === 'plans' ? 'active' : ''} onClick={() => void changeTab('plans')}><ListChecks /><span className="test-nav-label">测试计划</span><span className="test-nav-count">{activeSpace?.planCount ?? 0}</span></button>
               <button className={tab === 'bugs' ? 'active' : ''} onClick={() => void changeTab('bugs')}><Bug /><span className="test-nav-label">Bug 追踪</span><span className="test-nav-count">{activeSpace?.bugCount ?? 0}</span></button>
-              <button className={tab === 'weekly_report' ? 'active' : ''} onClick={() => void changeTab('weekly_report')}><FileText /><span className="test-nav-label">周报管理</span><span className="test-nav-count" /></button>
+              {activeWeeklyReportProfiles.includes('tester') ? <button className={tab === 'weekly_report' ? 'active' : ''} onClick={() => void changeTab('weekly_report')}><FileText /><span className="test-nav-label">周报管理</span><span className="test-nav-count" /></button> : null}
             </nav>
           </div>
           <div className="test-workbench-account">{accountMenu}</div>
@@ -1434,6 +1448,7 @@ export function TestWorkbench({
               <WeeklyReportWorkbench
                 navigationBusy={navigationBusy}
                 activeProfile="tester"
+                availableProfiles={activeWeeklyReportProfiles}
                 ref={weeklyReportWorkbenchRef}
                 embedded
                 organizationId={activeWeeklyReportOrganizationId}

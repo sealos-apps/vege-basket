@@ -121,8 +121,8 @@ test('organization overview renders every current Bug status as user-facing Chin
 
 test('organization collection separates reading and reminder actions and guards stale week responses', () => {
   assert.match(workbenchSource, /className="wr-collection-table"/u)
-  assert.match(workbenchSource, /setWeeklyReadingUserId\(member.userId\)/u)
-  assert.match(workbenchSource, /remindWeeklyReportUsers\(\[member.userId\]\)/u)
+  assert.match(workbenchSource, /setWeeklyReadingKey\(weeklyMemberKey\(member\)\)/u)
+  assert.match(workbenchSource, /remindVisibleWeeklyMembers\(\[member\]\)/u)
   assert.match(workbenchSource, /if \(request === weeklyCollectionRequest.current.version\) setWeeklyCollection\(collection\)/u)
   assert.match(workbenchSource, /return \(\) => \{ requests.version\+\+ \}/u)
 })

@@ -33,6 +33,8 @@ The current migrations are:
 | `20260917_test_bug_verification_package_branches.sql` | Adds immutable CI-branch snapshots to Bug verification packages and backfills canonical historical CI object paths. |
 | `20260920_test_plan_executions.sql` | Adds append-only test-plan execution history and allowlisted execution-image metadata. |
 | `20260921_test_plan_execution_image_platform_limit.sql` | Aligns the persisted execution-image size ceiling with the per-record 30 MiB total; the effective per-image cap comes from platform storage configuration. |
+| `20260923_weekly_report_profiles_and_deletion.sql` | Separates active weekly reports by developer/tester profile, adds submitted-report withdrawal audit fields and stale-summary markers, and scopes reminders by profile. |
+| `20261002_weekly_report_assignments.sql` | Adds organization-member weekly-report persona assignments, backfills existing assignees from their roles, and keeps eligibility synchronized with configured report types. |
 | `20260929_remove_legacy_ai_settings.sql` | Explicit destructive cleanup for the retired user-level AI settings table. It is never part of startup and requires a verified platform configuration, backup, and separate approval. |
 
 For the organization package-market policy release, update the image only. API startup applies
