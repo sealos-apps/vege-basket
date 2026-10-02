@@ -9,11 +9,12 @@ import { Input } from './ui/input'
 
 const organizationProjectModulePageSize = 5
 
-export function OrganizationProjectModulesPanel({ organizationId, modules, disabled = false, onSaved }: {
+export function OrganizationProjectModulesPanel({ organizationId, modules, disabled = false, onSaved, onError }: {
   organizationId: number
   modules: OrganizationProjectModule[]
   disabled?: boolean
   onSaved: (detail: OrganizationDetail) => void
+  onError?: (error: unknown) => boolean
 }) {
   const [draft, setDraft] = useState('')
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -75,6 +76,7 @@ export function OrganizationProjectModulesPanel({ organizationId, modules, disab
       }
       return true
     } catch (saveError) {
+      if (onError?.(saveError)) return false
       if (!showPanelError) throw saveError
       if (requestGeneration === generation.current) {
         setError(saveError instanceof Error ? saveError.message : '模块保存失败，请重试。')

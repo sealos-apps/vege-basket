@@ -1299,7 +1299,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       const organization = await lockManagedOrganization(client, organizationId!, session.userId)
       if (!organization) {
         await client.query('rollback')
-        response.status(409).json({ error: '组织权限已变化，请刷新后重试' })
+        response.status(409).json({ error: '组织管理权限校验未通过，请刷新后重试；如仍失败，请确认你是该组织 Owner/Admin。' })
         return
       }
       const currentPolicy = await getOrganizationPackageMarketPolicy(organizationId!, client)
@@ -1358,7 +1358,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       await lockOrganizationModuleCatalog(client, organizationId)
       await lockOrganizationModuleProjects(client, organizationId)
       if (!await lockManagedOrganization(client, organizationId, session.userId)) {
-        throw new ProjectModuleError('PROJECT_MODULE_FORBIDDEN', '组织管理权限已变化，请刷新后重试。', 403)
+        throw new ProjectModuleError('PROJECT_MODULE_FORBIDDEN', '组织管理权限校验未通过，请刷新后重试；如仍失败，请确认你是该组织 Owner/Admin。', 403)
       }
       const id = moduleId ?? await createOrganizationProjectModule(client, organizationId, input.name!)
       if (moduleId) await updateOrganizationProjectModule(client, organizationId, moduleId, input)
@@ -1395,7 +1395,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       await lockOrganizationModuleCatalog(client, organizationId)
       await lockOrganizationModuleProjects(client, organizationId)
       if (!await lockManagedOrganization(client, organizationId, session.userId)) {
-        throw new ProjectModuleError('PROJECT_MODULE_FORBIDDEN', '组织管理权限已变化，请刷新后重试。', 403)
+        throw new ProjectModuleError('PROJECT_MODULE_FORBIDDEN', '组织管理权限校验未通过，请刷新后重试；如仍失败，请确认你是该组织 Owner/Admin。', 403)
       }
       await deleteOrganizationProjectModule(client, organizationId, moduleId)
       await writeAudit(client, organizationId, session.userId, 'organization.project_module.deleted', 'project_module', String(moduleId))
@@ -1420,7 +1420,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       const organization = await lockManagedOrganization(client, organizationId!, session.userId)
       if (!organization) {
         await client.query('rollback')
-        response.status(409).json({ error: 'Organization access changed, reload and try again' })
+        response.status(409).json({ error: 'Organization management access could not be verified. Reload and try again; if it still fails, confirm that you are an Owner/Admin of this organization.' })
         return
       }
       const previousName = decryptText(organization.name)
@@ -1473,7 +1473,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       const organization = await lockManagedOrganization(client, organizationId!, session.userId)
       if (!organization) {
         await client.query('rollback')
-        response.status(409).json({ error: 'Organization access changed, reload and try again' })
+        response.status(409).json({ error: 'Organization management access could not be verified. Reload and try again; if it still fails, confirm that you are an Owner/Admin of this organization.' })
         return
       }
       await client.query(
@@ -1536,7 +1536,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       )
       if (!organization.rows[0]) {
         await client.query('rollback')
-        response.status(409).json({ error: '组织权限已变化，请刷新后重试' })
+        response.status(409).json({ error: '周报配置权限校验未通过，请刷新后重试；如仍失败，请确认你是该组织 Owner/Admin。' })
         return
       }
       const assigneeIds = weeklyReportAssigneeUserIds
@@ -1794,7 +1794,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       const organization = await lockManagedOrganization(client, organizationId!, session.userId)
       if (!organization) {
         await client.query('rollback')
-        response.status(409).json({ error: 'Organization access changed, reload and try again' })
+        response.status(409).json({ error: 'Organization management access could not be verified. Reload and try again; if it still fails, confirm that you are an Owner/Admin of this organization.' })
         return
       }
       await client.query(
@@ -1934,7 +1934,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
       await client.query('select id from projects where organization_id = $1 order by id for update', [organizationId])
       await client.query('select id from test_spaces where organization_id = $1 order by id for update', [organizationId])
       if (!await lockOrganizationAdministrator(client, organizationId!, session.userId)) {
-        throw new ProjectModuleError('ORGANIZATION_ACCESS_CHANGED', '组织管理权限已变化，请刷新后重试。', 409)
+        throw new ProjectModuleError('ORGANIZATION_ACCESS_CHANGED', '组织管理权限校验未通过，请刷新后重试；如仍失败，请确认你是该组织 Owner/Admin。', 409)
       }
       const target = await client.query<{ access_role: OrganizationAccessRole }>(
         `select access_role from organization_memberships
@@ -2016,7 +2016,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     try {
       await transaction(async (client) => {
         const organization = await lockManagedOrganization(client, organizationId!, session.userId)
-        if (!organization) throw Object.assign(new Error('Organization access changed, reload and try again'), { status: 409 })
+        if (!organization) throw Object.assign(new Error('Organization management access could not be verified. Reload and try again; if it still fails, confirm that you are an Owner/Admin of this organization.'), { status: 409 })
 
         const inserted = await client.query<{ id: string }>(
           `insert into test_environments
@@ -2066,7 +2066,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     try {
       await transaction(async (client) => {
         const organization = await lockManagedOrganization(client, organizationId!, session.userId)
-        if (!organization) throw Object.assign(new Error('Organization access changed, reload and try again'), { status: 409 })
+        if (!organization) throw Object.assign(new Error('Organization management access could not be verified. Reload and try again; if it still fails, confirm that you are an Owner/Admin of this organization.'), { status: 409 })
         const existing = await client.query<{ id: string }>(
           `select id from test_environments where id = $1 and organization_id = $2 for update`,
           [environmentId, organizationId],
@@ -2114,7 +2114,7 @@ export function createOrganizationRouter(dependencies: OrganizationRouterDepende
     try {
       await transaction(async (client) => {
         const organization = await lockManagedOrganization(client, organizationId!, session.userId)
-        if (!organization) throw Object.assign(new Error('Organization access changed, reload and try again'), { status: 409 })
+        if (!organization) throw Object.assign(new Error('Organization management access could not be verified. Reload and try again; if it still fails, confirm that you are an Owner/Admin of this organization.'), { status: 409 })
         const deleted = await client.query<{ id: string }>(
           `delete from test_environments
            where id = $1 and organization_id = $2
