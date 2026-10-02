@@ -135,7 +135,7 @@ try {
   assert.equal(stored.rows[0].payload_encrypted, encryptedPayload)
   assert.equal((await db.query('select marker from ai_settings where id = 1')).rows[0].marker, 'must-survive-startup')
   assert.equal((await db.query('select count(*)::int as count from platform_config_versions')).rows[0].count, 1)
-  assert.equal((await db.query("select count(*)::int as count from application_migrations where migration_id = '20261002_schema_v12'")).rows[0].count, 1)
+  assert.equal((await db.query("select count(*)::int as count from application_migrations where migration_id = '20261002_schema_v14'")).rows[0].count, 1)
   console.log('Platform configuration restart acceptance passed: v1 snapshot readable after two API starts, revision and ciphertext retained, legacy table preserved.')
 } finally {
   await control.query(`drop schema if exists "${schema}" cascade`).catch(() => undefined)

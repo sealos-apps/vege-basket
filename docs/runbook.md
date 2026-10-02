@@ -195,7 +195,7 @@ This is an explicit operator action, never an automatic startup migration.
 
 `server/migrations/20260922_bug_discovery_difficulty.sql` and the corresponding startup
 schema first shipped in baseline `20260922_schema_v10` and remains present in the current
-`20261002_schema_v12` baseline. It adds `test_bugs.discovery_difficulty` (`high`, `medium`, `low`, non-null, default
+`20261002_schema_v14` baseline. It adds `test_bugs.discovery_difficulty` (`high`, `medium`, `low`, non-null, default
 `medium`) and `discovery_difficulty_reason`. Existing rows receive `medium` and an empty
 reason; rerunning the migration does not reset later assessments. The API requires an
 explicit level on creation despite the database compatibility default. Non-empty reasons
