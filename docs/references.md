@@ -291,10 +291,11 @@ case/weekly-report pagination remain unchanged.
   Submitted withdrawal marks the current organization summary stale; its historical snapshot remains.
 - Organization weekly-report collection omits the reserved `admin` username from member rows,
   submission counts, and reminder targets. Organization weekly-report managers configure a
-  long-lived assignee set together with the reporting window. Membership defaults to requiring a
-  report, while an empty set is valid. Changes take effect immediately across personal write and
-  AI-generation permission, collection counts, reminder targets, and organization AI summaries;
-  removed assignees retain read-only access to their own historical reports.
+  long-lived member/persona assignment set together with the reporting window. New and restored
+  memberships default to no assigned persona; an empty set is valid. Changes take effect
+  immediately across personal write and AI-generation permission, collection counts, reminder
+  targets, and organization AI summaries; removed assignees retain read-only access to their own
+  historical reports.
 - Organization detail returns `weeklyReportAssignments` in weekly-report display order. Each
   assignment contains a member ID and one or both enabled personas (`developer` and `tester`).
   A single-role member is assigned that persona by default; a member with both roles must have
