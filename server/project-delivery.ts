@@ -96,7 +96,9 @@ export async function authorizeDelivery(
   if (!event || result.rows.length !== 1) throw new ProjectDeliveryError('交付任务不存在', 404)
   const capabilities = deliveryCapabilities(access, {
     assigneeUserId: event.assignee_user_id ? Number(event.assignee_user_id) : null,
-    published: Boolean(event.published_at), delivered: event.status === 'delivered',
+    published: Boolean(event.published_at),
+    delivered: ['delivered', 'partially_delivered', 'failed'].includes(event.status),
+    editable: event.status === 'rejected',
   }, userId)
   const allowed = permission === 'plan' ? capabilities.canEditPlan : capabilities[permission]
   if (!allowed) throw new ProjectDeliveryError('当前人员或任务状态不允许此交付操作')

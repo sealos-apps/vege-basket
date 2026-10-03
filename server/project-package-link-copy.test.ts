@@ -7,9 +7,10 @@ const workbenchSource = readFileSync(
   'utf8',
 )
 
-test('copies a project-authorized download URL for each installed package item', () => {
-  assert.match(workbenchSource, /onLoadPackageItemDownloadUrl\(item\.id\)/u)
-  assert.match(workbenchSource, /copyToClipboard\(downloadUrl,/u)
-  assert.match(workbenchSource, /group\.items\.map\(\(item\)/u)
-  assert.match(workbenchSource, /复制安装包链接/u)
+test('delivery content exposes authorized online and offline commands', () => {
+  assert.match(workbenchSource, /process\.onlineCommand \?\? ''/u)
+  assert.match(workbenchSource, /process\.offlineCommand \?\? ''/u)
+  assert.match(workbenchSource, /在线命令/u)
+  assert.match(workbenchSource, /离线命令/u)
+  assert.doesNotMatch(workbenchSource, /onLoadPackageItemDownloadUrl/u)
 })

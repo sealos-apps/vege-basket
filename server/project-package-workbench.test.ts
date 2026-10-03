@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { resolveExistingOperationInteraction } from '../src/project-package-operation-access.ts'
+import { preserveLoadedPackageEventDetails } from '../src/project-package-timeline-state.ts'
+import type { ProjectPackageEvent, ProjectPackageTimeline } from '../src/types.ts'
 
 const workbenchSource = readFileSync(
   new URL('../src/components/project-package-workbench.tsx', import.meta.url),
@@ -14,6 +16,10 @@ const timelineSource = readFileSync(
 const indexSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
 const paginationSource = readFileSync(
   new URL('../src/components/list-pagination.tsx', import.meta.url),
+  'utf8',
+)
+const eventFilterSource = readFileSync(
+  new URL('../src/components/package-event-filter-builder-dialog.tsx', import.meta.url),
   'utf8',
 )
 const schemaSource = readFileSync(new URL('./schema.ts', import.meta.url), 'utf8')
@@ -29,16 +35,56 @@ const deliveryOtherScriptMigrationSource = readFileSync(
   new URL('./migrations/20261001_project_delivery_other_script.sql', import.meta.url),
   'utf8',
 )
+const deliveryExecutionMigrationSource = readFileSync(
+  new URL('./migrations/20261001_project_delivery_execution_steps.sql', import.meta.url),
+  'utf8',
+)
 
-test('new delivery events require content and optionally support shell scripts', () => {
+test('new delivery events require content and support reusable ordered shell scripts', () => {
   assert.match(timelineSource, /至少添加一种交付内容后才能创建交付事件/u)
   assert.match(timelineSource, /normalizeDeliveryOther/u)
-  assert.match(workbenchSource, /此处只支持 Shell 脚本，其他方式暂不支持/u)
   assert.match(workbenchSource, /添加 Shell 脚本/u)
+  assert.match(workbenchSource, /脚本只有加入交付流程后才参与执行，可被多个流程重复引用/u)
+  assert.match(workbenchSource, /流程名称会写入生成脚本的注释/u)
+  assert.match(timelineSource, /const comment = `# 流程/u)
+  assert.match(timelineSource, /step\.processName/u)
   assert.match(indexSource, /limit: '512kb'/u)
   assert.match(workbenchSource, /maxDeliveryOtherScriptLength/u)
   assert.match(deliveryOtherScriptMigrationSource, /add column if not exists other_script/u)
   assert.match(schemaSource, /add column if not exists other_script text/u)
+  assert.match(timelineSource, /交付内容类型无效/u)
+})
+
+test('legacy delivery fallback uses stable database identities everywhere', () => {
+  assert.match(timelineSource, /function buildFallbackDeliverySteps/u)
+  assert.match(timelineSource, /buildFallbackDeliverySteps\(\{[\s\S]*items: \(groupsByEvent/u)
+  assert.match(timelineSource, /buildFallbackDeliverySteps\(\{[\s\S]*legacyItems/u)
+  assert.match(timelineSource, /buildFallbackDeliverySteps\(\{[\s\S]*packageLinks.map/u)
+  assert.match(timelineSource, /id: `package-\$\{item\.id\}`/u)
+  assert.match(timelineSource, /id: `offline-\$\{item\.id\}`/u)
+  assert.match(timelineSource, /id: `image-\$\{item\.id\}`/u)
+})
+
+test('omitted delivery plan fields preserve stored values and reject dangling references', () => {
+  assert.match(timelineSource, /const hasDeliveryScripts = params\.deliveryScripts !== undefined/u)
+  assert.match(timelineSource, /const hasDeliverySteps = params\.deliverySteps !== undefined/u)
+  assert.match(timelineSource, /const effectiveScripts = hasDeliveryScripts \? deliveryScripts : storedScripts/u)
+  assert.match(timelineSource, /const effectiveSteps = hasDeliverySteps \? deliverySteps : storedSteps/u)
+  assert.match(timelineSource, /请提交完整交付流程/u)
+  assert.match(timelineSource, /delivery_steps = \$11/u)
+  assert.match(timelineSource, /delivery_scripts = \$12/u)
+})
+
+test('delivery lifecycle migration preserves terminal states and rejection history', () => {
+  assert.match(deliveryExecutionMigrationSource, /delivery_result = 'failed' or status = 'failed'.*?then 'failed'/su)
+  assert.match(deliveryExecutionMigrationSource, /delivery_result = 'partial' or status = 'partially_delivered'.*?then 'partially_delivered'/su)
+  assert.match(deliveryExecutionMigrationSource, /delivery_result = 'rejected' or status = 'rejected'.*?then 'rejected'/su)
+  assert.match(deliveryExecutionMigrationSource, /create table if not exists project_package_event_rejections/u)
+  assert.match(deliveryExecutionMigrationSource, /set completed_at = coalesce\(completed_at, updated_at, published_at, created_at\)/u)
+  assert.match(deliveryExecutionMigrationSource, /project_package_events_terminal_result_check/u)
+  assert.match(deliveryExecutionMigrationSource, /status = 'partially_delivered' and delivery_result = 'partial' and completed_at is not null/u)
+  assert.match(timelineSource, /交付结果无效/u)
+  assert.match(timelineSource, /执行结果无效/u)
 })
 
 test('package market offers link validity choices from four hours through seven days', () => {
@@ -74,8 +120,11 @@ test('draft event documents remain openable for editing', () => {
 })
 
 test('delivery documents no longer expose todo association actions', () => {
-  assert.match(workbenchSource, /function deliveryTodoLinksEnabled\(\) \{\s*return false/u)
-  assert.equal((workbenchSource.match(/aria-label="关联待办"/g) ?? []).length, 2)
+  const detailDrawerSource = workbenchSource.slice(
+    workbenchSource.indexOf('<Dialog open={eventDetailOpen'),
+    workbenchSource.indexOf('<Dialog open={deliveryResultDialogOpen'),
+  )
+  assert.doesNotMatch(detailDrawerSource, /关联待办|删除记录|添加操作文档/u)
   assert.match(
     timelineSource,
     /const operation = await findOperationMeta\([\s\S]*?if \(!operation\)[\s\S]*?if \(operation\.published_at && updates\.length > 0\)[\s\S]*?Published events are read-only/u,
@@ -90,15 +139,46 @@ test('delivery workbench enforces one event-level change record and package-only
   assert.match(workbenchSource, /变更记录/u)
 })
 
-test('existing operation todo management opens without a default filter', () => {
-  const openTodoDialogSource = workbenchSource.slice(
-    workbenchSource.indexOf('function openOperationTodoDialog'),
-    workbenchSource.indexOf('function clearOperationTodoDialogState'),
+test('event details separate read-only overview and delivery content tabs', () => {
+  const detailDrawerSource = workbenchSource.slice(
+    workbenchSource.indexOf('<Dialog open={eventDetailOpen'),
+    workbenchSource.indexOf('<Dialog open={deliveryResultDialogOpen'),
   )
-  assert.match(openTodoDialogSource, /setTodoDialogSearch\(''\)/u)
-  assert.match(openTodoDialogSource, /setTodoFilterConditions\(\[\]\)/u)
-  assert.match(openTodoDialogSource, /setTodoFilterJoin\('and'\)/u)
-  assert.doesNotMatch(openTodoDialogSource, /createTodoFilterCondition/u)
+  assert.match(workbenchSource, /基础信息与变更记录/u)
+  assert.match(workbenchSource, /<TabsTrigger value="delivery">交付内容<\/TabsTrigger>/u)
+  assert.match(workbenchSource, /暂无变更记录/u)
+  assert.match(workbenchSource, /暂无交付内容/u)
+  assert.match(workbenchSource, /<h4>交付项<\/h4>/u)
+  assert.match(workbenchSource, /formatEventDeliveryDate\(selectedEvent\)/u)
+  assert.match(workbenchSource, /交付失败记录/u)
+  assert.doesNotMatch(workbenchSource, /部分交付失败记录/u)
+  assert.doesNotMatch(detailDrawerSource, /<h3>安装包<\/h3>/u)
+  assert.match(workbenchSource, /在线命令/u)
+  assert.match(workbenchSource, /离线命令/u)
+  assert.match(workbenchSource, /预览 Values 修改/u)
+  assert.match(workbenchSource, /复制执行脚本/u)
+  assert.match(workbenchSource, /previewConfig\.valuesPath/u)
+  assert.match(workbenchSource, /previewConfig\.valuesPatch/u)
+  assert.doesNotMatch(workbenchSource, /const valuesScriptKey/u)
+  assert.match(workbenchSource, /所有交付项需要 <code>sealos<\/code>；在线命令还需要 <code>wget<\/code>/u)
+  assert.match(workbenchSource, /yq v4/u)
+  assert.match(workbenchSource, /eventDetailTab !== 'delivery'/u)
+})
+
+test('event filters expose every delivery lifecycle status', () => {
+  for (const status of ['draft', 'delivering', 'rejected', 'partially_delivered', 'delivered', 'failed']) {
+    assert.match(eventFilterSource, new RegExp(`value="${status}"`, 'u'))
+  }
+})
+
+test('rejected event editing keeps the latest rejection reason visible', () => {
+  const editorSource = workbenchSource.slice(
+    workbenchSource.indexOf('function renderEventEditor'),
+    workbenchSource.indexOf('function renderTimelineExport'),
+  )
+  assert.match(editorSource, /event-rejection-notice/u)
+  assert.match(editorSource, /latestRejectionReason/u)
+  assert.match(editorSource, /拒绝理由/u)
 })
 
 test('event wizard keeps the stepper below its compact header with a return-list action', () => {
@@ -121,7 +201,7 @@ test('event wizard keeps the stepper below its compact header with a return-list
 test('selecting a draft event opens its summary instead of the editor', () => {
   const listSelectionSource = workbenchSource.slice(
     workbenchSource.indexOf('function selectEventFromList'),
-    workbenchSource.indexOf('function openOperationDialog'),
+    workbenchSource.indexOf('function resetEventEditor'),
   )
   const imperativeSelectionSource = workbenchSource.slice(
     workbenchSource.indexOf('selectEvent: (eventId: number) => {'),
@@ -135,7 +215,7 @@ test('selecting a draft event opens its summary instead of the editor', () => {
 test('deleting the edited event closes its editor and advances to the next visible event', () => {
   const deletionSource = workbenchSource.slice(
     workbenchSource.indexOf('async function deleteEventFromList'),
-    workbenchSource.indexOf('function openOperationDialog'),
+    workbenchSource.indexOf('async function handleTodoDialogSave'),
   )
   assert.match(deletionSource, /visibleEvents\[deletedIndex \+ 1\]/u)
   assert.match(deletionSource, /visibleEvents\[deletedIndex - 1\]/u)
@@ -264,7 +344,7 @@ test('package event comment routes require project write access and valid conten
   assert.match(commentRoutes, /deleteProjectPackageEventComment/u)
 })
 
-test('delivery workbench offers a feedback drawer next to the delivered action', () => {
+test('delivery workbench keeps feedback beside delivery result actions', () => {
   assert.match(workbenchSource, /交付反馈/u)
   assert.match(workbenchSource, /ChatCircleDots/u)
   assert.match(workbenchSource, /setCommentsDrawerOpen\(true\)/u)
@@ -272,7 +352,9 @@ test('delivery workbench offers a feedback drawer next to the delivered action',
   assert.match(workbenchSource, /slide-in-from-right/u)
   assert.match(workbenchSource, /MentionTextarea/u)
   assert.match(workbenchSource, /onAddEventComment\(eventId, content\)/u)
-  assert.match(workbenchSource, /标记已交付/u)
+  assert.match(workbenchSource, /提交交付结果/u)
+  assert.match(workbenchSource, /拒绝交付/u)
+  assert.match(workbenchSource, /部分交付/u)
   assert.match(workbenchSource, /发送反馈/u)
   assert.equal((workbenchSource.match(/menuPlacement="above"/g) ?? []).length, 2)
   const mentionSource = readFileSync(
@@ -298,12 +380,12 @@ test('delivery workbench offers a feedback drawer next to the delivered action',
   assert.match(appCssSource, /\.mention-menu-floating:hover::-webkit-scrollbar-thumb[\s\S]*?background:/u)
 })
 
-test('delivery event and package lists keep searchable paginated surfaces with the global menu', () => {
-  assert.match(workbenchSource, /const \[packageQuery, setPackageQuery\]/u)
-  assert.match(workbenchSource, /visiblePackageGroups/u)
+test('delivery event lists keep searchable paginated surfaces with the global menu', () => {
+  assert.doesNotMatch(workbenchSource, /const \[packageQuery, setPackageQuery\]/u)
+  assert.doesNotMatch(workbenchSource, /visiblePackageGroups/u)
   assert.match(workbenchSource, /ListPagination label="交付事件分页"/u)
   assert.match(workbenchSource, /onPageSizeChange=\{\(size\) => \{ setEventPage\(0\); setEventPageSize\(size\) \}\}/u)
-  assert.match(workbenchSource, /ListPagination label="安装包列表分页"/u)
+  assert.doesNotMatch(workbenchSource, /ListPagination label="安装包列表分页"/u)
   assert.match(paginationSource, /pageSizeOptions = \[20, 50\]/u)
   assert.match(paginationSource, /new Set\(\[\.\.\.pageSizeOptions, pageSize\]\)/u)
   assert.doesNotMatch(workbenchSource, /const isEmptyState/u)
@@ -337,10 +419,12 @@ test('delivery event summaries use database pagination and hydrate one selected 
   assert.match(workbenchSource, /includeDetails: false/u)
   assert.match(workbenchSource, /eventId: selectedEventDetailId, includeDetails: true/u)
   assert.match(workbenchSource, /project-event-counts/u)
-  assert.match(workbenchSource, /交付包数量/u)
-  assert.match(workbenchSource, /个安装包条目/u)
-  assert.match(appSource, /containerImages: loadedEvent\.containerImages/u)
-  assert.match(appSource, /offlinePackages: loadedEvent\.offlinePackages/u)
+  assert.match(workbenchSource, /拒绝次数/u)
+  assert.match(timelineSource, /rejection_count/u)
+  assert.match(timelineSource, /includeDetails \? 'e\.delivery_scripts' : 'null::text'/u)
+  assert.match(timelineSource, /includeDetails && selectedEventIds\.length > 0/u)
+  assert.match(timelineSource, /deliveryScripts: includeDetails \?/u)
+  assert.match(appSource, /preserveLoadedPackageEventDetails/u)
   assert.match(workbenchSource, /openLoadedDraftEventEditor/u)
   assert.match(workbenchSource, /await onLoadTimeline\(\{ eventId: event\.id, includeDetails: true, limit: 1, offset: 0 \}\)/u)
   assert.doesNotMatch(timelineSource, /packageCount:[\s\S]*?container_image_count/u)
@@ -349,6 +433,66 @@ test('delivery event summaries use database pagination and hydrate one selected 
   assert.match(timelineSource, /params\.eventId == null \|\| containerImages != null/u)
   assert.match(appSource, /const savedEventId = mutationResult\.savedEventId \?\? eventId/u)
   assert.match(appSource, /fetchProjectPackageTimeline\(projectId, \{ \.\.\.installTimelineQueryRef\.current, includeDetails: false \}\)/u)
+})
+
+test('delivery summary refresh preserves every loaded detail field only for the same event revision', () => {
+  const detailEvent = {
+    id: 7,
+    updatedAt: '2026-10-01 12:00:00',
+    detailRevision: '1790841600.123456',
+    detailsLoaded: true,
+    comments: [{ id: 1 }],
+    containerImages: [{ id: 2 }],
+    deliveryFailureReason: '整体失败详情',
+    deliveryScripts: [{ id: 'script-1', title: '检查', content: 'echo ok' }],
+    deliverySteps: [{ id: 'step-1', kind: 'shell-script', processName: '检查', reference: 'script-1' }],
+    groups: [{ id: 3 }],
+    latestRejectedAt: '2026-10-01 11:00:00',
+    latestRejectedByName: '执行人',
+    latestRejectionReason: '需要调整顺序',
+    offlinePackages: [{ id: 4 }],
+    operations: [{ id: 5 }],
+    other: { content: 'echo legacy', type: 'shell-script' },
+    rejections: [{ createdAt: '2026-10-01 11:00:00', reason: '需要调整顺序', rejectedByName: '执行人' }],
+  } as ProjectPackageEvent
+  const summaryEvent = {
+    ...detailEvent,
+    comments: [],
+    containerImages: [],
+    deliveryFailureReason: undefined,
+    deliveryScripts: [],
+    deliverySteps: [],
+    groups: [],
+    latestRejectedAt: undefined,
+    latestRejectedByName: undefined,
+    latestRejectionReason: undefined,
+    offlinePackages: [],
+    operations: [],
+    other: null,
+    rejections: [],
+    detailsLoaded: false,
+    rejectionCount: 1,
+  }
+  const timeline = (event: ProjectPackageEvent) => ({ events: [event] }) as ProjectPackageTimeline
+
+  const preserved = preserveLoadedPackageEventDetails(timeline(detailEvent), timeline(summaryEvent)).events[0]
+  assert.equal(preserved.detailsLoaded, true)
+  assert.deepEqual(preserved.deliverySteps, detailEvent.deliverySteps)
+  assert.deepEqual(preserved.deliveryScripts, detailEvent.deliveryScripts)
+  assert.deepEqual(preserved.rejections, detailEvent.rejections)
+  assert.equal(preserved.latestRejectionReason, detailEvent.latestRejectionReason)
+  assert.equal(preserved.deliveryFailureReason, detailEvent.deliveryFailureReason)
+  assert.equal(preserved.other, detailEvent.other)
+
+  const changedSummary = {
+    ...summaryEvent,
+    updatedAt: detailEvent.updatedAt,
+    detailRevision: '1790841600.123789',
+  }
+  const invalidated = preserveLoadedPackageEventDetails(timeline(detailEvent), timeline(changedSummary)).events[0]
+  assert.equal(invalidated.detailsLoaded, false)
+  assert.deepEqual(invalidated.deliverySteps, [])
+  assert.deepEqual(invalidated.rejections, [])
 })
 
 test('delivery events support mixed encrypted artifacts and server-generated scripts', () => {
@@ -362,7 +506,15 @@ test('delivery events support mixed encrypted artifacts and server-generated scr
   assert.match(indexSource, /delivery-artifacts/u)
   assert.match(workbenchSource, /集群镜像/u)
   assert.match(workbenchSource, /离线包地址/u)
-  assert.match(workbenchSource, /复制执行脚本/u)
+  assert.match(workbenchSource, /delivery-process-actions/u)
+  assert.match(workbenchSource, /已复制链接/u)
+  assert.match(workbenchSource, /已复制在线命令/u)
+  assert.match(workbenchSource, /已复制离线命令/u)
+  assert.match(timelineSource, /onlineCommand,\n\s+content:/u)
+  assert.match(timelineSource, /offlineCommand/u)
+  assert.doesNotMatch(workbenchSource, /完整执行脚本/u)
+  assert.doesNotMatch(workbenchSource, /流程内容/u)
+  assert.match(workbenchSource, /deliveryArtifacts\.processes\.map/u)
   for (const table of [
     'project_package_event_container_images',
     'project_package_event_offline_packages',
@@ -410,8 +562,7 @@ test('delivery workbench uses a full-width event list and a desktop right detail
   assert.match(workbenchCss, /grid-template-columns: var\(--delivery-event-content-columns\) 40px/u)
   assert.match(workbenchCss, /\.delivery-event-list-panel[\s\S]*grid-template-rows: auto auto auto auto auto minmax\(0, 1fr\) auto/u)
   const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
-  assert.match(appSource, /function preserveLoadedPackageEventDetails/u)
-  assert.match(appSource, /loadedEvent\?\.detailsLoaded !== true/u)
+  assert.match(appSource, /preserveLoadedPackageEventDetails/u)
   assert.match(appSource, /if \(options\.eventId == null\) installTimelineQueryRef\.current = options/u)
   assert.match(workbenchCss, /\.project-package-event-drawer[\s\S]*width: min\(820px, calc\(100vw - 32px\)\) !important/u)
   assert.match(workbenchCss, /\.project-package-event-drawer[\s\S]*translate: none !important/u)

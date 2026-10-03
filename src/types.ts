@@ -349,8 +349,8 @@ export type TodoProposal = {
 }
 
 export type ProjectPackageEventType = 'init' | 'upgrade'
-export type ProjectPackageEventStatus = 'draft' | 'delivering' | 'delivered'
-export type ProjectPackageDeliveryResult = 'success' | 'failed'
+export type ProjectPackageEventStatus = 'draft' | 'delivering' | 'rejected' | 'partially_delivered' | 'delivered' | 'failed'
+export type ProjectPackageDeliveryResult = 'success' | 'partial' | 'rejected' | 'failed'
 export type ProjectPackageOperationStatus = 'failed' | 'pending' | 'success'
 export type ProjectPackageOperationKind = 'document' | 'event'
 export type PackageMarketChannel = 'release' | 'ci'
@@ -406,6 +406,12 @@ export type ProjectPackageEventComment = {
   updatedAt: string
 }
 
+export type ProjectPackageEventRejection = {
+  createdAt: string
+  reason: string
+  rejectedByName: string
+}
+
 export type ProjectPackageEvent = {
   capabilities: DeliveryCapabilities
   createdByName?: string
@@ -415,7 +421,13 @@ export type ProjectPackageEvent = {
   completedAt?: string
   deliveryDelayDays?: number
   deliveryResult?: ProjectPackageDeliveryResult
+  detailRevision: string
   deliveryFailureReason?: string
+  rejectionCount?: number
+  latestRejectionReason?: string
+  latestRejectedByName?: string
+  latestRejectedAt?: string
+  rejections: ProjectPackageEventRejection[]
   assignedAt?: string
   assignedByName?: string
   assignedByUserId?: number
@@ -431,6 +443,8 @@ export type ProjectPackageEvent = {
   deliveryDate: string
   deliveryEndAt: string
   deliveryStartAt: string
+  deliverySteps: ProjectPackageDeliveryStep[]
+  deliveryScripts: ProjectPackageDeliveryScript[]
   updatedAt: string
   operations: ProjectPackageOperation[]
   offlinePackages: Array<{ id: number; url: string; runtimeConfig: DeliveryRuntimeConfig }>
@@ -457,6 +471,22 @@ export type ProjectPackageEventOther = {
   type: 'shell-script'
 }
 
+export type ProjectPackageDeliveryStep = {
+  id: string
+  kind: 'package' | 'container-image' | 'offline-package' | 'shell-script'
+  processName: string
+  reference: string
+  content?: string
+  result?: 'pending' | 'success' | 'failed' | 'skipped'
+  failureDetail?: string
+}
+
+export type ProjectPackageDeliveryScript = {
+  id: string
+  title: string
+  content: string
+}
+
 export type ProjectPackageEventSavePayload = {
   action: 'publish' | 'save_draft'
   assigneeUserId: number | null
@@ -480,11 +510,27 @@ export type ProjectPackageEventSavePayload = {
   }>
   offlinePackages: Array<{ runtimeConfig: DeliveryRuntimeConfig; url: string }>
   other?: ProjectPackageEventOther | null
+  deliverySteps?: ProjectPackageDeliveryStep[]
+  deliveryScripts?: ProjectPackageDeliveryScript[]
   title: string
   type: ProjectPackageEventType
 }
 
 export type ProjectPackageDeliveryArtifacts = {
+  processes: Array<{
+    address?: {
+      expiresAt?: string
+      kind: 'object-storage' | 'offline-package' | 'container-image'
+      value: string
+    }
+    offlineCommand?: string
+    onlineCommand?: string
+    content: string
+    kind: ProjectPackageDeliveryStep['kind']
+    processName: string
+    runtimeConfig?: DeliveryRuntimeConfig
+    stepId: string
+  }>
   items?: Array<{
     address: {
       expiresAt?: string

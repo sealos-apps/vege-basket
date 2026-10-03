@@ -99,13 +99,18 @@ The production image builds `src/` into `dist/`, copies `server/`, and starts
   session-scoped business personas, additive organization-administrator capability,
   and resource-scoped read/write authorization boundaries.
 - `server/project-package-timeline.ts`: package timeline domain logic, transactional
-  aggregate draft saves, one-way publication/completion transitions, encrypted timeline
-  fields, mixed object-storage packages, container images and offline-package URLs, server-generated
-  execution scripts, document-level todo links, and Markdown export. Publication atomically replaces
-  the draft's packages, encrypted delivery addresses, documents, and document todo links, changes the event to `delivering`,
-  and makes document content and package structure read-only. For organization projects,
+  aggregate draft saves, ordered delivery processes, encrypted timeline fields, mixed
+  object-storage packages, container images, offline-package URLs, reusable Shell scripts,
+  immutable rejection history, per-process execution results, server-generated execution
+  scripts, and Markdown export. A process has a required name, explicit order, and an
+  independent process ID, so the same resource may be referenced more than once. Publication
+  atomically replaces the draft's packages, encrypted delivery addresses, ordered processes,
+  documents, and document todo links, changes the event to `delivering`, and makes published
+  plans read-only. Rejected events can be edited and resubmitted by planners; partial delivery
+  and delivery failure are terminal results, while rejection requires a reason and appends an
+  immutable history record. For organization projects,
   only the assigned executor may manage execution links/notes and complete the event;
-  ordinary todo completion retains its separate authorization. Only unpublished plans may
+  ordinary todo completion retains its separate authorization. Draft and rejected plans may
   be deleted through the timeline.
 - `shared/project-delivery.ts`, `server/project-delivery.ts`: independent project planning and
   execution grants, per-event capabilities, transactional authorization, and reassignment audit.
@@ -573,7 +578,11 @@ The schema is normalized around these groups:
   timeline falls back to the Bug row for creation when no event rows exist yet.
 - Package delivery: `project_package_events`, `project_package_groups`,
   `project_package_items`, `project_package_operations`,
-  `project_package_operation_todos`, and `project_package_event_comments`.
+  `project_package_operation_todos`, `project_package_event_comments`, and
+  `project_package_event_rejections`. Event details use separate read-only tabs for
+  basic information/change history and delivery content; execution controls remain in the
+  basic-information tab, while package selection/download and ordered generated scripts remain
+  in the delivery-content tab.
   Delivery feedback comments are author-owned and encrypted; `@` mentions resolve
   against the project's organization members plus its owner and active members, and
   mentioned users receive a personal Feishu message (never the project chat).

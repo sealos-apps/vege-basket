@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   createClusterImageVerificationScript,
   createDeliveryExecutionScript,
+  createOfflineDeliveryExecutionScript,
   createPackageVerificationScript,
 } from './verification-deployment-script.ts'
 
@@ -32,6 +33,31 @@ test('builds one deterministic script for object packages, offline URLs, and ima
       "wget 'https://downloads.example/app.tar' -O \"$delivery_dir/app-2.tar\" && sealos run -f \"$delivery_dir/app-2.tar\" && \\\n" +
       "sealos run -f 'ghcr.io/example/worker:v2'",
   )
+})
+
+test('builds an offline command that runs an already-present archive', () => {
+  assert.equal(
+    createOfflineDeliveryExecutionScript({ fileName: 'admin-v1.tar' }),
+    "sealos run -f 'admin-v1.tar'",
+  )
+})
+
+test('offline commands keep Values rollback checks when runtime patching is configured', () => {
+  const script = createOfflineDeliveryExecutionScript({
+    fileName: 'admin-v1.tar',
+    runtimeConfig: {
+      environmentVariables: [],
+      valuesPath: '/root/.sealos/cloud/values/admin.yaml',
+      valuesPatch: 'replicas: 3',
+    },
+  })
+  assert.match(script, /\(\n {2}set -e\n/u)
+  assert.match(script, /if ! command -v yq[\s\S]*?缺少 yq v4/u)
+  assert.match(script, /if ! command -v flock[\s\S]*?缺少 flock/u)
+  assert.match(script, /restore_values\(\) \{\n {4}restore_status=\$\?/u)
+  assert.match(script, /trap restore_values EXIT/u)
+  assert.match(script, /sealos run -f 'admin-v1.tar'/u)
+  assert.doesNotMatch(script, /&& \{ echo/u)
 })
 
 test('quotes untrusted delivery addresses and never writes archives into the working directory', () => {

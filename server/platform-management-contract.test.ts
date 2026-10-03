@@ -228,7 +228,7 @@ test('automatic database migrations are serialized, checksummed, and recorded', 
   assert.match(migrationsSource, /const migrationId = '20261002_schema_v22'/u)
   assert.equal(
     crypto.createHash('sha256').update(schemaSql).digest('hex'),
-    '67f31d569638f40a08e06e3e7be6158e1a4167200462f0e1f30f48c981dcb416',
+    '6a8e34d22aff12003a8541358e9be150347b85ac3825794ce593d767dc83967d',
   )
   assert.match(migrationsSource, /pg_try_advisory_lock/u)
   assert.match(migrationsSource, /createHash\('sha256'\)\.update\(schemaSql\)/u)

@@ -1,6 +1,7 @@
 import { clampListPage } from './list-pagination'
 import { reassignProjectPackageEvent } from './api'
 import type { MyWorkViewState } from './my-work-types'
+import { preserveLoadedPackageEventDetails } from './project-package-timeline-state'
 import { ListPagination } from './components/list-pagination'
 import {
   Activity,
@@ -148,7 +149,6 @@ import {
   fetchPackageMarketDetail,
   fetchPackageMarketReleaseVersions,
   fetchPackageMarketRules,
-  fetchProjectPackageItemDownloadUrl,
   fetchProjectPackageEventDeliveryArtifacts,
   fetchProjectPackageTimeline,
   fetchProjectCatalog,
@@ -550,28 +550,6 @@ function formatAiMessageTime(value: string) {
   }).format(date)
 }
 
-function preserveLoadedPackageEventDetails(
-  current: ProjectPackageTimeline,
-  incoming: ProjectPackageTimeline,
-) {
-  const currentEventsById = new Map(current.events.map((event) => [event.id, event]))
-  return {
-    ...incoming,
-    events: incoming.events.map((event) => {
-      const loadedEvent = currentEventsById.get(event.id)
-      if (loadedEvent?.detailsLoaded !== true) return event
-      return {
-        ...event,
-        comments: loadedEvent.comments,
-        containerImages: loadedEvent.containerImages,
-        groups: loadedEvent.groups,
-        offlinePackages: loadedEvent.offlinePackages,
-        operations: loadedEvent.operations,
-        detailsLoaded: true,
-      }
-    }),
-  }
-}
 type TodoUpdatePayload = Omit<
   Partial<Todo>,
   'assigneeUserId' | 'moduleId' | 'subprojectId' | 'reviewerUserId' | 'watcherUserId' | 'watcherUserIds'
@@ -4208,13 +4186,21 @@ function App() {
     return true
   }
 
-  async function completeInstallEvent(eventId: number, payload: { result: 'success' | 'failed'; failureReason?: string }) {
+  async function completeInstallEvent(eventId: number, payload: {
+    result: 'success' | 'partial' | 'rejected' | 'failed'
+    failureReason?: string
+    stepResults?: Record<string, { result: 'success' | 'failed' | 'skipped'; failureDetail?: string }>
+  }) {
     if (!selectedProject) return false
     setWorkspaceError('')
     const timeline = await reconcileAction(
       () => completeProjectPackageEvent(selectedProject.id, eventId, payload),
       () => fetchProjectPackageTimeline(selectedProject.id, { limit: 10, offset: 0 }),
-      (data) => data.events.some((event) => event.id === eventId && event.status === 'delivered'),
+      (data) => data.events.some((event) => event.id === eventId && (
+        payload.result === 'success' ? event.status === 'delivered'
+          : payload.result === 'partial' ? event.status === 'partially_delivered'
+            : event.status === payload.result
+      )),
     )
     if (confirmationScopeRef.current !== confirmationScope) return false
     setProjectPackageTimelines((current) => ({ ...current, [selectedProject.id]: timeline }))
@@ -4285,18 +4271,6 @@ function App() {
     void refreshInstallTimelineView(selectedProject.id).catch(() => undefined)
     void refreshNotifications()
     return true
-  }
-
-  async function loadInstallItemDownloadUrl(itemId: number) {
-    if (!selectedProject) throw new Error('Project not found')
-    try {
-      const result = await fetchProjectPackageItemDownloadUrl(selectedProject.id, itemId)
-      setWorkspaceError('')
-      return result.downloadUrl
-    } catch (error) {
-      setWorkspaceError(formatApiErrorDiagnostic(error, '安装包链接生成失败，请稍后再试。'))
-      throw error
-    }
   }
 
   async function loadInstallEventDeliveryArtifacts(eventId: number, expireMinutes: 30 | 60 | 120) {
@@ -5792,7 +5766,6 @@ ${packageTimelineText}`
             onDraftChange={setJournalDraft}
             onExportInstallTimeline={exportInstallTimeline}
             onInstallLoadMarketDetail={loadPackageMarketDetail}
-            onInstallLoadItemDownloadUrl={loadInstallItemDownloadUrl}
             onInstallLoadEventDeliveryArtifacts={loadInstallEventDeliveryArtifacts}
             onInstallLoadMarketCiBranches={loadPackageMarketCiBranches}
             onInstallLoadMarketRules={loadPackageMarketRules}
@@ -6610,7 +6583,6 @@ function ProjectDetail({
   onExportInstallTimeline,
   onInstallLoadMarketCiBranches,
   onInstallLoadMarketDetail,
-  onInstallLoadItemDownloadUrl,
   onInstallLoadEventDeliveryArtifacts,
   onInstallLoadMarketRules,
   onInstallLoadMarketVersions,
@@ -6675,7 +6647,11 @@ function ProjectDetail({
   onAddTodo: (projectId: number) => Promise<boolean>
   onAddInstallEventComment: (eventId: number, content: string) => Promise<boolean>
   onReassignInstallEvent: (eventId: number, payload: { assigneeUserId: number; previousAssigneeUserId: number | null; reason: string }) => Promise<boolean>
-  onCompleteInstallEvent: (eventId: number, payload: { result: 'success' | 'failed'; failureReason?: string }) => Promise<boolean>
+  onCompleteInstallEvent: (eventId: number, payload: {
+    result: 'success' | 'partial' | 'rejected' | 'failed'
+    failureReason?: string
+    stepResults?: Record<string, { result: 'success' | 'failed' | 'skipped'; failureDetail?: string }>
+  }) => Promise<boolean>
   onCreateInstallOperation: (payload: {
     eventId: number
     groupId?: number | null
@@ -6705,7 +6681,6 @@ function ProjectDetail({
     releaseVersion?: string
     context?: PackageMarketRequestContext
   }) => Promise<PackageMarketDetail>
-  onInstallLoadItemDownloadUrl: (itemId: number) => Promise<string>
   onInstallLoadEventDeliveryArtifacts: (eventId: number, expireMinutes: 30 | 60 | 120) => Promise<ProjectPackageDeliveryArtifacts>
   onInstallLoadMarketCiBranches: (packageId: string, context?: PackageMarketRequestContext) => Promise<PackageMarketCiBranch[]>
   onInstallLoadMarketRules: (context?: PackageMarketRequestContext) => Promise<PackageMarketRulesResponse>
@@ -6979,7 +6954,6 @@ function ProjectDetail({
             onExportTimeline={onExportInstallTimeline}
             onLoadPackageMarketDetail={onInstallLoadMarketDetail}
             onLoadPackageMarketCiBranches={onInstallLoadMarketCiBranches}
-            onLoadPackageItemDownloadUrl={onInstallLoadItemDownloadUrl}
             onLoadEventDeliveryArtifacts={onInstallLoadEventDeliveryArtifacts}
             onLoadPackageMarketRules={onInstallLoadMarketRules}
             onLoadPackageMarketVersions={onInstallLoadMarketVersions}

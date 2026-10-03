@@ -140,7 +140,10 @@ export function PackageEventFilterBuilderDialog({
           <SelectContent>
             <SelectItem value="draft">草稿</SelectItem>
             <SelectItem value="delivering">交付中</SelectItem>
+            <SelectItem value="rejected">拒绝交付</SelectItem>
+            <SelectItem value="partially_delivered">部分交付</SelectItem>
             <SelectItem value="delivered">已交付</SelectItem>
+            <SelectItem value="failed">交付失败</SelectItem>
           </SelectContent>
         </Select>
       )

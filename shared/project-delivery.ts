@@ -11,22 +11,24 @@ export type DeliveryCapabilities = {
   canReassign: boolean
   canExecute: boolean
   canComplete: boolean
+  canReject: boolean
   canComment: boolean
 }
 
 export function deliveryCapabilities(
   access: { canPlan: boolean; canExecute: boolean; personal: boolean },
-  event: { published: boolean; delivered: boolean; assigneeUserId: number | null },
+  event: { published: boolean; delivered: boolean; editable?: boolean; assigneeUserId: number | null },
   userId: number,
 ): DeliveryCapabilities {
   const executor = access.canExecute && (access.personal || event.assigneeUserId === userId)
-  const active = event.published && !event.delivered
+  const active = event.published && !event.delivered && !event.editable
   return {
-    canEditPlan: access.canPlan && !event.published,
-    canPublish: access.canPlan && !event.published,
+    canEditPlan: access.canPlan && (!event.published || event.editable === true),
+    canPublish: access.canPlan && (!event.published || event.editable === true),
     canReassign: access.canPlan && active,
     canExecute: executor && active,
     canComplete: executor && active,
+    canReject: executor && active,
     canComment: access.canPlan || (executor && event.published),
   }
 }

@@ -7198,6 +7198,24 @@ textarea:focus {
   color: #ffffff;
 }
 
+.project-event-status-badge.rejected {
+  border-color: #b45309;
+  background: color-mix(in oklch, #b45309 13%, transparent);
+  color: color-mix(in oklch, #b45309 78%, var(--strong));
+}
+
+.project-event-status-badge.partially_delivered {
+  border-color: #7c3aed;
+  background: color-mix(in oklch, #7c3aed 12%, transparent);
+  color: color-mix(in oklch, #7c3aed 78%, var(--strong));
+}
+
+.project-event-status-badge.failed {
+  border-color: var(--destructive);
+  background: color-mix(in oklch, var(--destructive) 12%, transparent);
+  color: var(--destructive);
+}
+
 .project-event-item-actions {
   display: flex;
   align-items: center;

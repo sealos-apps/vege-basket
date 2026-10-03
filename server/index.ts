@@ -12559,6 +12559,8 @@ function parseProjectPackageEventAggregateBody(body: Record<string, unknown>) {
       })
     : []
   const other = Object.prototype.hasOwnProperty.call(body, 'other') ? body.other : undefined
+  const deliverySteps = Object.prototype.hasOwnProperty.call(body, 'deliverySteps') ? body.deliverySteps : undefined
+  const deliveryScripts = Object.prototype.hasOwnProperty.call(body, 'deliveryScripts') ? body.deliveryScripts : undefined
   return {
     action: body.action === 'publish' ? 'publish' as const : 'save_draft' as const,
     containerImages: Array.isArray(body.containerImages)
@@ -12572,6 +12574,8 @@ function parseProjectPackageEventAggregateBody(body: Record<string, unknown>) {
     documents,
     items,
     other,
+    deliverySteps,
+    deliveryScripts,
     offlinePackages: Array.isArray(body.offlinePackages)
       ? body.offlinePackages.map((item) => {
           const value = item && typeof item === 'object' ? item as Record<string, unknown> : {}
@@ -12658,6 +12662,8 @@ app.post('/api/projects/:projectId/package-timeline/events', asyncHandler(async 
     items: aggregate.items,
     offlinePackages: aggregate.offlinePackages,
     other: aggregate.other,
+    deliverySteps: aggregate.deliverySteps,
+    deliveryScripts: aggregate.deliveryScripts,
     projectId,
     title: String(request.body.title ?? ''),
     type: ensureProjectPackageEventType(request.body.type),
@@ -12708,6 +12714,8 @@ app.put('/api/projects/:projectId/package-timeline/events/:eventId', asyncHandle
     items: aggregate.items,
     offlinePackages: aggregate.offlinePackages,
     other: aggregate.other,
+    deliverySteps: aggregate.deliverySteps,
+    deliveryScripts: aggregate.deliveryScripts,
     projectId,
     title: String(request.body.title ?? ''),
     type: ensureProjectPackageEventType(request.body.type),
@@ -12758,8 +12766,9 @@ app.post('/api/projects/:projectId/package-timeline/events/:eventId/complete', a
     userId,
     eventId: Number(request.params.eventId),
     projectId,
-    result: request.body.result === 'failed' ? 'failed' : 'success',
+    result: request.body.result,
     failureReason: typeof request.body.failureReason === 'string' ? request.body.failureReason : undefined,
+    stepResults: request.body.stepResults,
   }))
   if (!completed.ok) return
   response.json(await getProjectPackageTimeline(projectId, userId))

@@ -2145,7 +2145,7 @@ export function saveProjectPackageEventDraft(
 export function completeProjectPackageEvent(
   projectId: number,
   eventId: number,
-  payload: { result: 'success' | 'failed'; failureReason?: string },
+  payload: { result: 'success' | 'partial' | 'rejected' | 'failed'; failureReason?: string; stepResults?: Record<string, { result: 'success' | 'failed' | 'skipped'; failureDetail?: string }> },
 ) {
   return requestProjectPackageTimeline(
     `/api/projects/${projectId}/package-timeline/events/${eventId}/complete`,

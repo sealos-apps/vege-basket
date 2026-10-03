@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { deliveryCapabilities, mergeDeliveryMemberDraft, parseDeliveryMembers } from '../shared/project-delivery.ts'
+
+const deliveryAuthorizationSource = readFileSync(new URL('./project-delivery.ts', import.meta.url), 'utf8')
 
 const reader = { canPlan: false, canExecute: false, personal: false }
 const planner = { ...reader, canPlan: true }
@@ -50,6 +53,30 @@ test('publication freezes plans and completion freezes execution but retains fee
   assert.equal(completed.canReassign, false)
   assert.equal(completed.canExecute, false)
   assert.equal(completed.canComment, true)
+})
+
+test('partial and failed delivery results are terminal for execution actions', () => {
+  const dual = { ...planner, canExecute: true }
+  const capabilities = deliveryCapabilities(dual, { ...active, delivered: true }, 2)
+  assert.equal(capabilities.canReassign, false)
+  assert.equal(capabilities.canExecute, false)
+  assert.equal(capabilities.canComplete, false)
+  assert.equal(capabilities.canReject, false)
+  assert.equal(capabilities.canComment, true)
+  assert.match(deliveryAuthorizationSource, /\['delivered', 'partially_delivered', 'failed'\]\.includes\(event\.status\)/u)
+})
+
+test('rejected delivery returns plan editing without retaining execution actions', () => {
+  const dual = { ...planner, canExecute: true }
+  const rejected = { ...active, editable: true }
+  const capabilities = deliveryCapabilities(dual, rejected, 2)
+  assert.equal(capabilities.canEditPlan, true)
+  assert.equal(capabilities.canPublish, true)
+  assert.equal(capabilities.canExecute, false)
+  assert.equal(capabilities.canComplete, false)
+  assert.equal(capabilities.canReject, false)
+  assert.equal(capabilities.canReassign, false)
+  assert.equal(capabilities.canComment, true)
 })
 
 test('unassigned drafts can be planned and published tasks without an assignee cannot execute', () => {
