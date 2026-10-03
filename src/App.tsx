@@ -156,6 +156,7 @@ import {
   fetchProjectOverview,
   fetchProjectTodos,
   fetchTodoDetail,
+  fetchTodoWorkHours,
   fetchWorkspace,
   fetchWorkspaceDocuments,
   fetchWorkspaceInbox,
@@ -328,6 +329,8 @@ import {
 import { MyWorkWorkbench } from './components/my-work-workbench'
 import { WorkHoursWorkbench } from './components/work-hours-workbench'
 import { TodoWorkHoursPanel } from './components/todo-work-hours-panel'
+import { buildAiExportPrompt } from './ai-export-prompt'
+import { AiExportPromptDialog } from './components/ai-export-prompt-dialog'
 import { stripMarkdownLinksToText } from './markdown-preview-policy'
 import { UserRoleSelectionDialog } from './components/user-role-dialogs'
 import {
@@ -1885,6 +1888,7 @@ function App() {
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false)
   const [organizationRefreshVersion, setOrganizationRefreshVersion] = useState(0)
   const [workspaceError, setWorkspaceError] = useState('')
+  const [aiExportPrompt, setAiExportPrompt] = useState<{ prompt: string; fileName: string; summary: string } | null>(null)
   const confirmationScope = `${authUser?.id}:${selectedOrganizationId}:${selectedProjectId}:${view}`
   const { confirmAction, confirmationDialog } = useConfirmAction(confirmationScope)
   const confirmationScopeRef = useRef(confirmationScope)
@@ -5127,63 +5131,114 @@ function App() {
     setAiError('')
   }
 
-  async function exportMarkdown(projectId?: number) {
-    const targets = projectId
-      ? scopedProjects.filter((project) => project.id === projectId)
-      : scopedProjects.filter((project) => project.accessRole === 'owner')
-    const sections = await Promise.all(
-      targets.map(async (project) => {
-        const projectTodosText = todos
-          .filter((todo) => todo.projectId === project.id)
-          .map((todo) => `- [${todo.done ? 'x' : ' '}] ${todo.title}`)
-          .join('\n')
-        const journalsText = project.journals
-          .map((entry) => `### ${entry.speakerName} · ${entry.createdAt} · ${entry.visibility === 'public' ? '公开' : '私有'}\n\n${entry.content}`)
-          .join('\n\n')
-        const summariesText = summaries
-          .filter((summary) => summary.projectId === project.id)
-          .map((summary) => `### ${summary.title}\n\n${summary.content}`)
-          .join('\n\n')
-        const packageTimelineText = await (async () => {
-          try {
-            return (await exportProjectPackageTimeline(project.id)).markdown.trim()
-          } catch {
-            return '安装升级时间线导出失败，请检查后端服务和 OSS 配置。'
-          }
-        })()
+  async function exportMarkdown(projectId?: number, projectIds?: number[]) {
+    const targetIds = projectId != null ? [projectId] : projectIds ?? scopedProjects.filter((item) => item.accessRole === 'owner').map((item) => item.id)
+    const targets = scopedProjects.filter((item) => targetIds.includes(item.id))
+    if (!targets.length) {
+      setWorkspaceError('当前范围没有可导出的项目。')
+      return
+    }
+    try {
+      const sections = await Promise.all(targets.map(async (project) => {
+        const projectData = await fetchProjectTodos(project.id)
+        const projectTodos = projectData.todos.filter((todo) => todo.projectId === project.id)
+        const todosWithHours = await Promise.all(projectTodos.map(async (todo) => {
+          const records: Awaited<ReturnType<typeof fetchTodoWorkHours>>['entries'] = []
+          let cursor = 0
+          do {
+            const page = await fetchTodoWorkHours(todo.id, { cursor, limit: 100 })
+            records.push(...page.entries)
+            const next = page.pagination ? page.pagination.offset + page.pagination.limit : records.length
+            if (!page.pagination || next >= page.pagination.total || page.entries.length === 0) break
+            cursor = next
+          } while (records.length < 5000)
+          return { todo, records }
+        }))
+        const timeline = await exportProjectPackageTimeline(project.id)
+        return [
+          `## 项目：${project.name}`,
+          `- 项目 ID：${project.id}`,
+          `- 状态：${statusCopy[project.status]}`,
+          `- 标签：${project.tags.join('、') || '无'}`,
+          `- 最近更新：${project.updatedAt}`,
+          '',
+          '### 项目待办与工时记录',
+          todosWithHours.length ? todosWithHours.map(({ todo, records }) => [
+            `#### ${todo.title}`,
+            `- 待办 ID：${todo.id}`,
+            `- 状态：${todo.done ? '已完成' : todo.confirmationStatus === 'pending_review' ? '待确认' : '进行中'}`,
+            `- 详情：${todo.detail || '无'}`,
+            `- 备注：${todo.notes.map((note) => `${note.authorName ?? '未知'}：${note.content}`).join('；') || '无'}`,
+            `- 负责人：${todo.assigneeName ?? '未分配'}`,
+            `- 创建人：${todo.creatorName ?? '未知'}`,
+            `- 预估工时：${todo.estimatedWorkMinutes ?? 0} 分钟；已记录：${todo.recordedWorkMinutes ?? 0} 分钟；已确认：${todo.confirmedWorkMinutes ?? 0} 分钟`,
+            records.length ? `- 工时记录：${JSON.stringify(records)}` : '- 工时记录：无',
+          ].join('\n')).join('\n\n') : '暂无项目待办',
+          '',
+          '### 项目总结',
+          summaries.filter((item) => item.projectId === project.id).map((item) => `#### ${item.title}\n${item.content}`).join('\n\n') || '暂无总结',
+          '',
+          '### 交付时间线',
+          timeline.markdown.trim() || '暂无交付时间线',
+        ].join('\n')
+      }))
+      const prompt = buildAiExportPrompt({
+        title: projectId != null ? `${targets[0].name} 项目数据` : '项目篮子数据',
+        scope: [
+          `组织：${selectedOrganizationName}`,
+          `项目范围：${projectId != null ? '当前项目' : projectIds ? '当前筛选项目' : '当前上下文全部项目'}`,
+          `项目数：${targets.length}`,
+          '不包含：项目日记、图片、临时下载地址、分享链接和权限信息。',
+        ],
+        fields: ['项目元数据、待办详情、待办备注、负责人/创建人、待办状态、预估/记录/确认工时、工时记录、项目总结、交付时间线'],
+        data: sections.join('\n\n---\n\n'),
+        instructions: ['按项目和待办分组，识别逾期、待确认、工时超支和缺少记录的风险。', '输出适合项目复盘的事实摘要、风险列表和下一步行动。'],
+      })
+      setAiExportPrompt({
+        prompt,
+        fileName: projectId != null ? `${targets[0].name}项目提示词` : `Veges-${selectedOrganizationName}项目篮子提示词`,
+        summary: `本次将导出 ${targets.length} 个项目的完整项目待办、详情、备注、工时记录、总结和交付时间线；项目日记及二进制资源不在范围内。`,
+      })
+    } catch (error) {
+      setWorkspaceError(formatApiErrorDiagnostic(error, '项目导出数据加载失败，请稍后重试。'))
+    }
+  }
 
-        return `# ${project.name}
-
-状态：${statusCopy[project.status]}
-标签：${project.tags.join('、')}
-最近更新：${project.updatedAt}
-
-## 日记
-
-${journalsText || '暂无日记'}
-
-## 待办
-
-${projectTodosText || '暂无待办'}
-
-## 总结
-
-${summariesText || '暂无总结'}
-
-## 安装升级时间线
-
-${packageTimelineText}`
-      }),
-    )
-    const body = sections.join('\n\n---\n\n')
-
-    const blob = new Blob([body], { type: 'text/markdown;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = projectId ? `${targets[0]?.name}.md` : `Veges-${selectedOrganizationName}驾驶舱导出.md`
-    link.click()
-    URL.revokeObjectURL(url)
+  async function exportProjectTodos(project: Project, selectedTodos: Todo[], scope: 'all' | 'filtered') {
+    try {
+      const todosWithHours = await Promise.all(selectedTodos.map(async (todo) => {
+        const records: Awaited<ReturnType<typeof fetchTodoWorkHours>>['entries'] = []
+        let cursor = 0
+        do {
+          const response = await fetchTodoWorkHours(todo.id, { cursor, limit: 100 })
+          records.push(...response.entries)
+          const next = response.pagination ? response.pagination.offset + response.pagination.limit : records.length
+          if (!response.pagination || next >= response.pagination.total || response.entries.length === 0) break
+          cursor = next
+        } while (records.length < 5000)
+        return { todo, records }
+      }))
+      const data = todosWithHours.map(({ todo, records }) => [
+        `### ${todo.title}`,
+        `- 待办 ID：${todo.id}`,
+        `- 详情：${todo.detail || '无'}`,
+        `- 备注：${todo.notes.map((note) => `${note.authorName ?? '未知'}：${note.content}`).join('；') || '无'}`,
+        `- 状态：${todo.done ? '已完成' : todo.confirmationStatus === 'pending_review' ? '待确认' : '进行中'}`,
+        `- 负责人：${todo.assigneeName ?? '未分配'}；创建人：${todo.creatorName ?? '未知'}`,
+        `- 工时摘要：预估 ${todo.estimatedWorkMinutes ?? 0} 分钟；已记录 ${todo.recordedWorkMinutes ?? 0} 分钟；已确认 ${todo.confirmedWorkMinutes ?? 0} 分钟`,
+        `- 工时记录：${records.length ? JSON.stringify(records) : '无'}`,
+      ].join('\n')).join('\n\n')
+      const prompt = buildAiExportPrompt({
+        title: `${project.name} 项目待办`,
+        scope: [`项目：${project.name}`, `范围：${scope === 'all' ? '当前项目全部待办' : '当前筛选结果'}`, `待办数：${selectedTodos.length}`, '不包含图片、临时下载地址、分享链接和权限信息。'],
+        fields: ['待办标题、详情、备注、创建/截止日期、优先级、完成/确认状态、负责人、创建人、模块、子项目、工时摘要和工时记录'],
+        data,
+        instructions: ['按状态和负责人归纳项目待办，识别逾期、待确认和工时偏差。', '给出按优先级排序的下一步行动。'],
+      })
+      setAiExportPrompt({ prompt, fileName: `${project.name}项目待办提示词`, summary: `本次将导出 ${selectedTodos.length} 条${scope === 'all' ? '当前项目全部' : '当前筛选'}待办，以及每条待办的详情、备注和工时记录。` })
+    } catch (error) {
+      setWorkspaceError(formatApiErrorDiagnostic(error, '项目待办导出数据加载失败，请稍后重试。'))
+    }
   }
 
   const changelogAnnouncementDialog = authUser ? (
@@ -5703,23 +5758,20 @@ ${packageTimelineText}`
                       </DialogContent>
                     </Dialog>
                   )}
-                  {view !== 'ai' && view !== 'organization' && view !== 'weekly_report' && view !== 'assigned_bugs' && view !== 'package_market' && view !== 'image_sync' && view !== 'changelog' ? (
-                    <Button
-                      className="ghost-button"
-                      variant="outline"
-                      type="button"
-                      onClick={() =>
-                        exportMarkdown(view === 'project' ? selectedProject?.id : undefined)
-                      }
-                    >
-                      <DownloadSimple size={17} /> 批量导出
-                    </Button>
-                  ) : null}
                 </>
               )}
             </div>
           </header>
         ) : null}
+
+        <AiExportPromptDialog
+          open={Boolean(aiExportPrompt)}
+          onOpenChange={(open) => { if (!open) setAiExportPrompt(null) }}
+          title="确认导出项目提示词"
+          prompt={aiExportPrompt?.prompt ?? ''}
+          fileName={aiExportPrompt?.fileName ?? '项目提示词'}
+          summary={aiExportPrompt?.summary}
+        />
 
         {(!workspaceLoaded || workspaceError) && (
           <div className={workspaceError ? 'sync-banner error' : 'sync-banner'}>
@@ -5788,6 +5840,7 @@ ${packageTimelineText}`
             onToggleJournalRisk={toggleJournalRisk}
             onUpdateJournalVisibility={updateJournalVisibility}
             onDeleteTodo={deleteTodo}
+            onExportProjectTodos={(scope, selectedTodos) => void exportProjectTodos(selectedProject, selectedTodos, scope)}
             onCreateTodoModule={createModule}
             onLoadTodoDetail={loadTodoDetails}
             onUpdateTodo={updateTodoDetails}
@@ -5922,6 +5975,7 @@ ${packageTimelineText}`
             search={search}
             statusFilter={statusFilter}
             tagFilter={tagFilter}
+            onExportProjects={(scope) => void exportMarkdown(undefined, scope === 'filtered' ? filteredResults.map((project) => project.id) : scopedProjects.map((project) => project.id))}
             exportMarkdown={exportMarkdown}
             generateSummary={generateSummary}
             onDeleteProject={deleteProject}
@@ -6597,6 +6651,7 @@ function ProjectDetail({
   onUpdateJournalVisibility,
   onCreateTodoModule,
   onDeleteTodo,
+  onExportProjectTodos,
   onLoadTodoDetail,
   onUpdateTodo,
   onTodoCreateDraftClear,
@@ -6731,6 +6786,7 @@ function ProjectDetail({
   ) => void
   onCreateTodoModule: (projectId: number, name: string) => Promise<ProjectModule | null>
   onDeleteTodo: (todoId: number) => Promise<boolean>
+  onExportProjectTodos: (scope: 'all' | 'filtered', todos: Todo[]) => void
   onLoadTodoDetail: (todoId: number) => Promise<Todo | null>
   onUpdateTodo: (id: number, payload: TodoUpdatePayload) => Promise<boolean>
   onTodoCreateDraftClear: (projectId?: number) => void
@@ -7208,6 +7264,7 @@ function ProjectDetail({
                 initialTodoId={initialTodoId}
                 memberships={memberships}
                 onDeleteTodo={canWriteProject || project.canManageOrganizationTodos ? onDeleteTodo : undefined}
+                onExportProjectTodos={onExportProjectTodos}
                 onLoadTodoDetail={onLoadTodoDetail}
                 onDetailModeChange={setIsProjectTodoDetailOpen}
                 onDetailBack={notificationDetailActive ? onReturnToNotifications : undefined}
@@ -7752,7 +7809,7 @@ function ProjectActionsMenu({
           <UserSwitch /> 项目转移
         </DropdownMenuItem>
         {canUseContentActions ? <><DropdownMenuItem onSelect={exportProject}>
-          <DownloadSimple /> 导出项目
+          <DownloadSimple /> 导出项目提示词
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={generateWeeklySummary}>
           <Sparkle /> 生成周总结
@@ -9023,6 +9080,7 @@ function SearchView({
   onStatusChange,
   onTagChange,
   onUpdateProjectStatus,
+  onExportProjects,
   search,
   statusFilter,
   tagFilter,
@@ -9043,6 +9101,7 @@ function SearchView({
   onStatusChange: (value: ProjectStatus | 'all') => void
   onTagChange: (value: string) => void
   onUpdateProjectStatus: (projectId: number, status: ProjectStatus) => void
+  onExportProjects: (scope: 'filtered' | 'all') => void
   search: string
   statusFilter: ProjectStatus | 'all'
   tagFilter: string
@@ -9238,6 +9297,14 @@ function SearchView({
             </SelectContent>
           </Select>
         </Label>
+        <div className="search-export-actions">
+          <Button type="button" variant="outline" onClick={() => onExportProjects('filtered')}>
+            <DownloadSimple size={16} /> 导出当前筛选
+          </Button>
+          <Button type="button" variant="outline" onClick={() => onExportProjects('all')}>
+            <DownloadSimple size={16} /> 导出当前上下文
+          </Button>
+        </div>
       </div>
       <div className="search-results">
         {visibleProjects.map((project) => (
@@ -11865,6 +11932,7 @@ function TodoList({
   initialTodoId,
   onDetailBack,
   onDeleteTodo,
+  onExportProjectTodos,
   onDetailModeChange,
   onRecordWorkHour,
   onLoadTodoDetail,
@@ -11883,6 +11951,7 @@ function TodoList({
   initialTodoId?: number | null
   onDetailBack?: () => void
   onDeleteTodo?: (id: number) => Promise<boolean>
+  onExportProjectTodos?: (scope: 'all' | 'filtered', todos: Todo[]) => void
   onDetailModeChange?: (active: boolean) => void
   onRecordWorkHour?: (projectId: number, todoId: number) => void
   onLoadTodoDetail?: (id: number) => Promise<Todo | null>
@@ -12442,6 +12511,10 @@ function TodoList({
             清除
           </Button>
         ) : null}
+        {onExportProjectTodos ? <div className="todo-export-actions">
+          <Button type="button" variant="outline" onClick={() => onExportProjectTodos('filtered', filteredTodos)}><DownloadSimple size={15} />导出当前筛选</Button>
+          <Button type="button" variant="outline" onClick={() => onExportProjectTodos('all', sortedTodos)}><DownloadSimple size={15} />导出全部</Button>
+        </div> : null}
         <TodoFilterBuilderDialog
           assigneeOptions={assigneeFilterOptions.assignees}
           conditions={todoFilterConditions}

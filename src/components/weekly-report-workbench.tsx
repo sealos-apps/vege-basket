@@ -27,6 +27,7 @@ import {
   CaretLeft,
   CaretRight,
   ClipboardText,
+  DownloadSimple,
   Flag,
   FolderSimple,
   LinkSimple,
@@ -75,6 +76,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { ConfirmActionDialog } from './confirm-action-dialog'
 import { OrganizationPermissionErrorDialog } from './organization-permission-error-dialog'
 import { isOrganizationPermissionError, organizationPermissionErrorMessage } from './organization-permission-error'
+import { buildAiExportPrompt } from '../ai-export-prompt'
+import { AiExportPromptDialog } from './ai-export-prompt-dialog'
 import './weekly-report-workbench.css'
 
 class WeeklyReportEditorBoundary extends Component<
@@ -303,6 +306,8 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   const [reportListRefresh, setReportListRefresh] = useState(0)
   const [backgroundRefreshVersion, setBackgroundRefreshVersion] = useState(0)
   const [reportListLoading, setReportListLoading] = useState(false)
+  const [selectedReports, setSelectedReports] = useState<Map<string, PersonalWeeklyReportListItem>>(() => new Map())
+  const [exportPrompt, setExportPrompt] = useState<{ prompt: string; fileName: string; summary: string } | null>(null)
   const [currentWeekSubmitted, setCurrentWeekSubmitted] = useState<boolean | null>(null)
   const [currentWeekReport, setCurrentWeekReport] = useState<PersonalWeeklyReportListItem | null>(null)
   const [now, setNow] = useState(() => getShanghaiDateTime())
@@ -621,6 +626,37 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
     setCurrentWeekSubmitted(Boolean(currentReport?.publishedRevision))
     setCurrentWeekReport(currentReport ?? null)
   }, [now, reportList, reportListPage, reportProfile, weekStartsOn, weeklyReportRules, workspaceView])
+
+  async function exportReports(items: Array<Pick<PersonalWeeklyReportListItem, 'weekStart' | 'reportProfile'>>) {
+    if (!organizationId || items.length === 0) return
+    try {
+      const reports = await Promise.all(items.map((item) => fetchPersonalWeeklyReport(
+        organizationId,
+        item.weekStart,
+        item.reportProfile ?? 'legacy',
+      )))
+      const data = reports.map((item) => [
+        `### ${item.weekStart} · ${item.authorName}`,
+        `- 组织：${item.organizationName}`,
+        `- 角色：${item.reportProfile ?? item.activeProfile}`,
+        `- 周期：${formatWeekRange(item.weekStart)}`,
+        `- 状态：${item.state}`,
+        `- 提交时间：${item.submittedAt ?? '未提交'}`,
+        `- 周报内容：\n${item.publishedContent || item.content || '无内容'}`,
+        `- 来源摘要：${item.sources.length} 项来源；${item.itemSources.length} 项内容绑定`,
+      ].join('\n')).join('\n\n')
+      const prompt = buildAiExportPrompt({
+        title: '周报管理导出',
+        scope: [`组织：${reports[0]?.organizationName ?? organizationId}`, `已选择周报：${items.length} 篇`, `周期：${items.map((item) => item.weekStart).join('、')}`],
+        fields: ['周报周期、作者、角色、状态、提交时间、周报内容、来源数量和事项来源绑定摘要'],
+        data,
+        instructions: ['比较多篇周报的进展、风险和计划变化，标记跨周持续未解决的问题。', '输出事实摘要、趋势判断和下一周行动建议。'],
+      })
+      setExportPrompt({ prompt, fileName: `周报-${items[0].weekStart}-${items.length}篇提示词`, summary: `本次将导出 ${items.length} 篇周报。导出前已重新读取每篇周报的完整内容和来源摘要。` })
+    } catch (loadError) {
+      setOperationError(loadError)
+    }
+  }
 
   async function convertLegacyDraft() {
     if (busy || saveInFlight.current || !report) return
@@ -967,6 +1003,8 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
   )
 
   return (
+    <>
+    <AiExportPromptDialog open={Boolean(exportPrompt)} onOpenChange={(open) => { if (!open) setExportPrompt(null) }} title="确认导出周报提示词" prompt={exportPrompt?.prompt ?? ''} fileName={exportPrompt?.fileName ?? '周报提示词'} summary={exportPrompt?.summary} />
     <section className={`weekly-report-workbench is-${workspaceView}`} aria-label="周报管理">
       <OrganizationPermissionErrorDialog
         message={organizationPermissionError}
@@ -1025,7 +1063,10 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
                   <strong>{currentState?.label ?? '尚未创建周报'}{current?.reportProfile ? ` · ${weeklyReportProfiles[current.reportProfile].label}` : ''}</strong>
                   <small>{current?.publishedRevision ? `已提交第 ${current.publishedRevision} 版，管理员可见提交快照。` : '草稿只对自己可见，填写完成后可在预览中确认提交。'}</small>
                 </div>
-                {current ? <Button type="button" onClick={() => openEditor(activeWeekStart, current.state === 'submitted', reportProfile)}><PencilSimple size={16} />{current.state === 'submitted' ? '查看周报' : current.state === 'modified' ? '继续修改' : '继续填写'}</Button> : <CreateWeeklyReportButton enabled={canCreateWeeklyReport} reason={weeklyReportCreationReason} onCreate={() => openEditor(activeWeekStart, false, reportProfile, true)} />}
+                <div className="weekly-report-list-actions">
+                  {current ? <Button type="button" onClick={() => openEditor(activeWeekStart, current.state === 'submitted', reportProfile)}><PencilSimple size={16} />{current.state === 'submitted' ? '查看周报' : current.state === 'modified' ? '继续修改' : '继续填写'}</Button> : <CreateWeeklyReportButton enabled={canCreateWeeklyReport} reason={weeklyReportCreationReason} onCreate={() => openEditor(activeWeekStart, false, reportProfile, true)} />}
+                  <Button type="button" variant="outline" disabled={!current} onClick={() => current && void exportReports([current])}><DownloadSimple size={16} />导出当前周报</Button>
+                </div>
               </section>
             )
           })()}
@@ -1034,6 +1075,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
               <h2>我的周报</h2>
               <span>共 {reportList?.total ?? 0} 份</span>
             </div>
+            <Button type="button" variant="outline" disabled={!selectedReports.size} onClick={() => void exportReports(Array.from(selectedReports.values()))}><DownloadSimple size={16} />导出已选周报 ({selectedReports.size})</Button>
           </header>
 
           {reportListLoading && !reportList ? (
@@ -1043,6 +1085,7 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
           ) : reportList?.items.length ? (
             <div className="weekly-report-list" role="list">
               <div className="weekly-report-list-head" aria-hidden="true">
+                <span>选择</span>
                 <span>周报周期</span>
                 <span>状态</span>
                 <span>关联工作</span>
@@ -1053,8 +1096,17 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
                 const state = reportStateMeta[item.state]
                 const reportLabel = item.reportProfile ? weeklyReportProfiles[item.reportProfile].label : '历史格式周报'
                 const canEditItem = Boolean(canWriteWeeklyReport && item.reportProfile === activeProfile && !item.publishedRevision)
+                const selectionKey = `${item.weekStart}:${item.reportProfile ?? 'legacy'}`
                 return (
                   <article className="weekly-report-list-row" key={`${item.weekStart}:${item.reportProfile ?? 'legacy'}`} role="listitem">
+                    <label className="weekly-report-list-select">
+                      <input type="checkbox" checked={selectedReports.has(selectionKey)} onChange={(event) => setSelectedReports((current) => {
+                        const next = new Map(current)
+                        if (event.target.checked) next.set(selectionKey, item)
+                        else next.delete(selectionKey)
+                        return next
+                      })} aria-label={`选择 ${formatWeekRange(item.weekStart)} ${reportLabel}`} />
+                    </label>
                     <div className="weekly-report-list-period">
                       <strong>{formatWeekRange(item.weekStart)}</strong>
                       <span>{item.reportProfile ? weeklyReportProfiles[item.reportProfile].label : '历史周报'} · {item.publishedRevision ? `已提交第 ${item.publishedRevision} 版` : '尚未提交'}</span>
@@ -1371,5 +1423,6 @@ export const WeeklyReportWorkbench = forwardRef<WeeklyReportWorkbenchHandle, Wee
       </Dialog>
 
     </section>
+    </>
   )
 })

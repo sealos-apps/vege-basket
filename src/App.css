@@ -15467,5 +15467,9 @@ textarea:focus {
 .project-module-select-footer { padding: 8px 10px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted-foreground); }
 .project-module-availability-hint { display: block; width: 100%; font-size: 11px; line-height: 1.6; color: var(--muted-foreground); }
 
+.ai-export-prompt-dialog { max-width: min(900px, calc(100vw - 32px)); }
+.ai-export-prompt-summary { border: 1px solid var(--line); background: var(--surface-muted); border-radius: 6px; padding: 10px 12px; color: var(--muted-foreground); font-size: 13px; }
+.ai-export-prompt-preview { width: 100%; min-height: 360px; max-height: 52vh; resize: vertical; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--foreground); padding: 12px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
 /* Ordinary task lists keep filters and navigation outside the scrolling rows. */
 .paginated-todo-list { max-height: max(240px, calc(100dvh - 340px)); overflow: auto; overscroll-behavior: contain; }

@@ -6,6 +6,8 @@ import {
   type WorkHourEntry, type WorkHourSummary,
 } from '../api'
 import type { Project, Todo } from '../types'
+import { buildAiExportPrompt } from '../ai-export-prompt'
+import { AiExportPromptDialog } from './ai-export-prompt-dialog'
 import { ConfirmActionDialog } from './confirm-action-dialog'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
@@ -45,10 +47,6 @@ function shiftRange(range: { startDate: string; endDate: string }, period: 'week
     end.setMonth(end.getMonth() + direction)
   }
   return { startDate: dateInputValue(start), endDate: dateInputValue(end) }
-}
-
-function csvCell(value: string | number) {
-  return `"${String(value).replaceAll('"', '""')}"`
 }
 
 const emptySummary: WorkHourSummary = {
@@ -109,6 +107,7 @@ export function WorkHoursWorkbench({
   const [minutes, setMinutes] = useState('60')
   const [workDate, setWorkDate] = useState(dateInputValue(new Date()))
   const [description, setDescription] = useState('')
+  const [exportPrompt, setExportPrompt] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -254,15 +253,30 @@ export function WorkHoursWorkbench({
     } finally { setSaving(false) }
   }
 
-  function exportEntries() {
-    const csv = [['日期', '项目', '任务', '说明', '小时', '状态'], ...entries.map((entry) => [entry.workDate, entry.projectName ?? '', entry.todoTitle ?? '', entry.description, entry.hours, entry.status === 'confirmed' ? '已确认' : '待确认'])]
-      .map((row) => row.map(csvCell).join(',')).join('\n')
-    const url = URL.createObjectURL(new Blob(['\ufeff', csv], { type: 'text/csv;charset=utf-8' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `我的工时-${range.startDate}-${range.endDate}.csv`
-    link.click()
-    URL.revokeObjectURL(url)
+  function openExportPrompt() {
+    const filtered = tableQuery.trim() ? filteredEntries : entries
+    const data = filtered.map((entry) => [
+      `日期：${entry.workDate}`,
+      `项目：${entry.projectName ?? '未命名项目'}`,
+      `任务：${entry.todoTitle ?? `任务 #${entry.todoId}`}`,
+      `人员：${entry.userName ?? '未知'}`,
+      `时长：${entry.hours} 小时（${entry.minutes} 分钟）`,
+      `状态：${entry.status === 'confirmed' ? '已确认' : '待确认'}`,
+      `说明：${entry.description || '无'}`,
+    ].join('\n')).join('\n\n')
+    setExportPrompt(buildAiExportPrompt({
+      title: mode === 'project' ? `${project?.name ?? '项目'}工时` : '组织工时统计',
+      scope: [
+        `模式：${mode === 'project' ? '项目工时' : '工时统计'}`,
+        `日期范围：${range.startDate} 至 ${range.endDate}`,
+        `状态：${mode === 'mine' ? status : '全部状态'}`,
+        tableQuery.trim() ? `当前筛选：${tableQuery.trim()}` : '当前筛选：全部可见记录',
+        `记录数：${filtered.length}`,
+      ],
+      fields: ['日期、项目、任务、人员、分钟数/小时数、确认状态、工作说明', '统计摘要：总投入、已确认、待确认、预估和偏差'],
+      data: `${JSON.stringify({ summary, entries: filtered }, null, 2)}\n\n${data}`,
+      instructions: ['按项目和任务汇总实际投入，指出已确认与待确认差异。', '比较预估与实际投入，标记明显偏差和需要跟进的任务。'],
+    }))
   }
 
   const maxMemberMinutes = Math.max(...summary.byUser.map((item) => item.minutes), 1)
@@ -312,7 +326,7 @@ export function WorkHoursWorkbench({
 
   return (
     <section className={`work-hours-workbench mode-${mode}${recorderOnly ? ' is-recorder-only' : ''}`}>
-      {mode === 'mine' ? <div className="work-hours-actions work-hours-actions-only"><Button type="button" variant="outline" onClick={exportEntries}><DownloadSimple size={16} />导出</Button><Button type="button" onClick={() => openRecorder()}><Plus size={16} />填报工时</Button></div> : null}
+      {mode === 'mine' ? <div className="work-hours-actions work-hours-actions-only"><Button type="button" onClick={() => openRecorder()}><Plus size={16} />填报工时</Button></div> : <div className="work-hours-actions work-hours-actions-only"><Button type="button" variant="outline" onClick={openExportPrompt}><DownloadSimple size={16} />导出 AI 提示词</Button></div>}
 
       <nav className="work-hours-tabs" aria-label="工时视图">
         {mode === 'mine' ? <><button className={mineTab === 'records' ? 'is-active' : ''} onClick={() => setMineTab('records')} type="button">工时记录</button><button className={mineTab === 'stats' ? 'is-active' : ''} onClick={() => setMineTab('stats')} type="button">工时统计</button></> : <>
@@ -374,6 +388,7 @@ export function WorkHoursWorkbench({
       <Dialog open={dialogOpen} onOpenChange={(open) => { if (!saving) { setDialogOpen(open); if (!open) onRecorderDismiss?.() } }}><DialogContent className="work-hours-dialog"><DialogHeader><DialogTitle>{editingEntry ? '编辑工时' : '填报工时'}</DialogTitle><DialogDescription>{recorderContextLocked && !editingEntry ? '已从待办带入项目和任务，请填写本次实际完成的工作。' : '选择组织内可访问的进行中任务，记录本人实际完成的工作。'}</DialogDescription></DialogHeader><div className="work-hours-dialog-form">{recorderContextLocked && !editingEntry ? <div className="work-hours-locked-context" aria-label="已选择的项目和任务"><div><span>项目</span><strong>{selectedProjectName ?? '当前项目'}</strong></div><div><span>任务</span><strong>{todos.find((todo) => todo.id === selectedTodoId)?.title ?? `任务 #${selectedTodoId}`}</strong></div></div> : <><Label>项目{recorderProjectPicker}</Label><Label>任务{recorderTaskPicker}</Label></>}<div className="work-hours-form-grid"><Label>日期<Input max={dateInputValue(new Date())} type="date" value={workDate} onChange={(event) => setWorkDate(event.target.value)} /></Label><Label>时长（小时）<Input min="1" max="24" step="1" type="number" value={String(Number(minutes) / 60)} onChange={(event) => setMinutes(String(Math.round(Number(event.target.value) * 60)))} /></Label></div><Label><span>工作说明 <span className="field-required" aria-hidden="true">*</span></span><textarea aria-required="true" required value={description} onChange={(event) => setDescription(event.target.value)} placeholder="说明本次完成的工作和结果" rows={4} /></Label>{error ? <div className="work-hours-error">{error}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogOpen(false)} type="button">取消</Button><Button disabled={saving || !selectedTodoId || !description.trim()} onClick={() => void saveRecord()} type="button">{saving ? '保存中...' : '保存记录'}</Button></DialogFooter></DialogContent></Dialog>
       <Dialog open={Boolean(selectedTask)} onOpenChange={(open) => { if (!open) setSelectedTaskId(null) }}><DialogContent className="work-hours-task-drawer"><DialogHeader><DialogTitle>{selectedTask?.title}</DialogTitle><DialogDescription>{selectedTask?.assigneeName ?? '未分配负责人'} · {selectedTask?.done ? '已完成' : selectedTask?.confirmationStatus === 'pending_review' ? '待确认' : '进行中'}</DialogDescription></DialogHeader>{selectedTask ? <><div className="work-hours-drawer-metrics"><div><span>预估</span><strong>{hours(selectedTask.estimatedMinutes)}</strong></div><div><span>已确认</span><strong>{hours(selectedTask.confirmedMinutes)}</strong></div><div><span>待确认</span><strong>{hours(selectedTask.pendingMinutes)}</strong></div></div><div className="work-hours-drawer-list"><h4>工时记录</h4>{selectedTaskEntries.length ? selectedTaskEntries.map((entry) => <div key={entry.id}><span>{entry.workDate}<small>{entry.userName ?? ''}</small></span><p>{entry.description}</p><strong>{hours(entry.minutes)}</strong>{entry.status === 'pending' && entry.userId === currentUserId ? <span className="work-hours-drawer-entry-actions"><Button aria-label="编辑工时" size="icon" variant="ghost" onClick={() => openRecorder(entry)}><PencilSimple size={14} /></Button><Button aria-label="删除工时" size="icon" variant="ghost" onClick={() => setDeletingEntry(entry)}><Trash size={14} /></Button></span> : null}</div>) : <p className="work-hours-empty">当前任务暂无工时记录</p>}</div>{selectedTaskEntryTotal > 10 ? <ListPagination label="任务投入明细分页" page={selectedTaskEntryPage} pageSize={10} total={selectedTaskEntryTotal} onPageChange={setSelectedTaskEntryPage} /> : null}{projectId && selectedTask && selectedTask.assigneeUserId != null && !selectedTask.done && selectedTask.confirmationStatus !== 'pending_review' ? <DialogFooter><Button type="button" onClick={() => { setSelectedTaskId(null); openRecorderForTodo(selectedTask.taskId, projectId) }}>记录工时</Button>{onTodoClick ? <Button type="button" variant="outline" onClick={() => onTodoClick(projectId, selectedTask.taskId)}>打开任务详情</Button> : null}</DialogFooter> : projectId && selectedTask && onTodoClick ? <DialogFooter><Button type="button" onClick={() => onTodoClick(projectId, selectedTask.taskId)}>打开任务详情</Button></DialogFooter> : null}</> : null}</DialogContent></Dialog>
       <ConfirmActionDialog actionKey={`delete-work-hour:${deletingEntry?.id ?? 0}`} open={Boolean(deletingEntry)} onOpenChange={(open) => { if (!open) setDeletingEntry(null) }} title="删除工时记录" description="删除后无法恢复，统计数据会立即更新。" confirmLabel="删除记录" onConfirm={async () => { if (!deletingEntry) return false; await removeWorkHour(deletingEntry.id); setDeletingEntry(null); setSelectedTaskEntriesVersion((version) => version + 1); reload(); return true }} />
+      <AiExportPromptDialog open={Boolean(exportPrompt)} onOpenChange={(open) => { if (!open) setExportPrompt(null) }} title="确认导出工时提示词" prompt={exportPrompt ?? ''} fileName={`${project?.name ?? '组织'}工时分析提示词`} summary={`本次将导出 ${tableQuery.trim() ? '当前筛选后的' : '当前周期内的'} ${entries.length} 条已授权工时记录，包含统计摘要和工作说明。`} />
     </section>
   )
 }
