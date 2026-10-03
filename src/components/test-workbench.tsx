@@ -50,6 +50,7 @@ import {
   PencilSimple,
   Plus,
   Stack,
+  Sparkle,
   Trash,
   UploadSimple,
   UserPlus,
@@ -146,6 +147,7 @@ import {
   fetchTestSpaceInviteLinkInfo,
   fetchTestSpaceSettings,
   fetchTestWorkbench,
+  exportTestBugAiPrompt,
   importTestCases,
   importTestSpaceData,
   inviteTestSpaceMember,
@@ -2856,6 +2858,8 @@ function BugDetail({ bug, busy, cases, departedUserIds, draftOwnerUserId, onAssi
   const [timelineOpen, setTimelineOpen] = useState(false)
   const [transferSpaceOpen, setTransferSpaceOpen] = useState(false)
   const [environmentCopyState, setEnvironmentCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [aiExportBusy, setAiExportBusy] = useState(false)
+  const [aiExportError, setAiExportError] = useState('')
   const environmentValue = bug.testEnvironmentAccessUrl || bug.environment
 
   useEffect(() => {
@@ -2871,18 +2875,41 @@ function BugDetail({ bug, busy, cases, departedUserIds, draftOwnerUserId, onAssi
     }
   }
 
+  async function exportAiPrompt() {
+    setAiExportBusy(true)
+    setAiExportError('')
+    try {
+      const result = await exportTestBugAiPrompt(bug.testSpaceId, bug.id)
+      const blob = new Blob([result.prompt], { type: 'text/markdown;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = result.fileName
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    } catch (error) {
+      setAiExportError(error instanceof Error ? error.message : 'AI 提示词导出失败，请稍后重试。')
+    } finally {
+      setAiExportBusy(false)
+    }
+  }
+
   return <>
     <div className="test-detail-heading">
       <div><code>BUG-{bug.id}</code><h2>{bug.title}</h2></div>
       <div className="test-detail-heading-actions">
         {bug.canTransferSpace ? <Button aria-label="转移空间" disabled={busy} onClick={() => setTransferSpaceOpen(true)} size="icon-sm" title="转移空间" variant="outline"><ArrowsLeftRight /></Button> : null}
         <Button aria-label="时间线" onClick={() => setTimelineOpen(true)} size="icon-sm" title="时间线" variant="outline"><Clock /></Button>
+        <Button aria-label="AI 导出提示词" disabled={busy || aiExportBusy} onClick={() => void exportAiPrompt()} size="icon-sm" title="AI 导出提示词" variant="outline"><Sparkle /></Button>
         {(bug.status === 'rejected' || bug.status === 'closed') ? <Button variant="outline" disabled={busy || readOnly} onClick={() => onStatus(bug, 'pending_confirmation')}><ArrowCounterClockwise /> 重新打开</Button> : null}
         {bug.canShare ? <Button aria-label="分享 Bug" disabled={busy} onClick={() => setShareOpen(true)} size="icon-sm" title="分享 Bug" variant="outline"><LinkSimple /></Button> : null}
         {bug.canEdit && !readOnly ? <Button aria-label="编辑" disabled={busy} onClick={() => onEdit(bug)} size="icon-sm" title="编辑" variant="outline"><PencilSimple /></Button> : null}
         {bug.canDelete ? <Button aria-label="删除 Bug" disabled={busy} onClick={() => onDelete(bug)} size="icon-sm" title="删除 Bug" variant="destructive"><Trash /></Button> : null}
       </div>
     </div>
+    {aiExportError ? <p className="test-form-error" role="alert">{aiExportError}</p> : null}
     <div className="test-bug-controls"><Label>状态<Select value={visibleBugStatus(bug.status)} onValueChange={(value) => onStatus(bug, selectedBugStatus(bug, value as BugStatus))} disabled={busy || readOnly}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{bugStatusOptions.map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></Label><Label>负责人<Select value={bug.assigneeUserId ? String(bug.assigneeUserId) : 'none'} onValueChange={(value) => onAssignee(bug, value === 'none' ? undefined : Number(value))} disabled={busy || readOnly}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">未分配</SelectItem>{developers.map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.displayName}</SelectItem>)}</SelectContent></Select></Label></div>
     <div className="test-detail-meta test-bug-detail-meta">
       <span>测试用例 <strong>{bug.testCaseId ? `CASE-${bug.testCaseId} ${bug.testCaseTitle || ''}` : '待补关联'}</strong></span>

@@ -256,6 +256,40 @@ test('streams chat completion deltas and returns the complete response', async (
   assert.equal(responseContent, '你好')
 })
 
+test('adds only server-generated image data URLs to the final user message', async () => {
+  let body: { messages: Array<{ content: unknown; role: string }> } | undefined
+  await requestAiChatCompletion(
+    {
+      apiKey: 'provider-key',
+      baseUrl: 'https://ai.example.com',
+      maxContextChars: 100,
+      maxMessageLength: 100,
+      model: 'provider-model',
+    },
+    {
+      imageParts: [
+        { image_url: { url: 'data:image/png;base64,aGVsbG8=' }, type: 'image_url' },
+        { image_url: { url: 'https://example.com/image.png' }, type: 'image_url' },
+      ],
+      messages: [{ content: '分析图片', role: 'user' }],
+      systemPrompt: 'answer',
+    },
+    {
+      fetch: async (_input, init) => {
+        body = JSON.parse(String(init?.body)) as typeof body
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 })
+      },
+      lookup: publicLookup,
+    },
+  )
+
+  const content = body?.messages.at(-1)?.content
+  assert.ok(Array.isArray(content))
+  assert.equal(content.length, 2)
+  assert.deepEqual(content[0], { type: 'text', text: '分析图片' })
+  assert.deepEqual(content[1], { type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } })
+})
+
 test('ignores provider data after the first streaming terminal event', async () => {
   const deltas: string[] = []
   const responseContent = await requestAiChatCompletion(

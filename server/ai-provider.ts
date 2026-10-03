@@ -3,6 +3,20 @@ import { isIP, type LookupFunction } from 'node:net'
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici'
 import { ServerSentEventDecoder } from '../shared/server-sent-events.ts'
 
+export type AiTextContentPart = {
+  text: string
+  type: 'text'
+}
+
+export type AiImageContentPart = {
+  image_url: {
+    url: string
+  }
+  type: 'image_url'
+}
+
+export type AiMessageContent = string | Array<AiTextContentPart | AiImageContentPart>
+
 export type AiChatMessage = {
   content: string
   role: 'assistant' | 'user'
@@ -17,6 +31,7 @@ export type AiProviderConfig = {
 }
 
 export type AiCompletionRequest = {
+  imageParts?: AiImageContentPart[]
   messages: AiChatMessage[]
   onDelta?: (delta: string) => Promise<void> | void
   responseFormat?: 'json_object'
@@ -323,9 +338,12 @@ function trimContent(value: string, maxLength: number) {
 }
 
 function requestMessages(config: AiProviderConfig, request: AiCompletionRequest) {
-  const messages = request.messages
+  const messages: Array<{
+    content: string | Array<AiTextContentPart | AiImageContentPart>
+    role: AiChatMessage['role']
+  }> = request.messages
     .map((message) => ({
-      content: trimContent(String(message.content), config.maxMessageLength),
+      content: trimContent(message.content, config.maxMessageLength),
       role: message.role,
     }))
     .filter((message) => message.content)
@@ -337,6 +355,21 @@ function requestMessages(config: AiProviderConfig, request: AiCompletionRequest)
   const context = request.untrustedContext
     ? trimContent(request.untrustedContext, config.maxContextChars)
     : ''
+  const normalizedImageParts = (request.imageParts ?? []).filter((part) => part.image_url.url.startsWith('data:image/'))
+  const lastUserMessageIndex = messages.findLastIndex((message) => message.role === 'user')
+  if (normalizedImageParts.length > 0 && lastUserMessageIndex >= 0) {
+    const message = messages[lastUserMessageIndex]
+    const text = typeof message.content === 'string'
+      ? message.content
+      : message.content.filter((part): part is AiTextContentPart => part.type === 'text').map((part) => part.text).join('\n')
+    messages[lastUserMessageIndex] = {
+      ...message,
+      content: [
+        { type: 'text', text },
+        ...normalizedImageParts,
+      ],
+    }
+  }
   return [
     {
       content: `${request.systemPrompt.trim()}\n\n${AI_UNTRUSTED_CONTENT_INSTRUCTION}`,

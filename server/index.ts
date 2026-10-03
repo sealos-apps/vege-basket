@@ -266,6 +266,7 @@ import {
 } from './account-offboarding.ts'
 import {
   configureTestWorkbenchNotifications,
+  getTestWorkbench,
   testWorkbenchRouter,
   type TestBugAssignedEvent,
   type TestBugCommentAddedEvent,
@@ -275,6 +276,7 @@ import {
   type TestExecutionResultChangedEvent,
   type TestPlanAssignedEvent,
 } from './test-workbench.ts'
+import { generateAiBugExportPrompt, type AiBugExportExecutionImage } from './ai-bug-export.ts'
 import { imageSyncWorkflowRouter } from './image-sync-workflows.ts'
 import {
   acceptOrganizationInviteTokenWithClient,
@@ -716,6 +718,76 @@ configureAccountOffboardingNotifications(({ notificationId }: AccountOffboarding
   enqueueAccountOffboardingNotificationDelivery(notificationId)
 })
 app.use('/api', testWorkbenchRouter)
+
+app.post('/api/test-spaces/:spaceId/bugs/:bugId/ai-export-prompt', asyncHandler(async (request, response) => {
+  const session = await requireActiveRole(request, response, 'tester')
+  if (!session) return
+  const spaceId = Number(request.params.spaceId)
+  const bugId = Number(request.params.bugId)
+  if (!Number.isSafeInteger(spaceId) || spaceId <= 0 || !Number.isSafeInteger(bugId) || bugId <= 0) {
+    response.status(400).json({ error: 'Bug and test space are required' })
+    return
+  }
+
+  const workbench = await getTestWorkbench(
+    session.userId,
+    { bugId, spaceId },
+    new Set(['bugs']),
+  )
+  const bug = workbench.bugs.find((item) => item.id === bugId && item.testSpaceId === spaceId)
+  if (!bug || !bug.detailsLoaded) {
+    response.status(404).json({ error: 'Bug not found' })
+    return
+  }
+
+  const executionImages: AiBugExportExecutionImage[] = bug.testPlanCaseId
+    ? (await query<AiBugExportExecutionImage>(
+      `
+      select image.object_key as "objectKey", image.content_type as "contentType", image.file_size as "fileSize"
+      from test_plan_execution_images image
+      join test_plan_executions execution on execution.id = image.execution_id
+      join test_plan_cases plan_case on plan_case.id = execution.test_plan_case_id
+      join test_plans plan on plan.id = plan_case.test_plan_id
+      where plan_case.id = $1 and plan.test_space_id = $2
+      order by execution.executed_at desc, execution.id desc, image.id
+      limit 8
+      `,
+      [bug.testPlanCaseId, spaceId],
+    )).rows.map((image) => ({
+      contentType: String(image.contentType),
+      fileSize: Number(image.fileSize),
+      objectKey: String(image.objectKey),
+    }))
+    : []
+
+  if (!checkAiRateLimit(session.userId)) {
+    response.status(429).json({ code: 'AI_RATE_LIMITED', error: 'AI 请求过于频繁，请稍后再试。' })
+    return
+  }
+  try {
+    response.json(await generateAiBugExportPrompt(
+      readAiProviderConfig(platformAiEnvironment()),
+      {
+        ...bug,
+        comments: bug.comments.map((comment) => ({
+          authorName: String(comment.authorName ?? '未知用户'),
+          content: String(comment.content ?? ''),
+          createdAt: String(comment.createdAt ?? ''),
+        })),
+      },
+      { executionImages },
+    ))
+  } catch (error) {
+    if (error instanceof AiProviderError) {
+      response.status(error.status).json({
+        code: error.code,
+        error: error.code === 'AI_NOT_CONFIGURED' ? '暂未配置AI，请联系管理员。' : error.message,
+      })
+      return
+    }
+    throw error
+  }
+}))
 
 app.get('/api/todo-shares/:token', asyncHandler(async (request, response) => {
   const token = String(request.params.token ?? '').trim().slice(0, 256)

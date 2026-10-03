@@ -39,6 +39,13 @@ export function fetchTestWorkbench(
   return request<TestWorkbenchData>(`/api/test-workbench${query ? `?${query}` : ''}`, options)
 }
 
+export function exportTestBugAiPrompt(spaceId: number, bugId: number) {
+  return request<{ fileName: string; imageCount: number; prompt: string }>(
+    `/api/test-spaces/${spaceId}/bugs/${bugId}/ai-export-prompt`,
+    { method: 'POST' },
+  )
+}
+
 export function createTestSpace(name: string, versionLabel: string, organizationId: number) {
   return request<TestWorkbenchData>('/api/test-spaces', {
     method: 'POST',

@@ -1693,7 +1693,7 @@ function mapVerificationSubmissions(rows: readonly VerificationSubmissionRow[]) 
   return submissionsByBug
 }
 
-async function getTestWorkbench(
+export async function getTestWorkbench(
   userId: number,
   scope?: { bugId?: number; spaceId?: number; subjectId?: number },
   sections?: Set<TestWorkbenchSection>,
